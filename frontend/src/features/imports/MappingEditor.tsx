@@ -125,6 +125,30 @@ export function SuggestionNote({ suggestion }: { suggestion: Suggestion }) {
   );
 }
 
+const FALLBACK_NAME = "CSV import";
+const NAME_CELLS = 3;
+const NAME_LENGTH = 60;
+
+/**
+ * What a new mapping is called until a person renames it: the first header
+ * cells of the table it was made for, so two mappings can be told apart in
+ * the list. A table without a header row has only data in its first line.
+ */
+export function defaultMappingName(table: {
+  has_header: boolean;
+  rows: readonly (readonly string[])[];
+}): string {
+  if (!table.has_header) {
+    return FALLBACK_NAME;
+  }
+  const cells = (table.rows[0] ?? [])
+    .map((cell) => cell.trim())
+    .filter((cell) => cell !== "")
+    .slice(0, NAME_CELLS);
+  const name = cells.join(", ").slice(0, NAME_LENGTH).trim();
+  return name === "" ? FALLBACK_NAME : name;
+}
+
 export function MappingForm({
   documentId,
   preview,
@@ -141,7 +165,7 @@ export function MappingForm({
   const [state, setState] = useState<MappingState>(() =>
     stateFromSpec(preview.suggested_spec, table.column_count, table.has_header),
   );
-  const [name, setName] = useState("CSV import");
+  const [name, setName] = useState(() => defaultMappingName(table));
   const [accountId, setAccountId] = useState(preview.account_id ?? "");
   const [problems, setProblems] = useState<string[]>([]);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -171,7 +195,7 @@ export function MappingForm({
         description: "The file is being imported.",
         tone: "success",
       });
-      void navigate({ to: "/documents" });
+      void navigate({ to: "/documents/$documentId", params: { documentId } });
     },
     onError: (error) => {
       setServerError(errorMessage(error));
@@ -435,7 +459,9 @@ export function MappingForm({
           <Button type="submit" variant="primary" loading={save.isPending}>
             Save mapping and import
           </Button>
-          <Link to="/documents">Cancel</Link>
+          <Link to="/documents/$documentId" params={{ documentId }}>
+            Cancel
+          </Link>
         </div>
       </Card>
     </form>

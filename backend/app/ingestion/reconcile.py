@@ -2,8 +2,8 @@
 """Statement reconciliation: opening balance + transactions = closing balance.
 
 SECURITY.md C12 (data poisoning: a crafted statement inserts fake
-transactions). A statement read from a PDF or a scan is only trusted when
-its own figures agree:
+transactions). A statement read from a PDF or a scan is checked against its
+own figures, and one they contradict is held:
 
 * **Totals**: ``opening + sum(amounts)`` must equal ``closing`` within
   :data:`TOLERANCE` (less than one cent: rounding, never a missing row).
@@ -18,8 +18,13 @@ rows a statement that does not reconcile leaves in doubt
 and the importer raises a ``low_confidence_field`` review item describing
 the discrepancy and writes no balance snapshot from it
 (``app.domain.imports.service``). A statement that states neither balance
-and has no running balance cannot be checked (``unavailable``): every row of
-it is in doubt.
+and has no running balance cannot be checked (``unavailable``): the parsers
+cap every row of it below the threshold. What follows is not decided here
+but by the importer (``app.domain.imports.service.clean_read``): when that
+cap is the statement's only doubt it is imported as posted and recorded
+``unverified``, visibly ("Not checked against a balance") and without a
+balance snapshot; with any other doubt the whole statement waits. Only a
+statement these checks pass (``ok``) is ever recorded ``reconciled``.
 
 **Which rows are in doubt** (:func:`doubtful_rows`). A printed running
 balance vouches for its row: the balance is the one before plus the row's

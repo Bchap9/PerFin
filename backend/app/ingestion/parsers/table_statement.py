@@ -63,7 +63,23 @@ are read the same way:
    first is the row's and the second, its posting date, is dropped
    (:meth:`TableStatementParser._drop_posting_date`); a date beside a word
    or a third date is not read, and such a line takes no date from the
-   line above either: it is counted. Before that, a line whose date
+   line above either: it is counted.
+   **A second date, a second amount.** A second date is a posting date
+   only where the table prints one: under a heading of its own, or on
+   every row of the section that prints a date, each within
+   :data:`POSTING_LAG_DAYS` of the row's first. A line that prints two
+   dates in a table that prints one (text laid over text: ``05/10/13
+   07/10/12 Overdraft fee -35.00``; the second date in the date column,
+   in a cell no column takes left of the description, or with its year
+   at the start of the description) is still read with its first date,
+   which scores ``confidence.INFERRED``: the row is a doubt and its
+   statement waits (:meth:`TableStatementParser._doubled_dates`; warning
+   ``second_date_unexplained:<rows>``). Two amounts under one money
+   heading read as no amount and the line is counted as skipped; a figure
+   of a row line that no column takes, beside the row's amount, caps that
+   amount at ``confidence.INFERRED``. An amount and its running balance,
+   each under its heading, are what they were.
+   Before any of this, a line whose date
    column holds a date among other words is read once more **without the
    words printed outside the table**
    (:meth:`TableStatementParser._without_outside_words`: a word of a
@@ -304,8 +320,15 @@ are read the same way:
    (:func:`~app.ingestion.classify.dates.band_confidence`: 0.9 on two or
    more pages, 0.75 on one, so a range atop a one-page document is no
    stated period). Yearless row dates (``MM/DD``) take their year from the
-   period. The day/month order of a numeric period comes from its own
-   values when one proves it (``01/07/2015 - 31/07/2015`` is day-first),
+   period. A row dated more than ``confidence.PERIOD_GRACE_DAYS`` days
+   before the period starts or after it ends scores at most
+   ``confidence.INFERRED`` on its date and waits for a person; one within
+   those days keeps its score (a purchase of the days before a cycle is
+   printed on the next statement), unless its description names a balance
+   or a statement (``confidence.names_a_balance``: a balance carried over
+   under a label that is no opening balance gets no grace). The day/month
+   order of a numeric period comes from its own values when one proves it
+   (``01/07/2015 - 31/07/2015`` is day-first),
    whatever the rows' default; and when the rows fit both orders (or are
    not numeric) the order the period proves is the rows' order too.
    Labels printed **over their values** (a row of labels over a row of
@@ -691,6 +714,10 @@ MIN_TOTAL_ROWS: Final = 2
 MIN_CARRIED: Final = 2
 #: The most words the date of a line outside a table is looked for in.
 LEAD_DATE_WORDS: Final = 3
+#: The most days between a row's date and its posting date (a weekend, a
+#: holiday, a slow merchant). A second date further from the first is no
+#: posting date (:meth:`TableStatementParser._doubled_dates`).
+POSTING_LAG_DAYS: Final = 10
 #: A section printed with a title and no header row ends after this many
 #: lines in a row that are no date-led row.
 HEADERLESS_GAP: Final = 6
@@ -1014,6 +1041,19 @@ def section_title(
     return SectionTitle(key, rule, continued)
 
 
+class _Cells(dict[Role, list[Cell]]):
+    """The cells of one line by the role of their column, and what the line
+    printed besides (module doc, "A second date, a second amount")."""
+
+    #: A date the line prints besides its own: the second of two in the
+    #: date column (:meth:`TableStatementParser._drop_posting_date`), a
+    #: date in a cell no column takes left of the description, or a date
+    #: with its year at the start of the description.
+    second_date: str = ""
+    #: Figures of the line that no column of the table takes.
+    stray_figures: int = 0
+
+
 @dataclass
 class _Row:
     page: int
@@ -1053,6 +1093,13 @@ class _Row:
     #: of the period (module doc, "Lines of the closing day"): ``date_text``
     #: is empty and the row takes the period's last day.
     closing_dated: bool = False
+    #: A date the line prints besides ``date_text`` (:class:`_Cells`): a
+    #: posting date where the table prints one on every row, else a doubt
+    #: (:meth:`TableStatementParser._doubled_dates`).
+    second_date: str = ""
+    #: Figures the line prints that no column takes, on a row that has its
+    #: amount: the line printed two where its table prints one.
+    stray_figures: int = 0
 
 
 @dataclass
@@ -1248,7 +1295,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "9"
+    version: ClassVar[str] = "10"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -1456,8 +1503,8 @@ class TableStatementParser(DocumentParser):
 
     # -- reading ----------------------------------------------------------------
 
-    def _assign(self, line: ViewLine, columns: Sequence[Column]) -> dict[Role, list[Cell]]:
-        out: dict[Role, list[Cell]] = {}
+    def _assign(self, line: ViewLine, columns: Sequence[Column]) -> _Cells:
+        out = _Cells()
         unclaimed: list[Cell] = []
         # A table printed across the page: all from its second copy on is
         # one column, whatever heading a cell stands under or near.
@@ -1506,10 +1553,13 @@ class TableStatementParser(DocumentParser):
             # left of it, unless that column has its figure already.
             left = [column for column in columns if column.x0 <= cell.centre]
             if not left:
+                out.stray_figures += 1
                 continue
             home = max(left, key=lambda column: column.x0)
             if home.role in NUMERIC_ROLES and home.role not in out:
                 out[home.role] = [cell]
+            else:
+                out.stray_figures += 1
         return out
 
     @staticmethod
@@ -1640,17 +1690,22 @@ class TableStatementParser(DocumentParser):
             for size in range(1, min(LEAD_DATE_WORDS, len(words) - at) + 1)
         )
 
-    def _drop_posting_date(
-        self, cells: dict[Role, list[Cell]], columns: Sequence[Column], line: ViewLine
-    ) -> None:
+    def _drop_posting_date(self, cells: _Cells, columns: Sequence[Column], line: ViewLine) -> None:
         """Two dates in the date column: the first is the row's, the second
         its posting date and dropped (two cells under one heading, or one
         cell of two halves). Only when the two are all the column holds and
         each is shaped like a date; a date and a word, a word and a date, and
         a third date printed before the description stay what they are, and
-        no row is dated by guessing."""
+        no row is dated by guessing.
+
+        The date dropped is kept beside the cells (``second_date``), and so
+        is a second date printed elsewhere on a dated line
+        (:meth:`_second_date`): whether it is a posting date is for the
+        whole table to say (:meth:`_doubled_dates`)."""
         words = self._date_words(cells)
         if len(words) < 2 or self._dated(cells):
+            if self._dated(cells):
+                cells.second_date = self._second_date(cells, columns, line)
             return
         for size in range(1, min(LEAD_DATE_WORDS, len(words) - 1) + 1):
             head = " ".join(w.text for w in words[:size]).strip(_DATE_MARKS)
@@ -1673,6 +1728,47 @@ class TableStatementParser(DocumentParser):
         ):
             return
         cells["date"] = [join_cells(words[:size])]
+        cells.second_date = tail
+
+    def _second_date(
+        self, cells: Mapping[Role, list[Cell]], columns: Sequence[Column], line: ViewLine
+    ) -> str:
+        """The date a dated line prints besides the one in its date column
+        (empty: none), where the table has no posting date column:
+
+        * a cell no column took, left of the description and shaped like a
+          date (the second date printed just clear of the ``Date`` heading);
+        * the first words of the description, when they are a date printed
+          **with its year**. A day and a month there are words of the
+          description (``03/02 Card purchase``, ``2.10 per cent``).
+        """
+        if any(column.role == "post_date" for column in columns):
+            return ""
+        placed = {id(cell) for found in cells.values() for cell in found}
+        # Left of the description, and of the other copies of a table
+        # printed across the page (their dates are their own rows').
+        bound = min(
+            (c.x0 for c in columns if c.role in ("description", "across")), default=math.inf
+        )
+        for cell in sorted(line.cells, key=lambda c: c.x0):
+            text = cell.text.strip(_DATE_MARKS)
+            if id(cell) not in placed and cell.x0 < bound and self._date_shaped(text):
+                return text
+        lead = min(cells.get("description", []), key=lambda c: c.x0, default=None)
+        words = lead.text.split() if lead is not None else []
+        for size in range(min(LEAD_DATE_WORDS, len(words)), 0, -1):
+            head = " ".join(words[:size]).strip(_DATE_MARKS)
+            if self._full_date(head):
+                return head
+        return ""
+
+    @staticmethod
+    def _full_date(text: str) -> bool:
+        """``text`` is a date printed with its year."""
+        parts = numeric_parts(text)
+        if parts is not None:
+            return parts[2] is not None
+        return any(read_date(text, style) is not None for style in ("d_mon_y", "mon_d_y", "ymd"))
 
     def _split_fused_amount(
         self, cells: dict[Role, list[Cell]], columns: Sequence[Column], header: ViewLine
@@ -1791,7 +1887,7 @@ class TableStatementParser(DocumentParser):
 
     def _columned(
         self, line: ViewLine, columns: Sequence[Column], head: ViewLine
-    ) -> tuple[dict[Role, list[Cell]], list[Cell]]:
+    ) -> tuple[_Cells, list[Cell]]:
         """The cells of ``line`` by the columns of the table under ``head``,
         and those of the other copies of a table printed across the page."""
         cells = self._assign(line, columns)
@@ -1808,7 +1904,7 @@ class TableStatementParser(DocumentParser):
         columns: Sequence[Column],
         head: ViewLine,
         outside: _OutsideWords,
-    ) -> tuple[dict[Role, list[Cell]], list[Cell]]:
+    ) -> tuple[_Cells, list[Cell]]:
         """As :meth:`_columned`. A line whose date column holds a date among
         other words is read once more without the words printed outside the
         table (:meth:`_without_outside_words`); that reading is the line's
@@ -3022,6 +3118,7 @@ class TableStatementParser(DocumentParser):
         marker = self._own_column_marker(cells, line)
         if amount is not None and marker is not None:
             amount = replace(amount, credit=marker)
+        doubled = cells if isinstance(cells, _Cells) else None
         return _Row(
             page=line.page,
             date_text=date_text,
@@ -3038,6 +3135,8 @@ class TableStatementParser(DocumentParser):
             direction=self._direction(rule),
             section=section,
             carried=carried,
+            second_date=doubled.second_date if doubled is not None and not carried else "",
+            stray_figures=doubled.stray_figures if doubled is not None else 0,
         )
 
     def _own_column_marker(
@@ -3707,6 +3806,48 @@ class TableStatementParser(DocumentParser):
             return None
         previous = self._first_date(summary.previous_dates, ordered)
         return end, previous if previous is not None and previous < end else None
+
+    def _doubled_dates(
+        self,
+        rows: Sequence[_Row],
+        dates: Sequence[date | None],
+        styles: Sequence[DateStyle],
+        window: tuple[date, date] | None,
+        strict: bool,
+    ) -> set[int]:
+        """The rows (indexes) whose second date is no posting date.
+
+        A second date (``_Row.second_date``) is a posting date when the
+        table prints one: every row of the row's section that printed a
+        date of its own printed a second one, and this row's reads as a day
+        within :data:`POSTING_LAG_DAYS` of its first. Anything else is two
+        dates on a line of a table that prints one (text laid over text),
+        and nothing says which is the row's.
+        """
+        whole: dict[int, bool] = {}
+        for row in rows:
+            if not row.carried and not row.closing_dated:
+                whole[row.section] = whole.get(row.section, True) and bool(row.second_date)
+        out: set[int] = set()
+        for at, (row, posted) in enumerate(zip(rows, dates, strict=True)):
+            if not row.second_date or posted is None:
+                continue
+            second = next(
+                (
+                    found
+                    for style in styles
+                    if (found := read_date(row.second_date, style, window=window, strict=strict))
+                    is not None
+                ),
+                None,
+            )
+            if (
+                not whole.get(row.section, False)
+                or second is None
+                or abs((second - posted).days) > POSTING_LAG_DAYS
+            ):
+                out.add(at)
+        return out
 
     @staticmethod
     def _row_date(
@@ -4498,14 +4639,24 @@ class TableStatementParser(DocumentParser):
         # printed before the row: one list each with ``ledger_rows``.
         ledger_sections: list[int] = []
         ledger_parts: list[int] = []
-        for row, posted in zip(rows, dates, strict=True):
+        doubled = self._doubled_dates(rows, dates, styles, window, strict)
+        if doubled:
+            outcome.warnings.append(f"second_date_unexplained:{len(doubled)}")
+        for at, (row, posted) in enumerate(zip(rows, dates, strict=True)):
             amount = self._signed(row)
             if posted is None or amount is None:
                 outcome.skipped_lines += 1
                 outcome.skipped_regions.append((row.page, row.bbox))
                 continue
             date_conf = self.base if certain else conf.GUESSED
-            if period is not None and not (period[0] <= posted <= period[1]):
+            if at in doubled:
+                # Two dates on a line of a table that prints one: which of
+                # them is the row's is a guess (module doc).
+                date_conf = min(date_conf, conf.INFERRED)
+            if conf.outside_period_for(posted, period, " ".join(row.description)):
+                # Further from the period than the days of grace around it,
+                # or outside it at all and naming a balance: a balance
+                # carried over is no purchase of the days before the cycle.
                 date_conf = min(date_conf, conf.INFERRED)
             if row.carried:
                 # Printed on the row above, once for the day.
@@ -4517,9 +4668,12 @@ class TableStatementParser(DocumentParser):
                 # The year is a guess: the row waits for a person.
                 date_conf = min(date_conf, conf.GUESSED)
             payee = " ".join(row.description).strip() or None
+            # A figure of the line no column took: the line printed two
+            # amounts and the table one, and which is the row's is a guess.
+            amount_conf = min(self.base, conf.INFERRED) if row.stray_figures else self.base
             score = {
                 "posted_date": conf.scaled(date_conf, row.ocr),
-                "amount": conf.scaled(self.base, row.ocr),
+                "amount": conf.scaled(amount_conf, row.ocr),
                 "payee": conf.scaled(self.base if payee else conf.MISSING, row.ocr),
             }
             memo = row_memo(row)
@@ -4543,6 +4697,7 @@ class TableStatementParser(DocumentParser):
         closing = self._ledger_balance(summary.closing)
         # ``Ending Balance - $992.50``: the rows say whether the dash is a
         # minus; a balance they do not settle is not given.
+        printed_balances = (opening is not None, closing is not None)
         opening, closing = settle_signs(
             opening,
             closing,
@@ -4550,6 +4705,10 @@ class TableStatementParser(DocumentParser):
             opening_open=summary.opening_sign_open,
             closing_open=summary.closing_sign_open,
         )
+        if printed_balances != (opening is not None, closing is not None):
+            # A balance was printed and is not given: the importer must not
+            # take the statement for one that printed none.
+            outcome.warnings.append("balance_sign_unsettled")
         # A figure read beside its label, not after it, is believed a little less.
         opening_conf = min(self.base, conf.DERIVED) if summary.opening_adjacent else self.base
         closing_conf = min(self.base, conf.DERIVED) if summary.closing_adjacent else self.base

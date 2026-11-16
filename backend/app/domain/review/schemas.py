@@ -67,6 +67,12 @@ account, period, tax year, kind and row values), ``POST
 the list leaves them ``null``. "Teach PerFin" (``POST /documents/{id}/teach``,
 ``app.domain.review.teach``) takes a :class:`TeachRequest` and answers a
 :class:`TeachOut`.
+
+The reconcile view (``GET /documents/{id}/reconciliation`` and its four
+actions; ``app.domain.review.reconciliation``) reads a
+:class:`DocumentReconciliation` and answers a :class:`ReconcileOutcome`;
+``GET /review/cards`` groups the open items by document
+(:class:`ReviewCardPage`).
 """
 
 from __future__ import annotations
@@ -85,7 +91,9 @@ from app.domain.documents.models import (
     ReviewItemState,
     ReviewKind,
 )
+from app.domain.documents.schemas import Verification
 from app.domain.rules.schemas import RuleCreate
+from app.domain.transactions.models import ReviewState
 from app.domain.transactions.schemas import MemoText, PayeeText
 from app.ingestion.classify.fingerprints import MatchSpec
 
@@ -113,8 +121,51 @@ NextStep = Literal[
 ]
 
 
+#: A balance as a person reads it off the page (``1,204.18``, ``$12.00``):
+#: read by ``reconciliation.read_printed``, never stored as typed.
+PrintedAmount = Annotated[str, Field(min_length=1, max_length=32)]
+#: Most near-duplicate rows one resolution may decide.
+DECISIONS_MAX: Final = 50
+
+#: The one thing a document's card asks for next (``GET /review/cards``).
+CardAction = Literal[
+    "choose_account",
+    "map_columns",
+    "answer_sign",
+    "reconcile",
+    "check_rows",
+    "confirm_duplicate",
+    "attach_receipt",
+    "choose_owner",
+    "teach",
+    "reprocess",
+    "acknowledge",
+]
+#: A likely cause of a statement's difference (``app.domain.review.causes``).
+CauseKind = Literal[
+    "extra_row",
+    "sign_flipped",
+    "transposed_digits",
+    "fee_or_interest",
+    "opening_differs_from_previous",
+    "duplicated_row",
+    "out_of_period",
+    "earlier_reading",
+    "missing_row",
+]
+
+
 class _Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class DuplicateDecision(_Input):
+    """What to do with one imported row of a ``near_matches`` item."""
+
+    transaction_id: uuid.UUID
+    decision: Literal["confirm", "reject"]
+    #: The existing transaction it duplicates (needed with several candidates).
+    duplicate_of: uuid.UUID | None = None
 
 
 class ResolveDuplicate(_Input):
@@ -123,6 +174,9 @@ class ResolveDuplicate(_Input):
     #: The existing transaction the imported row duplicates (one of the
     #: item's ``candidates``; needed only when there are several).
     duplicate_of: uuid.UUID | None = None
+    #: One decision per listed row of an item that names several
+    #: (``reason = near_matches``); absent: ``decision`` applies to all.
+    rows: list[DuplicateDecision] | None = Field(default=None, max_length=DECISIONS_MAX)
 
 
 class ResolveUnknownAccount(_Input):
@@ -133,9 +187,12 @@ class ResolveUnknownAccount(_Input):
 
 class ResolveUnparsed(_Input):
     kind: Literal["unparsed"]
-    action: Literal["reprocess", "apply_mapping"]
+    action: Literal["reprocess", "apply_mapping", "answer_sign"]
     mapping_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
+    #: With ``answer_sign`` (an item held because the sign of its amounts
+    #: was taken on trust): what a positive amount of the file means.
+    positive_is: Literal["money_in", "money_out"] | None = None
 
 
 class ResolveUnknownOwner(_Input):
@@ -172,6 +229,20 @@ class TransactionFix(_Input):
         return self
 
 
+class LineFix(_Input):
+    """Corrected values for one held activity line of a brokerage statement.
+
+    ``line`` is the line's ``index`` in the item's payload; absent fields
+    are left as read.
+    """
+
+    line: int = Field(ge=0)
+    trade_date: date | None = None
+    amount: MoneyIn | None = None
+    quantity: MoneyIn | None = None
+    type: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")] | None = None
+
+
 class ResolveLowConfidence(_Input):
     """Correct the doubtful rows and (``confirm``) accept the item's pending rows."""
 
@@ -185,6 +256,8 @@ class ResolveLowConfidence(_Input):
     #: in the payload's ``lines``. The other lines it lists are left out for
     #: good. Omitted: every line.
     lines: list[Annotated[int, Field(ge=0)]] | None = Field(default=None, max_length=2000)
+    #: Corrections to held brokerage lines, applied before they are imported.
+    line_fixes: list[LineFix] = Field(default_factory=list, max_length=FIXES_MAX)
 
     @model_validator(mode="after")
     def _as_read_alone(self) -> Self:
@@ -346,6 +419,33 @@ class ReviewPage(BaseModel):
     next_cursor: uuid.UUID | None
 
 
+class ReviewCard(BaseModel):
+    """A document's open items as one card, with the one thing to do next.
+
+    ``action_item_id`` is the item that asks for ``action``; ``open`` counts
+    the items that wait on a person, ``notices`` the rest.
+    """
+
+    document: ReviewDocument
+    items: list[ReviewItemOut]
+    action: CardAction
+    action_item_id: uuid.UUID
+    open: int
+    notices: int
+
+
+class ReviewCardPage(BaseModel):
+    """``GET /review/cards``: cards by document; ``loose`` are open items of no document.
+
+    ``next_cursor`` (a document id) is ``null`` on the last page; ``loose``
+    is filled on the first page only.
+    """
+
+    cards: list[ReviewCard]
+    loose: list[ReviewItemOut]
+    next_cursor: uuid.UUID | None
+
+
 class RememberLayoutOut(BaseModel):
     """The stored fingerprint and what was sent through the pipeline again."""
 
@@ -450,6 +550,25 @@ TeachRole = Literal[
 ]
 TeachNote = Annotated[str, Field(min_length=1, max_length=500)]
 TEACH_LABELS_MAX: Final = 40
+#: Up to four transactions tables and one holdings table.
+TEACH_TABLES_MAX: Final = 5
+#: Most rows a teach preview lists (``row_count`` has the full number).
+TEACH_PREVIEW_ROWS_MAX: Final = 50
+
+
+TeachDirection = Literal["as_printed", "money_in", "money_out", "card"]
+
+
+# ``direction``, ``continues`` and ``preview`` default through a factory (to
+# ``as_printed``, ``False`` and ``False``): a default written into the schema
+# makes the generated client type require the field, and a request written
+# before these fields existed must still type-check and mean what it meant.
+def _as_printed() -> TeachDirection:
+    return "as_printed"
+
+
+def _off() -> bool:
+    return False
 
 
 class TeachLabel(_Input):
@@ -488,12 +607,20 @@ class TeachColumn(_Input):
 
 
 class TeachTable(_Input):
-    """A table selected on a page: the box starts at its header line."""
+    """A table selected on a page: the box starts at its header line.
+
+    ``direction`` says what a single ``amount`` column means: as printed
+    (signed on the page), all money in, all money out, or a card's charges
+    printed positive. ``continues``: the table runs on over later pages
+    that do not repeat its header.
+    """
 
     kind: Literal["transactions", "holdings"]
     page: int = Field(ge=1, le=10_000)
     bbox: Bbox
     columns: list[TeachColumn] = Field(min_length=2, max_length=20)
+    direction: TeachDirection = Field(default_factory=_as_printed)
+    continues: bool = Field(default_factory=_off)
 
 
 class TeachRequest(_Input):
@@ -504,11 +631,13 @@ class TeachRequest(_Input):
     the layout is also kept as a household fingerprint with the labels'
     anchors (label text and direction, never the values), and this document
     and similar ones are read again with it. ``item_id`` names the review
-    item the teaching answers (closed with ``resolve``).
+    item the teaching answers (closed with ``resolve``). With ``preview``
+    nothing is applied or kept: the answer says what would be read
+    (:class:`TeachPreview`).
     """
 
     labels: list[TeachLabel] = Field(default_factory=list, max_length=TEACH_LABELS_MAX)
-    tables: list[TeachTable] = Field(default_factory=list, max_length=2)
+    tables: list[TeachTable] = Field(default_factory=list, max_length=TEACH_TABLES_MAX)
     institution_id: uuid.UUID | None = None
     institution_name: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     account_id: uuid.UUID | None = None
@@ -521,6 +650,7 @@ class TeachRequest(_Input):
     replace: bool = False
     item_id: uuid.UUID | None = None
     resolve: bool = True
+    preview: bool = Field(default_factory=_off)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -558,6 +688,29 @@ class TaughtTable(BaseModel):
     columns: list[TaughtColumn]
 
 
+class TaughtRow(BaseModel):
+    """One row a taught table reads (``payee`` only for callers who may see content)."""
+
+    posted_date: date
+    amount: str
+    payee: str | None
+    #: Index of the taught table in the request's ``tables``.
+    table: int
+    page: int
+
+
+class TeachPreview(BaseModel):
+    """What the labels would read, before anything is saved."""
+
+    rows: list[TaughtRow] = Field(max_length=TEACH_PREVIEW_ROWS_MAX)
+    row_count: int
+    reconciliation: Literal["ok", "mismatch", "unavailable"] | None
+    difference: str | None
+    #: Other documents of this layout that wait and would be read again.
+    similar_waiting: int
+    account_id: uuid.UUID | None
+
+
 class TeachOut(BaseModel):
     """What was applied to the document and what was remembered."""
 
@@ -585,3 +738,125 @@ class TeachOut(BaseModel):
     #: ``item_left_open`` (the review item is not settled by what was taught)...
     warnings: list[str] = Field(default_factory=list)
     item: ReviewItemOut | None = None
+    #: Set, and nothing applied, when the request asked for a preview.
+    preview: TeachPreview | None = None
+
+
+# ---------------------------------------------------------------------------
+# The reconcile view (``app.domain.review.reconciliation``)
+# ---------------------------------------------------------------------------
+
+STATEMENT_INDEX_MAX: Final = 10_000
+
+
+class ReconcileRow(BaseModel):
+    """A ledger row that counts towards a statement's sum.
+
+    ``origin``: ``read`` from this document, ``added`` by a person for it,
+    ``matched`` when the row first came from another file. ``edited``: it
+    was changed after its import. ``page``/``bbox``: where the document
+    prints it, when known.
+    """
+
+    transaction_id: uuid.UUID
+    posted_date: date
+    payee: str | None
+    amount: str
+    review_state: ReviewState
+    origin: Literal["read", "added", "matched"]
+    edited: bool
+    in_period: bool
+    page: int | None
+    bbox: Bbox | None
+
+
+class RemovedRow(BaseModel):
+    """An imported row a person deleted (its tombstone); it can be put back."""
+
+    tombstone_id: uuid.UUID
+    posted_date: date | None
+    amount: str | None
+    deleted_at: datetime
+
+
+class ReconcileCause(BaseModel):
+    """A likely reason for the difference, most likely first."""
+
+    kind: CauseKind
+    transaction_ids: list[uuid.UUID]
+    amount: str | None
+    page: int | None
+    bbox: Bbox | None
+
+
+class StatementReconciliation(BaseModel):
+    """One statement of a document against the ledger rows it produced.
+
+    ``opening``, ``closing`` and ``previous_closing`` are as printed
+    (``printed_sign = owed``: a balance owed is positive on paper); ``total``
+    and ``difference`` (``opening + total - closing``) are in ledger terms.
+    ``status`` is ``unchecked`` without both balances.
+    """
+
+    statement: int
+    account_id: uuid.UUID
+    account_name: str
+    currency: str
+    printed_sign: Literal["ledger", "owed"]
+    period_start: date | None
+    period_end: date | None
+    opening: str | None
+    closing: str | None
+    previous_closing: str | None
+    rows: list[ReconcileRow]
+    rows_truncated: bool
+    removed: list[RemovedRow]
+    total: str
+    difference: str | None
+    status: Literal["balanced", "off", "unchecked"]
+    verification: Verification | None
+    causes: list[ReconcileCause]
+    lines_skipped: int
+    can_edit: bool
+
+
+class DocumentReconciliation(BaseModel):
+    """``GET /documents/{id}/reconciliation``: the statements the caller can see."""
+
+    document_id: uuid.UUID
+    statements: list[StatementReconciliation]
+
+
+class ReconcileConfirm(_Input):
+    """Confirm a statement that balances; balances are typed as printed."""
+
+    statement: int = Field(ge=0, le=STATEMENT_INDEX_MAX)
+    opening_balance: PrintedAmount | None = None
+    closing_balance: PrintedAmount | None = None
+
+
+class ReconcileAccept(_Input):
+    """Accept a statement as read, without balancing it (no balance is recorded)."""
+
+    statement: int = Field(ge=0, le=STATEMENT_INDEX_MAX)
+
+
+class ReconcileRestore(_Input):
+    """Put a removed row of the document back."""
+
+    tombstone_id: uuid.UUID
+
+
+class ReconcileRemoveEarlier(_Input):
+    """Remove the rows an earlier reading of the statement left behind."""
+
+    statement: int = Field(ge=0, le=STATEMENT_INDEX_MAX)
+
+
+class ReconcileOutcome(BaseModel):
+    """The statement after the action, and what the action did."""
+
+    statement: StatementReconciliation
+    confirmed: int
+    snapshot: bool
+    items_closed: int

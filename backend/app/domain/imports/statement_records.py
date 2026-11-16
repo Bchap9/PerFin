@@ -43,25 +43,32 @@ committed :func:`check_overlap` compares it with the account's records:
   (``apply-mapping``): that imports it, so a "same statement" answer can be
   taken back.
 
+* A re-read may move a statement's period (a first page read another way).
+  Its record is keyed by the period start, so the old one would stay as a
+  ghost: :func:`drop_stale_records` removes the document's records of an
+  account whose period start the run did not record again. The importer
+  calls it only for an account all of whose statements the run committed.
+
 Payloads and audit rows carry ids, dates, counts and the statement key (a
 digest) only.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any, Final, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.events import emit
 from app.core.ids import uuid7
 from app.core.money import to_storage
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, BalanceSnapshot, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
 from app.domain.imports.models import StatementRecord
 from app.ingestion.sandbox.protocol import (
@@ -300,8 +307,19 @@ def record_statement(
     facts: StatementFacts,
     *,
     outcome: Literal["imported", "skipped"] = "imported",
+    verification: str = "unverified",
+    lower_accepted: bool = False,
 ) -> bool:
-    """Record a committed (or skipped) statement; False when it has no period."""
+    """Record a committed (or skipped) statement; False when it has no period.
+
+    ``verification`` is how far the statement was checked against its own
+    balances (``imports.models.STATEMENT_VERIFICATIONS``): what this run
+    reached replaces what the record said, with one exception. A record a
+    person ``accepted`` is never lowered to ``unverified`` by a caller that
+    merely has nothing better to say: only the importer's decision that the
+    acceptance no longer covers the statement does that (``lower_accepted``;
+    ``imports.service._settle_standing``).
+    """
     period = facts.period
     if period is None:
         return False
@@ -311,6 +329,7 @@ def record_statement(
         "document_id": document.id,
         "kind": facts.kind,
         "outcome": outcome,
+        "verification": verification,
         "period_start": period[0],
         "period_end": period[1],
         "period_stated": facts.stated,
@@ -324,9 +343,88 @@ def record_statement(
     statement = insert(StatementRecord).values(id=uuid7(), **values)
     update: dict[str, Any] = {k: statement.excluded[k] for k in values if k != "household_id"}
     update["updated_at"] = func.now()
+    if not lower_accepted:
+        update["verification"] = case(
+            (
+                and_(
+                    StatementRecord.verification == "accepted",
+                    statement.excluded.verification == "unverified",
+                ),
+                StatementRecord.verification,
+            ),
+            else_=statement.excluded.verification,
+        )
     db.execute(
         statement.on_conflict_do_update(
             constraint="uq_statement_record_account_document_kind_start", set_=update
         )
     )
     return True
+
+
+def withdraw_snapshot(
+    db: Session, document: Document, account: Account, statement: Statement
+) -> bool:
+    """Take back the balance ``document`` recorded for ``statement``; True when one stood.
+
+    A statement of a document format (PDF, image) that reconciled wrote its
+    closing balance as a statement snapshot. When its record no longer says
+    ``reconciled`` (accepted without balancing; ``unverified`` again after
+    a re-read that does not add up, a row put back or earlier rows
+    removed), no balance stands for it: the snapshot of this document,
+    account and closing day is removed. So no statement snapshot of a
+    document remains for a bank or card statement record of a document
+    format that is ``unverified``.
+
+    A balance another document or a person recorded is never touched, and
+    neither is the balance a bank file (OFX, QFX, QIF) or a table states:
+    such a file declares its balance itself, whatever its rows are.
+    """
+    closing = statement.ledger_balance
+    as_of = (closing.as_of if closing is not None else None) or statement.period_end
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS or as_of is None:
+        return False
+    found = db.execute(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.household_id == account.household_id,
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+            BalanceSnapshot.source_document_id == document.id,
+            BalanceSnapshot.as_of_date == as_of,
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        return False
+    db.delete(found)
+    db.flush()
+    emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
+    return True
+
+
+def drop_stale_records(
+    db: Session,
+    document: Document,
+    account: Account,
+    kept_periods: Collection[date],
+    *,
+    kind: StatementKind = "bank",
+) -> int:
+    """Delete the document's records of ``account`` this run did not record; how many.
+
+    ``kept_periods`` are the period starts the run recorded for the account
+    and ``kind``. A record with another start is of an earlier reading of
+    the document (module doc); records of other documents, other accounts
+    and the other kind are never touched.
+    """
+    stale = delete(StatementRecord).where(
+        StatementRecord.household_id == account.household_id,
+        StatementRecord.account_id == account.id,
+        StatementRecord.document_id == document.id,
+        StatementRecord.kind == kind,
+        # A statement answered "same statement" is no reading of the rows.
+        StatementRecord.outcome == "imported",
+    )
+    if kept_periods:
+        stale = stale.where(StatementRecord.period_start.not_in(sorted(set(kept_periods))))
+    result = db.execute(stale.execution_options(synchronize_session="fetch"))
+    return int(getattr(result, "rowcount", 0) or 0)

@@ -294,6 +294,56 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.9
+
+- Migration `0013` adds the column `statement_record.verification` and the
+  table `import_tombstone`. It is applied by `perfin migrate` like every
+  revision ("Database migrations"), takes no setting and rewrites no
+  ledger row; the column has a default and the table is new, so the pods
+  of the previous release keep working during a rolling upgrade. Neither
+  is part of a full export (PORTABILITY.md).
+- **How earlier statements are marked.** `verification` of the statements
+  imported before this release is filled in from what those imports left
+  behind: a bank or card statement read from a PDF or image whose account
+  has a statement balance from the same document is `reconciled`; an
+  imported brokerage statement read from a PDF or image is `reconciled`;
+  one a person imported as read, or whose "does not add up" finding was
+  answered, is `accepted`; everything else is `unverified`. So a PDF or
+  image statement imported before this release shows "Not checked against
+  a balance" unless a balance recorded from it proves otherwise. Nothing
+  about its rows changes. To check one, open the document and choose
+  "Check against the statement". CSV, OFX, QFX and QIF imports are
+  `unverified` and show no marker: they carry nothing to check.
+- **Statements that print no balance no longer wait.** A PDF or image
+  statement that reads cleanly and that nothing contradicts is imported
+  as posted and marked "Not checked against a balance" (CHANGELOG.md,
+  INGESTION.md "Commit"). Documents already waiting in Review for this
+  reason alone stay there until they are read again: "Process again"
+  imports them under the new rule. No balance is recorded from such a
+  statement.
+- **"Process again" now replaces rows.** Reading a document again removes
+  the rows it produced earlier that the new reading no longer holds and
+  that nobody touched, and keeps every row a person changed, listing
+  them as "Rows from an earlier reading". Rows imported before this
+  release that a rule changed during their import count as changed: they
+  are kept and listed, and the reconcile view removes them in one step.
+  Parser versions moved (`statement_generic/10`,
+  `card_statement_generic/10`, the institution parsers `/8`,
+  `layout_template/6`); a stored document keeps what it read until it is
+  processed again.
+- **A deleted imported row stays deleted** from this release on. Rows
+  deleted before it left no trace, so a statement read again can still
+  bring those back once; delete them again and they stay out.
+- **A second upload of the same bytes is skipped** with a notice instead
+  of waiting as a possible duplicate. Copies already waiting in Review
+  keep their question. Scripts that upload through `POST /documents`
+  should expect `status: "rejected"` for such a file (it was
+  `needs_review`), with `duplicate_of` and `job_id: null` as before.
+- API: nothing was removed. New endpoints and fields are listed in
+  CHANGELOG.md ("Added", API). A client that lists the review queue can
+  keep using `GET /review`; `GET /review/cards` groups the same items by
+  document. No new settings.
+
 ### 1.0.0-rc.8
 
 - No migration. One new setting, `PERFIN_PRICE_REFRESH_MINUTES` (how often

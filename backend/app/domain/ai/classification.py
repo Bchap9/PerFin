@@ -349,7 +349,13 @@ _deny_table(
     "statement_record",
     R_INGEST,
     "account_id document_id kind outcome period_start period_end period_stated source_format "
-    "currency closing_balance closing_cash holdings_value total_value id created_at updated_at "
+    "currency closing_balance closing_cash holdings_value total_value verification id "
+    "created_at updated_at household_id",
+)
+_deny_table(
+    "import_tombstone",
+    R_INGEST,
+    "account_id import_hash deleted_at deleted_by posted_date amount id created_at updated_at "
     "household_id",
 )
 _deny_table(

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
@@ -16,8 +16,10 @@ import {
   institutionChoices,
   layoutRequest,
   lowConfidenceResolution,
+  lineFixResolution,
   mergeFix,
   ownerResolution,
+  type ReviewCard,
   type ReviewItem,
 } from "./api";
 
@@ -56,11 +58,41 @@ const PAGE = {
   words_truncated: false,
 };
 
+const ACTIONS: ReadonlyMap<ReviewItem["kind"], ReviewCard["action"]> = new Map([
+  ["low_confidence_field", "check_rows"],
+  ["unknown_owner", "choose_owner"],
+  ["receipt_match", "attach_receipt"],
+]);
+
+/** The item as the one card of its document, with the action the server names. */
+function card(detail: ReviewItem): ReviewCard {
+  return {
+    document: {
+      id: "d-1",
+      original_filename: "scan.pdf",
+      kind: "statement",
+      status: "needs_review",
+      mime_detected: "application/pdf",
+      source: "upload",
+      created_at: NOW,
+      period_start: null,
+      period_end: null,
+      previewable: true,
+    },
+    items: [detail],
+    action: ACTIONS.get(detail.kind) ?? "acknowledge",
+    action_item_id: detail.id,
+    open: 1,
+    notices: 0,
+  };
+}
+
 function toolsApi(detail: ReviewItem, extra: Record<string, Handler> = {}) {
   return mockApi({
     "GET /api/v1/auth/session": authedSession({ role: "owner" }),
     ...lookupHandlers([account("a-1", "Everyday")]),
-    "GET /api/v1/review": () => json({ items: [detail], next_cursor: null }),
+    "GET /api/v1/review/cards": () =>
+      json({ cards: [card(detail)], loose: [], next_cursor: null }),
     "GET /api/v1/review/:id": () => json(detail),
     "GET /api/v1/documents/:id/regions": () => json(PAGE),
     "GET /api/v1/documents/:id": () =>
@@ -69,7 +101,9 @@ function toolsApi(detail: ReviewItem, extra: Record<string, Handler> = {}) {
         original_filename: "scan.pdf",
         mime_detected: "application/pdf",
       }),
-    "GET /api/v1/transactions/:id": () => json(tx("t-1")),
+    // A row a review item lists waits for its confirmation.
+    "GET /api/v1/transactions/:id": () =>
+      json(tx("t-1", { review_state: "pending" })),
     ...extra,
   });
 }
@@ -134,6 +168,14 @@ describe("correction helpers", () => {
       institution_id: "i-1",
       reprocess_similar: true,
       replace: true,
+    });
+    expect(lineFixResolution([2], [{ line: 2, type: "fee" }])).toEqual({
+      kind: "low_confidence_field",
+      transactions: [],
+      confirm: false,
+      import_as_read: true,
+      lines: [2],
+      line_fixes: [{ line: 2, type: "fee" }],
     });
     expect(ownerResolution("u-1", "", true)).toEqual({
       kind: "unknown_owner",
@@ -277,6 +319,11 @@ describe("review tools", () => {
 
   it("highlights the doubtful row on the page and saves a chosen reading", async () => {
     const detail = item("r-2", "low_confidence_field", {
+      reason: "low_confidence",
+      payload: {
+        reason: "low_confidence",
+        transactions: [{ transaction_id: "t-1", fields: ["amount"] }],
+      },
       regions: [
         {
           page: 1,
@@ -331,42 +378,88 @@ describe("review tools", () => {
     });
   });
 
-  it("drafts a rule from the item and saves it", async () => {
+  it("corrects a held line and imports it", async () => {
     const detail = item("r-3", "low_confidence_field", {
-      regions: [
-        {
-          page: 1,
-          bbox: [0, 0, 10, 10],
-          label: "transaction",
-          transaction_id: "t-1",
-        },
-      ],
+      reason: "investment_lines_held",
+      next_step: "correct_fields",
+      payload: {
+        reason: "investment_lines_held",
+        account_id: "a-1",
+        statement: 0,
+        statement_key: "k".repeat(64),
+        currency: "USD",
+        fields: ["trade_date"],
+        held: 2,
+        imported: 5,
+        lines: [
+          {
+            index: 4,
+            fields: ["trade_date"],
+            page: 2,
+            date: "2025-06-05",
+            type: "dividend",
+            description: "EXAMPLE INDEX ETF",
+            amount: "12.000000",
+            section: "Income",
+          },
+          {
+            index: 5,
+            fields: ["security"],
+            page: 2,
+            date: "2026-06-09",
+            type: "buy",
+            description: "UNNAMED HOLDING",
+            amount: "-30.000000",
+            section: "Purchases",
+          },
+        ],
+      },
     });
-    const rule = {
-      name: "Corner Market",
-      enabled: true,
-      stop_processing: false,
-      conditions: { type: "payee", op: "contains", value: "CORNER" },
-      actions: [],
-    };
     const api = toolsApi(detail, {
-      "GET /api/v1/review/:id/rule-draft": () =>
-        json({ item_id: "r-3", transaction_id: "t-1", rule }),
-      "POST /api/v1/rules": () => json({ id: "rule-9", ...rule }, 201),
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...detail, state: "resolved" }),
     });
     renderApp("/review");
     const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "Create a rule from this" }),
-    );
+    const table = await screen.findByRole("table", { name: "Lines in doubt" });
+    // Only a line whose doubt a person can settle by typing gets "Correct".
+    const correct = within(table).getAllByRole("button", { name: "Correct" });
+    expect(correct).toHaveLength(1);
+    const send = screen.getByRole("button", {
+      name: "Import the corrected lines",
+    });
+    expect(send).toBeDisabled();
+    await user.click(correct[0] ?? table);
+    const editor = screen.getByRole("group", { name: /^Correct the line of/ });
+    expect(within(editor).getByLabelText("Amount")).toHaveValue("12.000000");
+    expect(within(editor).getByLabelText("Kind")).toHaveValue("dividend");
+    const day = within(editor).getByLabelText("Date");
+    await user.clear(day);
+    await user.type(day, "2026-06-05");
+    // The other line cannot be corrected here. Importing would leave it out
+    // for good, so nothing is sent until the person says so for that line.
+    expect(send).toBeDisabled();
     expect(
-      await screen.findByText("Draft rule: Corner Market"),
+      screen.getByText(/1 line is neither corrected nor left out/),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Save this rule" }));
-    expect(
-      await screen.findByRole("link", { name: /Rule saved/ }),
-    ).toHaveAttribute("href", "/rules/rule-9");
-    expect(api.callsTo("POST", "/api/v1/rules")[0]?.body).toEqual(rule);
+    const leave = within(table).getAllByRole("checkbox", { name: /^Leave out the line of/ });
+    expect(leave).toHaveLength(2);
+    expect(leave[1]).not.toBeChecked();
+    await user.click(leave[1] ?? table);
+    expect(send).toBeEnabled();
+    await user.click(send);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+        lines: [4],
+        line_fixes: [{ line: 4, trade_date: "2026-06-05" }],
+      });
+    });
   });
 
   it("assigns a held drop-folder file to a member and remembers the subfolder", async () => {

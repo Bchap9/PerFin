@@ -276,6 +276,8 @@ def test_not_exported_only_holds_justified_tables() -> None:
         "import_hash_alias",
         # Import history of this instance (like ingest_job): the statement guard.
         "statement_record",
+        # Hashes of deleted imported rows (like import_hash_alias).
+        "import_tombstone",
         "portability_archive",
         "tax_export",
         "review_item",

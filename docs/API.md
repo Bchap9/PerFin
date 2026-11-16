@@ -125,7 +125,7 @@ GET             /accounts/{id}/grants           who has a grant (owner/admin)
 GET             /households/{id}/members/{user_id}/grants   a member's grants
 PUT/DELETE      /households/{id}/members/{user_id}/grants/{account_id}  (owner/admin, step-up)
 
-GET/POST        /transactions                  filters: account, date range, category, payee, tag, review_state, q
+GET/POST        /transactions                  filters: account, date range, category, payee, tag, review_state, document, q
 GET/PATCH/DELETE /transactions/{id}
 POST            /transactions/{id}/split
 POST            /transactions/bulk              categorise/tag/untag/delete/confirm many
@@ -197,7 +197,12 @@ GET             /documents/{id}/preview?page=   rendered PNG, sandboxed
 GET             /documents/{id}/regions?page=   word boxes for review highlighting
 POST            /documents/{id}/teach           Teach PerFin: labels applied, layout remembered
 POST            /documents/{id}/reprocess
-GET             /documents/{id}/imported        rows a delete with data would remove
+GET             /documents/{id}/imported        what the file imported: statements, accounts, how each was checked; counts a delete with data would remove
+GET             /documents/{id}/reconciliation  each statement against the ledger rows the document produced
+POST            /documents/{id}/reconciliation/confirm         a statement that balances: rows confirmed, balance recorded
+POST            /documents/{id}/reconciliation/accept          accept as read, no balance recorded
+POST            /documents/{id}/reconciliation/restore         put a removed row back
+POST            /documents/{id}/reconciliation/remove-earlier  remove the rows an earlier reading left behind
 DELETE          /documents/{id}                 ?with_data=true also deletes the imported rows
 POST            /documents/{id}/link            attach to transaction etc.
 GET             /documents/{id}/summary         the summary tables a brokerage statement prints, per account
@@ -212,6 +217,7 @@ GET             /imports/{document_id}/preview  extracted rows/statements (store
 POST            /imports/{document_id}/apply-mapping  re-run the import (job; 202 + job id)
 
 GET             /review                         open items
+GET             /review/cards                   open items grouped by document, with the one next action
 GET             /review/{id}
 POST            /review/{id}/resolve            payload: chosen values, "remember" flags
 POST            /review/{id}/dismiss
@@ -376,7 +382,14 @@ and facts (`suggestion`) and why it was not imported on its own
 also when a mapping saved from a suggestion whose sign was read on trust
 meets a liability account, until someone saves its spec or chooses it
 explicitly). `last_import` (and the run
-summary) has `mapping_suggested`; for a brokerage activity export
+summary) has `mapping_suggested`, and counts what a run did to rows the
+document had produced before (INGESTION.md "A document read again"):
+`replaced_rows` (rows of an earlier reading removed because nobody had
+touched them), `kept_rows` (rows of an earlier reading kept because a
+person had changed or linked them; listed in an `earlier_rows_kept` item)
+and `tombstoned_rows` (rows of the file a person had deleted, not written
+again), beside `unverified_statements` (statements of a PDF or image
+imported without a balance that vouches for them); for a brokerage activity export
 (INGESTION.md "Brokerage activity exports") it also has `brokerage_table`
 (`parser`, `statements`, `rows`, `notes`, `unknown_activity`, `skipped`,
 `warnings`), `mapping_bypassed` (the saved mapping the brokerage reading took
@@ -429,13 +442,19 @@ body is streamed, never spooled: sniffed (`415 unsupported-file-type`),
 hashed and encrypted into quarantine as it arrives; the body and the file
 are capped at `PERFIN_UPLOAD_MAX_MB` (`413`). `account_id` must be an account
 the caller edits (`404 account-not-found`). It answers `202 {"id", "status",
-"duplicate_of", "job_id"}` (`job_id` is the `ingest_document` job; `null`
-when the same content is already in the household and the document waits as
-a `possible_duplicate`). `Idempotency-Key` is honoured with the content's
+"duplicate_of", "job_id"}` (`job_id` is the `ingest_document` job). A file
+whose bytes the household already holds is **skipped**: the answer has
+`status: "rejected"`, `duplicate_of` the earlier document and `job_id:
+null`; the document is kept in quarantine with `error: "duplicate"` and a
+`possible_duplicate` notice (`reason: "same_content_skipped"`), and `POST
+/documents/{id}/reprocess` imports the copy anyway. `Idempotency-Key` is honoured with the content's
 SHA-256 in the request fingerprint (another file under the same key is `422
 idempotency-key-reused`; a replay keeps nothing). `GET
 /documents?cursor=&limit=&kind=&status=&account=&tax_year=` lists newest
-first (`limit` 1-500, default 100; a hidden `account` is `404`). With `q`
+first (`limit` 1-500, default 100; a hidden `account` is `404`). Each item
+carries `unchecked`: a statement of the document was imported from a PDF
+or image without a balance to check it against, on an account the caller
+can see (the marker "Not checked against a balance"). With `q`
 (1-200 characters; `app.domain.documents.search`) only documents whose
 extracted text matches are listed, best match first: the text is a bound
 parameter to `websearch_to_tsquery('simple', :q)` (quoted phrases, `or`,
@@ -453,7 +472,8 @@ the document (a viewer, unless the household setting
 number, a tax id, a salary) appears in a document they may not open. Without `q`, `rank` and
 `snippet` are `null`. `GET /documents/{id}` adds `links` (`{"id", "document_id",
 "target_type", "target_id", "created_at"}`), `open_review_items`,
-`quarantined`, `downloadable` and `can_edit`. `GET /documents/{id}/download`
+`quarantined`, `downloadable`, `can_edit` and `previewable` (whether `GET
+/documents/{id}/preview` would show the caller its pages). `GET /documents/{id}/download`
 needs member or above, or a viewer in a household whose setting
 `documents.viewer_download` is `true` (I1; else `403 forbidden`); a document
 whose blob is still in quarantine (received, failed, rejected, a possible
@@ -508,8 +528,85 @@ their own rows. The caller must be able to edit every one of them: a row in
 an account they cannot edit is `403 forbidden` and nothing is deleted.
 `GET /documents/{id}/imported` returns `{"transactions",
 "investment_transactions", "loan_payments", "balance_snapshots",
-"child_documents"}`: the counts a delete with data would remove, in accounts
-the caller can see.
+"child_documents", "statements", "skipped_lines"}`: the counts a delete
+with data would remove, in accounts the caller can see; `statements`, what
+the file imported, one entry per statement record on an account the caller
+can see: `{"account_id", "account_name", "kind": "bank" | "investment",
+"period_start", "period_end", "outcome", "verification": "reconciled" |
+"unverified" | "accepted", "source_format", "unchecked", "transactions",
+"pending"}` (`unchecked`: imported, read from a PDF or image, and
+`unverified`; `transactions` and `pending` count the ledger rows the
+document produced on the account for that period); and `skipped_lines`,
+how many lines of the file were counted but not read.
+
+Reconciliation notes (`app.domain.review.reconciliation`, router
+`reconciliation`; INGESTION.md "Review queue", "The reconcile view").
+`GET /documents/{id}/reconciliation` (any role that can see the document;
+`documents:read`) returns `{"document_id", "statements": [{"statement",
+"account_id", "account_name", "currency", "printed_sign": "ledger" |
+"owed", "period_start", "period_end", "opening", "closing",
+"previous_closing", "rows": [{"transaction_id", "posted_date", "payee",
+"amount", "review_state", "origin": "read" | "added" | "matched",
+"edited", "in_period", "page", "bbox"}], "rows_truncated", "removed":
+[{"tombstone_id", "posted_date", "amount", "deleted_at"}], "total",
+"difference", "status": "balanced" | "off" | "unchecked", "verification",
+"causes": [{"kind", "transaction_ids", "amount", "page", "bbox"}],
+"lines_skipped", "can_edit"}]}`: one entry per stored bank statement of
+the document whose account is known and visible to the caller (a statement
+on an account the caller cannot see, or that fits several accounts
+equally, is left out, never an error). `rows` are the ledger rows that
+count towards the statement: `read` from this document, `added` by a
+person for it, `matched` when the row first came from another file.
+`opening`, `closing` and `previous_closing` are **as printed** (`owed`: a
+balance owed is positive, as on a card statement); `total` and
+`difference` (`opening + total - closing`) are in ledger terms; `status`
+is `unchecked` without both balances. `causes` are likely reasons for the
+difference, most likely first: `earlier_reading`,
+`opening_differs_from_previous`, `extra_row`, `sign_flipped`,
+`duplicated_row`, `fee_or_interest`, `transposed_digits`, `out_of_period`,
+`missing_row` (ids, an amount and a box; never text of the document).
+Nothing is parsed again and nothing is written. A document with no
+statement to check is `409 statement-unavailable`. The four actions need
+member or above who may change the document (`404` hidden, `403`
+read-only; `documents:write`) and edit on the statement's account (`404
+account-not-found`), honour `Idempotency-Key`, and answer `200`
+`{"statement": <the entry above, after the action>, "confirmed",
+"snapshot", "items_closed"}`; a statement index the document does not have
+is `422 statement-not-found`. `POST .../reconciliation/confirm`
+`{"statement", "opening_balance"?, "closing_balance"?}`: balances are text
+as a person reads them off the page (thousands separators, one currency
+symbol, a minus or brackets; at most 32 characters; anything else `422
+invalid-amount`), are stored first, and for an account on the liability
+side are taken as amounts owed; the statement must then balance against
+the ledger rows (`409 statement-does-not-reconcile`, and nothing is kept):
+its pending rows are confirmed, its closing balance recorded as a
+statement snapshot, its record becomes `reconciled` and its findings are
+closed (audit `statement.reconcile`). `POST .../reconciliation/accept`
+`{"statement"}`: the rows are confirmed and the findings closed, the
+record becomes `accepted`, no balance is recorded and one this document
+recorded for the statement is taken back (audit `statement.accept`); `409
+statement-balanced` for a statement that balances (confirm it instead).
+Both are `409 statement-unavailable` for a statement the document
+imported nothing of. `POST .../reconciliation/restore` `{"tombstone_id"}`
+puts a removed row back, pending, with its original hash (`404
+tombstone-not-found` for a tombstone that is not of this document's
+statements; audit `tombstone.restore`). `POST
+.../reconciliation/remove-earlier` `{"statement"}` deletes the statement's
+rows an earlier reading of the file left behind and a person had changed
+(each leaves a tombstone) and closes the `earlier_rows_kept` item when
+none is left. An answer given here lasts while a later import of the
+document changes no row of the account (INGESTION.md "Commit", "Answers
+that last"). The resolution these actions write on the items they close,
+and the payload of a `reconciliation_failed` / `reconciliation_unavailable`
+item, carry `statement` (its index in the document) and `statement_ref`:
+64 letters `a` to `p`, a digest of the statement's target, account
+digits, account name, currency and its place among the document's
+statements with the same four. It leaves out the period, the rows, the
+balances and the parser version, so an account chosen for a statement
+(`placed` resolutions carry it too) holds after a corrected balance or a
+parser change. The audit row of an acceptance (`statement.accept`) has
+`snapshot_withdrawn`: whether a balance snapshot this document had
+recorded for the statement was taken back.
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
@@ -530,6 +627,19 @@ also returns `regions` (`[{"page", "bbox", "label": "transaction" |
 `alternatives` (`[{"field", "value", "label", "score", "transaction_id",
 "source": "document" | "ledger" | "household"}]`; values read from the
 document only for callers the download rule allows), both `null` in lists).
+`GET /review/cards?cursor=&limit=` (any role; `limit` 1-100, default 25,
+counting documents) groups the open items the caller may see by document:
+`{"cards": [{"document", "items", "action", "action_item_id", "open",
+"notices"}], "loose", "next_cursor"}`. A card holds one document's items,
+oldest first; `action` is the one thing to do next, asked for by the item
+`action_item_id`: `choose_account`, `choose_owner`, `answer_sign`,
+`map_columns`, `confirm_duplicate`, `reconcile`, `check_rows`,
+`attach_receipt`, `teach`, `reprocess` or `acknowledge` (the order in
+which they are chosen is in INGESTION.md "Review queue"); `open` counts
+the items that wait on a person, `notices` those that only tell something
+(`same_content_skipped`, `investment_figures_differ`). `loose` are open
+items of no document, on the first page only; `next_cursor` is a document
+id, `null` on the last page.
 `GET /documents/{id}/accounts` (member or above who may change the
 document): `{"document_id", "accounts": [{"target": "statement" |
 "investment" | "group" | "table", "index", "status": "matched" | "new" |
@@ -569,12 +679,25 @@ review-item-not-found`). `POST /review/{id}/resolve` and `POST
 document (`403 forbidden`), on an open item (`409 review-item-closed`).
 Resolutions are typed by `kind`, which must match the item (`422
 review-kind-mismatch`): `{"kind": "possible_duplicate", "decision": "confirm"
-| "reject", "duplicate_of"?}` (same file: confirm marks the new document
-`rejected`, reject sends it through the pipeline; imported row: confirm
+| "reject", "duplicate_of"?, "rows"?}` (same file: confirm marks the new document
+`rejected`, reject sends it through the pipeline; a copy skipped at
+upload, `reason: "same_content_skipped"`: confirm only closes the notice,
+reject sends the copy through the pipeline; several rows of one statement
+that may already be in the ledger, `reason: "near_matches"` with `count`
+and `rows: [{"transaction_id", "candidates"}]`: `rows` in the resolution
+is one `{"transaction_id", "decision", "duplicate_of"?}` per listed row,
+at most 50, and without it `decision` applies to every listed row; a row
+the item does not list is `422 invalid-resolution` and nothing is
+decided; rows left undecided keep the item open, listing only them;
+imported row: confirm
 deletes it and records its `import_hash` for the kept transaction, which
 takes the hash when it has none and otherwise gets an `import_hash_alias`;
 reject confirms it; `duplicate_of` must be one of the item's `candidates`
-and is required when there are several, `422 invalid-resolution`; a
+and is required when there are several, `422 invalid-resolution`; an
+imported row with empty `candidates`, which has the date and amount of a
+row a person deleted: confirm without `duplicate_of` deletes it again and
+writes an import tombstone for its hash (resolution `removed_again:
+true`), reject confirms it; a
 statement whose period overlaps one already imported for the account,
 `reason: "statement_overlap"` with `account_id`, `statement`,
 `statement_key`, `investment`,
@@ -595,7 +718,20 @@ account to that group only; `409 review-item-stale` when the item's mapping
 spec changed since it was raised, `spec_digest`); `{"kind": "unparsed",
 "action": "reprocess"}` or `{"kind": "unparsed", "action": "apply_mapping",
 "mapping_id"?, "account_id"?}` (`409 document-not-importable` without a
-stored extraction); `{"kind": "unknown_owner", "user_id", "account_id"?,
+stored extraction) or `{"kind": "unparsed", "action": "answer_sign",
+"positive_is": "money_in" | "money_out"}` (only on an item held because
+the sign of its amounts was taken on trust, `auto_import:
+"sign_unverified"`, else `422 invalid-resolution`; the item carries
+`account_id`, `group`, `transactions`, `scope` and `mapping_id` when a
+mapping exists. `scope: "mapping"`: the sign is saved on the item's
+mapping, or on one made from its suggestion, which is then no longer on
+trust; a mapping that already read files or is another account's is left
+alone and the answer saved on a mapping of the item's account, `422
+invalid-resolution` when the item names no account. `scope: "account"`:
+the mapping is left alone and the resolution records `sign`
+(`inflow_positive` | `outflow_positive`), `scope` and `account_id` for
+the importer. Either way the document is imported again and no row
+already imported is flipped); `{"kind": "unknown_owner", "user_id", "account_id"?,
 "remember"}` (a held drop-folder file: assigned to that member, admin or
 owner and the account, which the caller must edit and the member may import
 into, `422 invalid-resolution` otherwise; the document goes through the
@@ -609,7 +745,7 @@ cannot edit is `404 transaction-not-found`; `"transaction_id": null`
 records that none applies; `next_step` is `attach_receipt`; INGESTION.md
 "Receipts"); `{"kind": "low_confidence_field", "transactions": [{"transaction_id",
 "posted_date"?, "amount"? (`{"amount", "currency"}`), "raw_payee"?,
-"memo"?}], "confirm"}` (corrects rows imported from the item's document,
+"memo"?}], "confirm", "line_fixes"?}` (corrects rows imported from the item's document,
 each one the caller edits, else `422 invalid-resolution`; with `confirm`,
 default `true`, the item's pending rows become `confirmed`, for a
 `reconciliation_failed`/`reconciliation_unavailable` item every pending row
@@ -631,6 +767,13 @@ are only those (and `market_value` where `failed` names `positions`). On
 an item with `selectable: true` the body may add `"lines": [index, ...]`
 (a non-empty subset of the item's `lines`, else `422`): only those lines
 are imported and the others are left out without being asked about again.
+`"line_fixes": [{"line", "trade_date"?, "amount"?, "quantity"?, "type"?}]`
+(at most 200; `line` is the line's `index` in the payload) on an
+`investment_lines_held` or `investment_low_confidence` item types in what
+a held line should read: the stored statement is corrected, the doubts
+about exactly those fields are settled and the document is imported
+again; with `import_as_read` the answer is recorded for the statement as
+it reads after the correction.
 Any other item is
 `422 invalid-resolution` (an `investment_figures_differ` item, raised for
 a statement imported whole whose own totals disagree, is only dismissed). It needs
@@ -670,9 +813,15 @@ confirmed and its closing balance recorded as a statement snapshot
 | "period_start" | "period_end" | "opening_balance" | "closing_balance" |
 "institution" | "ignore" | "other", "page", "bbox", "value"?, "note"?}],
 "tables": [{"kind": "transactions" | "holdings", "page", "bbox", "columns":
-[{"x0", "x1", "role", "note"?}]}], "institution_id"? | "institution_name"?,
-"account_id"?, "remember", "reprocess_similar", "replace", "item_id"?, "resolve"}`
-(at most 40 labels and 2 tables; `other` needs a `note`; column roles
+[{"x0", "x1", "role", "note"?}], "direction"?, "continues"?}],
+"institution_id"? | "institution_name"?,
+"account_id"?, "remember", "reprocess_similar", "replace", "item_id"?,
+"resolve", "preview"?}`
+(at most 40 labels and 5 tables, of which at most four transaction tables
+and one holdings table, else `422 invalid-table`; `direction` says what a
+single `amount` column means: `as_printed` (the default), `money_in`,
+`money_out` or `card`; `continues`: the table runs on over pages that do
+not repeat its header; `other` needs a `note`; column roles
 `date`, `payee`, `memo`, `amount`, `debit`, `credit`, `balance` or
 `symbol`, `security`, `quantity`, `price`, `market_value`, `cost_basis`,
 plus `ignore` and `other`) applies the labels to the document and, with
@@ -685,7 +834,19 @@ remember-layout errors (with `409 layout-conflict`). It answers `{"document_id",
 "value", "page", "anchor", "direction", "note"}], "tables": [{"kind",
 "rows", "columns": [{"header", "role"}]}], "ignored", "notes", "applied",
 "rerun": "import" | "pipeline" | null, "job_id", "fingerprint_id",
-"reprocessed", "merged_from", "kept", "warnings", "item"}` (audit `document.teach`: field names,
+"reprocessed", "merged_from", "kept", "warnings", "item", "preview"}`. With
+`"preview": true` nothing is applied, stored or audited and `preview` is
+`{"rows": [{"posted_date", "amount", "payee", "table", "page"}],
+"row_count", "reconciliation": "ok" | "mismatch" | "unavailable" | null,
+"difference", "similar_waiting", "account_id"}`: the first 50 rows the
+labels would read, in reading order, with the index of the taught table
+each came from (`payee` only for callers the download rule allows), how
+many rows there are, whether they meet the balances, how many other
+waiting documents of the layout would be read again and the account the
+rows would go to. When rows of the document were imported before, an
+apply imports the taught table again (the rows nobody touched are
+replaced, the others kept) and `warnings` holds `rows_already_imported`.
+(Audit `document.teach`: field names,
 counts, notes and ids, never the values read; notes are never acted on and
 keep no word that holds a digit). With `resolve` the `item_id` item is
 closed only when the teaching answers it: a `reconciliation_*` item when
@@ -840,7 +1001,10 @@ account-not-found`; a payee, category or tag that is not the household's is
 `404 payee-|category-|tag-not-found`. `GET /transactions` takes `account`,
 `category`, `payee`, `tag` (repeatable, at most 50 values each),
 `date_from`/`date_to` (posted date, inclusive), `uncategorized`,
-`review_state`, `status`, `transfer` (`true`: only transfer legs) and `q`
+`review_state`, `status`, `transfer` (`true`: only transfer legs),
+`document` (the rows whose source document it is, under the caller's
+account visibility; a document the caller cannot see gives an empty page)
+and `q`
 (1-100 characters: a case-insensitive substring of the payee text, the
 payee's name, memo or notes; `%`, `_` and `\` are literal characters, there
 is no query language). A `category` matches the transaction's category or
@@ -858,7 +1022,11 @@ cannot see. `POST /transactions` (`Idempotency-Key` honoured) takes
 `account_id`, `posted_date`, `amount` (`{"amount": "<decimal string>",
 "currency"}`, the account's currency or `422 currency-mismatch`) and
 optionally `effective_date`, `payee_id`, `category_id`, `raw_payee`, `memo`,
-`notes`, `status`, `tag_ids`; manual transactions start with `review_state`
+`notes`, `status`, `tag_ids`, `source_document_id` (the row is added for
+that document, a line the reader missed, entered in the reconcile view:
+the document must be one the caller may change, `404 document-not-found`
+when hidden, foreign or missing, `403 forbidden` when read-only; the row
+has no `import_hash`); manual transactions start with `review_state`
 `none` and then go through the household's enabled rules in the same
 request (the response shows their effect); rules never overwrite the
 category, payee, notes or tags given in the request. `PATCH` takes the same fields (not `account_id`) plus
@@ -895,7 +1063,22 @@ import into (all of them for an owner's or admin's document). Unlinking, or
 deleting a leg, needs edit on every leg of the transfer (`409
 transfer-conflict` otherwise). Deleting a
 transaction keeps its audit row (`transaction.delete`, with its amounts,
-dates and ids but no free text). Every write emits a `transaction.*` event.
+dates and ids but no free text). Deleting one **imported** row (`DELETE
+/transactions/{id}` or the bulk `delete`) also leaves an import tombstone
+for its `import_hash` and every alias hash that stands for it, so no
+later import of the same statement, from the same file or another, brings
+the row back (INGESTION.md "Match and deduplicate", "Rows a person
+deleted"; the audit rows say `tombstoned`). It is taken back with `POST
+/documents/{id}/reconciliation/restore`. A row typed by hand has no hash
+and leaves none; deleting a document with its data leaves none either.
+Every write emits a `transaction.*` event. An import emits one per account
+instead of one per row: `transaction.created` for the rows it wrote and,
+when a document read again replaces rows of its earlier reading
+(INGESTION.md "A document read again"), `transaction.deleted`; both have
+the server-side payload `{"document_id", "account_id", "count", "ids"}`
+(at most 50 ids). Rows removed this way leave no tombstone and are
+audited as `import.replace` (`account_id`, `replaced`, `kept`,
+`transaction_ids`, `kept_ids`; ids and counts only).
 
 Rules notes (`app.domain.rules`, router `rules`; document format and
 evaluation semantics in DATA_MODEL.md "Ledger"): any household role reads

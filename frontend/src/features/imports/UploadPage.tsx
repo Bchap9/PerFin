@@ -16,7 +16,6 @@ import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { listReviewItems, reviewKeys, type ReviewItem } from "../review/api";
 import {
   STATUS_LABELS,
   importKeys,
@@ -33,6 +32,8 @@ export interface UploadItem {
   progress: number;
   state: "uploading" | "done" | "error";
   message: string | null;
+  /** The document the file became, once the server has received it. */
+  documentId: string | null;
 }
 
 /**
@@ -57,23 +58,6 @@ export function readAsPositions(row: {
   return row.parser_version?.startsWith("brokerage_positions_table/") ?? false;
 }
 
-/**
- * The documents the column-mapping editor can do something for: those with an
- * open review item the server answers there (`next_step`). A file with no rows
- * or one read as statements has nothing to map.
- */
-export function mappableDocuments(
-  items: readonly Pick<ReviewItem, "document_id" | "next_step">[],
-): ReadonlySet<string> {
-  const out = new Set<string>();
-  for (const item of items) {
-    if (item.next_step === "column_mapping" && item.document_id !== null) {
-      out.add(item.document_id);
-    }
-  }
-  return out;
-}
-
 export function statusTone(status: DocumentStatus): BadgeTone {
   switch (status) {
     case "processed":
@@ -86,6 +70,61 @@ export function statusTone(status: DocumentStatus): BadgeTone {
     default:
       return "info";
   }
+}
+
+/**
+ * Where a file leads next: its questions in the review queue while it waits,
+ * its account and its rows once it is imported. A statement imported without a
+ * balance to check it against says so, quietly.
+ */
+function NextStep({ row, canWrite }: { row: DocumentRow; canWrite: boolean }) {
+  const accounts = useAccounts();
+  if (row.status === "needs_review") {
+    if (!canWrite) {
+      return null;
+    }
+    return (
+      <span className="ledger-actions">
+        {readAsActivity(row) || readAsPositions(row) ? (
+          <span className="ledger-muted">
+            {readAsPositions(row)
+              ? "Read as investment holdings"
+              : "Read as investment activity"}
+          </span>
+        ) : null}
+        <Link to="/review" search={{ document: row.id }}>
+          Review
+        </Link>
+      </span>
+    );
+  }
+  if (row.status !== "processed") {
+    return null;
+  }
+  // Only an account the person can see is named (the list holds no others).
+  const account = (accounts.data ?? []).find(
+    (candidate) => candidate.id === row.account_id,
+  );
+  return (
+    <span className="ledger-actions">
+      {account === undefined ? null : (
+        <Link to="/accounts/$accountId" params={{ accountId: account.id }}>
+          {accountLabel(account)}
+        </Link>
+      )}
+      {/* Investment activity and holdings are not rows of the cash ledger. */}
+      {row.kind === "statement" &&
+      !readAsActivity(row) &&
+      !readAsPositions(row) ? (
+        <Link to="/transactions" search={{ document: row.id }}>
+          View the rows
+        </Link>
+      ) : null}
+      {row.unchecked ? (
+        <span className="ledger-muted">Not checked against a balance</span>
+      ) : null}
+    </span>
+  );
 }
 
 export function UploadPage() {
@@ -103,15 +142,6 @@ export function UploadPage() {
     queryFn: () => listRecentDocuments(),
   });
 
-  // What waits and why (the same list as the review queue; refreshed by the
-  // event stream). Until it is known, no file is offered the mapping editor.
-  const review = useQuery({
-    queryKey: reviewKeys.list("open"),
-    queryFn: () => listReviewItems("open"),
-    enabled: canWrite,
-  });
-  const mappable = mappableDocuments(review.data ?? []);
-
   const patchItem = (id: number, change: Partial<UploadItem>): void => {
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...change } : item)),
@@ -124,7 +154,14 @@ export function UploadPage() {
       const id = counter.current;
       setItems((current) => [
         ...current,
-        { id, name: file.name, progress: 0, state: "uploading", message: null },
+        {
+          id,
+          name: file.name,
+          progress: 0,
+          state: "uploading",
+          message: null,
+          documentId: null,
+        },
       ]);
       const handle = uploadDocument(file, {
         accountId: accountId === "" ? null : accountId,
@@ -137,10 +174,11 @@ export function UploadPage() {
           patchItem(id, {
             progress: 1,
             state: "done",
+            documentId: received.id,
             message:
               received.duplicate_of === null
                 ? null
-                : "This file was uploaded before. It waits in the review queue.",
+                : "This file was uploaded before, so it was not imported again.",
           });
           void queryClient.invalidateQueries({
             queryKey: queryRoots.documents,
@@ -228,7 +266,16 @@ export function UploadPage() {
               <ul className="account-list" aria-label="Uploads">
                 {items.map((item) => (
                   <li key={item.id}>
-                    <span>{item.name}</span>
+                    {item.documentId === null ? (
+                      <span>{item.name}</span>
+                    ) : (
+                      <Link
+                        to="/documents/$documentId"
+                        params={{ documentId: item.documentId }}
+                      >
+                        {item.name}
+                      </Link>
+                    )}
                     {item.state === "uploading" ? (
                       <progress
                         aria-label={`Uploading ${item.name}`}
@@ -271,7 +318,14 @@ export function UploadPage() {
                 id: "name",
                 header: "File",
                 rowHeader: true,
-                cell: (row) => row.original_filename ?? "Unnamed file",
+                cell: (row) => (
+                  <Link
+                    to="/documents/$documentId"
+                    params={{ documentId: row.id }}
+                  >
+                    {row.original_filename ?? "Unnamed file"}
+                  </Link>
+                ),
               },
               {
                 id: "status",
@@ -290,26 +344,7 @@ export function UploadPage() {
               {
                 id: "next",
                 header: "Next step",
-                cell: (row) =>
-                  row.status === "needs_review" && canWrite ? (
-                    <span className="ledger-actions">
-                      {mappable.has(row.id) ? (
-                        <Link
-                          to="/documents/$documentId/mapping"
-                          params={{ documentId: row.id }}
-                        >
-                          Map columns
-                        </Link>
-                      ) : readAsActivity(row) || readAsPositions(row) ? (
-                        <span className="ledger-muted">
-                          {readAsPositions(row)
-                            ? "Read as investment holdings"
-                            : "Read as investment activity"}
-                        </span>
-                      ) : null}
-                      <Link to="/review">Review</Link>
-                    </span>
-                  ) : null,
+                cell: (row) => <NextStep row={row} canWrite={canWrite} />,
               },
             ]}
           />

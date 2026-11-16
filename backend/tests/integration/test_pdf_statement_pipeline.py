@@ -232,7 +232,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/7")
+    assert document.parser_version.endswith("/8")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -315,7 +315,7 @@ def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> No
         stmt.period_start,
         stmt.statement_date,
     )
-    assert document.parser_version == "card_statement_generic/9"
+    assert document.parser_version == "card_statement_generic/10"
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -360,10 +360,12 @@ def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:
     assert failed.payload["account_id"] == str(account.id)
     low = next(i for i in items if i.payload.get("reason") == "low_confidence")
     assert low.payload["count"] == 1
-    assert "reconciliation" in low.payload["fields"]
+    # The row's own doubt (the running balance beside it contradicts its
+    # amount); that the statement does not add up is said once, above.
+    assert low.payload["fields"] == ["amount"]
     (entry,) = low.payload["transactions"]
     assert entry["transaction_id"] == str(forged.id)
-    assert "amount" in entry["fields"]
+    assert entry["fields"] == ["amount"]
     assert entry["page"] == 1
 
 
@@ -383,7 +385,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/9"
+    assert low[0].payload["parser"] == "statement_generic/10"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }
@@ -505,7 +507,7 @@ def test_headerless_statement_imports_clean(env: Env) -> None:
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert env.open_reviews(document_id) == []
     assert document.account_id == account.id
-    assert document.parser_version == "statement_generic/9"
+    assert document.parser_version == "statement_generic/10"
     rows = env.transactions(account)
     assert len(rows) == 11
     assert _rows(rows) == sorted(

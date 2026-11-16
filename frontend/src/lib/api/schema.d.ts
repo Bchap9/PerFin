@@ -1341,6 +1341,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A document's statements against the ledger rows it produced */
+        get: operations["get_reconciliation_api_v1_documents__document_id__reconciliation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/reconciliation/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a statement as read, without balancing it */
+        post: operations["post_accept_api_v1_documents__document_id__reconciliation_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/reconciliation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a statement that balances */
+        post: operations["post_confirm_api_v1_documents__document_id__reconciliation_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/reconciliation/remove-earlier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove the rows an earlier reading left behind */
+        post: operations["post_remove_earlier_api_v1_documents__document_id__reconciliation_remove_earlier_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/reconciliation/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put a removed row of the document back */
+        post: operations["post_restore_api_v1_documents__document_id__reconciliation_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_id}/regions": {
         parameters: {
             query?: never;
@@ -2382,6 +2467,23 @@ export interface paths {
         };
         /** Review queue */
         get: operations["get_review_api_v1_review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review/cards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review queue, one card per document */
+        get: operations["get_review_cards_api_v1_review_cards_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5773,7 +5875,8 @@ export interface components {
          *     ``downloadable`` says whether ``GET /documents/{id}/download`` would
          *     serve the caller (not quarantined, and member or above, or a viewer in a
          *     household that allows viewer downloads); ``can_edit`` whether the caller
-         *     may reprocess, link or delete it.
+         *     may reprocess, link or delete it; ``previewable`` whether ``GET
+         *     /documents/{id}/preview`` would show the caller its pages.
          */
         DocumentDetailOut: {
             /** Account Id */
@@ -5811,6 +5914,11 @@ export interface components {
             period_end: string | null;
             /** Period Start */
             period_start: string | null;
+            /**
+             * Previewable
+             * @default false
+             */
+            previewable: boolean;
             /** Quarantined */
             quarantined: boolean;
             /** Sha256 */
@@ -5865,7 +5973,9 @@ export interface components {
          *
          *     Counts only rows in accounts the caller can see. ``child_documents`` are
          *     attachments or archive members received from this file (an email or ZIP);
-         *     their own imported rows are included in the other counts.
+         *     their own imported rows are included in the other counts. ``statements``
+         *     lists what the file imported, per account and period; ``skipped_lines``
+         *     is how many lines of the file were counted but not read.
          */
         DocumentImportedOut: {
             /** Balance Snapshots */
@@ -5876,6 +5986,16 @@ export interface components {
             investment_transactions: number;
             /** Loan Payments */
             loan_payments: number;
+            /**
+             * Skipped Lines
+             * @default 0
+             */
+            skipped_lines: number;
+            /**
+             * Statements
+             * @default []
+             */
+            statements: components["schemas"]["ImportedStatement"][];
             /** Transactions */
             transactions: number;
         };
@@ -5969,6 +6089,11 @@ export interface components {
             /** Tax Year */
             tax_year: number | null;
             /**
+             * Unchecked
+             * @default false
+             */
+            unchecked: boolean;
+            /**
              * Updated At
              * Format: date-time
              */
@@ -6007,6 +6132,19 @@ export interface components {
             /** Job Id */
             job_id: string | null;
             status: components["schemas"]["DocumentStatus"];
+        };
+        /**
+         * DocumentReconciliation
+         * @description ``GET /documents/{id}/reconciliation``: the statements the caller can see.
+         */
+        DocumentReconciliation: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Statements */
+            statements: components["schemas"]["StatementReconciliation"][];
         };
         /**
          * DocumentRegions
@@ -6080,6 +6218,24 @@ export interface components {
             document_id: string;
             /** Statements */
             statements: components["schemas"]["StatementSummary"][];
+        };
+        /**
+         * DuplicateDecision
+         * @description What to do with one imported row of a ``near_matches`` item.
+         */
+        DuplicateDecision: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirm" | "reject";
+            /** Duplicate Of */
+            duplicate_of?: string | null;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
         };
         /**
          * ExportOut
@@ -6719,6 +6875,48 @@ export interface components {
             passphrase_protected: boolean;
             state: components["schemas"]["ArchiveState"];
         };
+        /**
+         * ImportedStatement
+         * @description A statement the document produced and the account it went to.
+         *
+         *     ``unchecked``: imported, of a document format (PDF or image) and not
+         *     checked against a balance (``verification = unverified``): the marker
+         *     "Not checked against a balance". ``transactions`` and ``pending`` count
+         *     the ledger rows the document produced on the account for this period.
+         */
+        ImportedStatement: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Name */
+            account_name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bank" | "investment";
+            /** Outcome */
+            outcome: string;
+            /** Pending */
+            pending: number;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Source Format */
+            source_format: string;
+            /** Transactions */
+            transactions: number;
+            /** Unchecked */
+            unchecked: boolean;
+            /**
+             * Verification
+             * @enum {string}
+             */
+            verification: "reconciled" | "unverified" | "accepted";
+        };
         /** InvestmentTxnCreate */
         InvestmentTxnCreate: {
             /**
@@ -6983,6 +7181,23 @@ export interface components {
             meaning: string;
             /** Phrase */
             phrase: string;
+        };
+        /**
+         * LineFix
+         * @description Corrected values for one held activity line of a brokerage statement.
+         *
+         *     ``line`` is the line's ``index`` in the item's payload; absent fields
+         *     are left as read.
+         */
+        LineFix: {
+            amount?: components["schemas"]["MoneyIn"] | null;
+            /** Line */
+            line: number;
+            quantity?: components["schemas"]["MoneyIn"] | null;
+            /** Trade Date */
+            trade_date?: string | null;
+            /** Type */
+            type?: string | null;
         };
         /** LinkOfferOut */
         LinkOfferOut: {
@@ -8470,6 +8685,116 @@ export interface components {
             /** Old */
             old: number | string;
         };
+        /**
+         * ReconcileAccept
+         * @description Accept a statement as read, without balancing it (no balance is recorded).
+         */
+        ReconcileAccept: {
+            /** Statement */
+            statement: number;
+        };
+        /**
+         * ReconcileCause
+         * @description A likely reason for the difference, most likely first.
+         */
+        ReconcileCause: {
+            /** Amount */
+            amount: string | null;
+            /** Bbox */
+            bbox: number[] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "extra_row" | "sign_flipped" | "transposed_digits" | "fee_or_interest" | "opening_differs_from_previous" | "duplicated_row" | "out_of_period" | "earlier_reading" | "missing_row";
+            /** Page */
+            page: number | null;
+            /** Transaction Ids */
+            transaction_ids: string[];
+        };
+        /**
+         * ReconcileConfirm
+         * @description Confirm a statement that balances; balances are typed as printed.
+         */
+        ReconcileConfirm: {
+            /** Closing Balance */
+            closing_balance?: string | null;
+            /** Opening Balance */
+            opening_balance?: string | null;
+            /** Statement */
+            statement: number;
+        };
+        /**
+         * ReconcileOutcome
+         * @description The statement after the action, and what the action did.
+         */
+        ReconcileOutcome: {
+            /** Confirmed */
+            confirmed: number;
+            /** Items Closed */
+            items_closed: number;
+            /** Snapshot */
+            snapshot: boolean;
+            statement: components["schemas"]["StatementReconciliation"];
+        };
+        /**
+         * ReconcileRemoveEarlier
+         * @description Remove the rows an earlier reading of the statement left behind.
+         */
+        ReconcileRemoveEarlier: {
+            /** Statement */
+            statement: number;
+        };
+        /**
+         * ReconcileRestore
+         * @description Put a removed row of the document back.
+         */
+        ReconcileRestore: {
+            /**
+             * Tombstone Id
+             * Format: uuid
+             */
+            tombstone_id: string;
+        };
+        /**
+         * ReconcileRow
+         * @description A ledger row that counts towards a statement's sum.
+         *
+         *     ``origin``: ``read`` from this document, ``added`` by a person for it,
+         *     ``matched`` when the row first came from another file. ``edited``: it
+         *     was changed after its import. ``page``/``bbox``: where the document
+         *     prints it, when known.
+         */
+        ReconcileRow: {
+            /** Amount */
+            amount: string;
+            /** Bbox */
+            bbox: number[] | null;
+            /** Edited */
+            edited: boolean;
+            /** In Period */
+            in_period: boolean;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "read" | "added" | "matched";
+            /** Page */
+            page: number | null;
+            /** Payee */
+            payee: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            review_state: components["schemas"]["ReviewState"];
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+        };
         /** RecoveryCodesOut */
         RecoveryCodesOut: {
             /** Codes */
@@ -8645,6 +8970,26 @@ export interface components {
             version: number;
         };
         /**
+         * RemovedRow
+         * @description An imported row a person deleted (its tombstone); it can be put back.
+         */
+        RemovedRow: {
+            /** Amount */
+            amount: string | null;
+            /**
+             * Deleted At
+             * Format: date-time
+             */
+            deleted_at: string;
+            /** Posted Date */
+            posted_date: string | null;
+            /**
+             * Tombstone Id
+             * Format: uuid
+             */
+            tombstone_id: string;
+        };
+        /**
          * ReportItem
          * @description One group: ``key`` is a category, payee or account id, or ``YYYY-MM``.
          *
@@ -8685,6 +9030,8 @@ export interface components {
              * @enum {string}
              */
             kind: "possible_duplicate";
+            /** Rows */
+            rows?: components["schemas"]["DuplicateDecision"][] | null;
         };
         /**
          * ResolveLowConfidence
@@ -8706,6 +9053,8 @@ export interface components {
              * @enum {string}
              */
             kind: "low_confidence_field";
+            /** Line Fixes */
+            line_fixes?: components["schemas"]["LineFix"][];
             /** Lines */
             lines?: number[] | null;
             /** Transactions */
@@ -8773,7 +9122,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "reprocess" | "apply_mapping";
+            action: "reprocess" | "apply_mapping" | "answer_sign";
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -8781,6 +9130,49 @@ export interface components {
             kind: "unparsed";
             /** Mapping Id */
             mapping_id?: string | null;
+            /** Positive Is */
+            positive_is?: ("money_in" | "money_out") | null;
+        };
+        /**
+         * ReviewCard
+         * @description A document's open items as one card, with the one thing to do next.
+         *
+         *     ``action_item_id`` is the item that asks for ``action``; ``open`` counts
+         *     the items that wait on a person, ``notices`` the rest.
+         */
+        ReviewCard: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "choose_account" | "map_columns" | "answer_sign" | "reconcile" | "check_rows" | "confirm_duplicate" | "attach_receipt" | "choose_owner" | "teach" | "reprocess" | "acknowledge";
+            /**
+             * Action Item Id
+             * Format: uuid
+             */
+            action_item_id: string;
+            document: components["schemas"]["ReviewDocument"];
+            /** Items */
+            items: components["schemas"]["ReviewItemOut"][];
+            /** Notices */
+            notices: number;
+            /** Open */
+            open: number;
+        };
+        /**
+         * ReviewCardPage
+         * @description ``GET /review/cards``: cards by document; ``loose`` are open items of no document.
+         *
+         *     ``next_cursor`` (a document id) is ``null`` on the last page; ``loose``
+         *     is filled on the first page only.
+         */
+        ReviewCardPage: {
+            /** Cards */
+            cards: components["schemas"]["ReviewCard"][];
+            /** Loose */
+            loose: components["schemas"]["ReviewItemOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** ReviewChange */
         ReviewChange: {
@@ -10042,6 +10434,66 @@ export interface components {
             splits: components["schemas"]["SplitIn"][];
         };
         /**
+         * StatementReconciliation
+         * @description One statement of a document against the ledger rows it produced.
+         *
+         *     ``opening``, ``closing`` and ``previous_closing`` are as printed
+         *     (``printed_sign = owed``: a balance owed is positive on paper); ``total``
+         *     and ``difference`` (``opening + total - closing``) are in ledger terms.
+         *     ``status`` is ``unchecked`` without both balances.
+         */
+        StatementReconciliation: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Name */
+            account_name: string;
+            /** Can Edit */
+            can_edit: boolean;
+            /** Causes */
+            causes: components["schemas"]["ReconcileCause"][];
+            /** Closing */
+            closing: string | null;
+            /** Currency */
+            currency: string;
+            /** Difference */
+            difference: string | null;
+            /** Lines Skipped */
+            lines_skipped: number;
+            /** Opening */
+            opening: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Previous Closing */
+            previous_closing: string | null;
+            /**
+             * Printed Sign
+             * @enum {string}
+             */
+            printed_sign: "ledger" | "owed";
+            /** Removed */
+            removed: components["schemas"]["RemovedRow"][];
+            /** Rows */
+            rows: components["schemas"]["ReconcileRow"][];
+            /** Rows Truncated */
+            rows_truncated: boolean;
+            /** Statement */
+            statement: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "balanced" | "off" | "unchecked";
+            /** Total */
+            total: string;
+            /** Verification */
+            verification: ("reconciled" | "unverified" | "accepted") | null;
+        };
+        /**
          * StatementSummary
          * @description What one brokerage statement of a document says about itself.
          */
@@ -10280,6 +10732,25 @@ export interface components {
             page: number;
             /** Value */
             value: string | null;
+        };
+        /**
+         * TaughtRow
+         * @description One row a taught table reads (``payee`` only for callers who may see content).
+         */
+        TaughtRow: {
+            /** Amount */
+            amount: string;
+            /** Page */
+            page: number;
+            /** Payee */
+            payee: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /** Table */
+            table: number;
         };
         /** TaughtTable */
         TaughtTable: {
@@ -10535,6 +11006,7 @@ export interface components {
             merged_from?: number | null;
             /** Notes */
             notes: string[];
+            preview?: components["schemas"]["TeachPreview"] | null;
             /** Reprocessed */
             reprocessed?: string[];
             /** Rerun */
@@ -10545,6 +11017,24 @@ export interface components {
             warnings?: string[];
         };
         /**
+         * TeachPreview
+         * @description What the labels would read, before anything is saved.
+         */
+        TeachPreview: {
+            /** Account Id */
+            account_id: string | null;
+            /** Difference */
+            difference: string | null;
+            /** Reconciliation */
+            reconciliation: ("ok" | "mismatch" | "unavailable") | null;
+            /** Row Count */
+            row_count: number;
+            /** Rows */
+            rows: components["schemas"]["TaughtRow"][];
+            /** Similar Waiting */
+            similar_waiting: number;
+        };
+        /**
          * TeachRequest
          * @description ``POST /documents/{id}/teach``: what the person labelled on the document.
          *
@@ -10553,7 +11043,9 @@ export interface components {
          *     the layout is also kept as a household fingerprint with the labels'
          *     anchors (label text and direction, never the values), and this document
          *     and similar ones are read again with it. ``item_id`` names the review
-         *     item the teaching answers (closed with ``resolve``).
+         *     item the teaching answers (closed with ``resolve``). With ``preview``
+         *     nothing is applied or kept: the answer says what would be read
+         *     (:class:`TeachPreview`).
          */
         TeachRequest: {
             /** Account Id */
@@ -10566,6 +11058,8 @@ export interface components {
             item_id?: string | null;
             /** Labels */
             labels?: components["schemas"]["TeachLabel"][];
+            /** Preview */
+            preview?: boolean;
             /**
              * Remember
              * @default false
@@ -10592,12 +11086,24 @@ export interface components {
         /**
          * TeachTable
          * @description A table selected on a page: the box starts at its header line.
+         *
+         *     ``direction`` says what a single ``amount`` column means: as printed
+         *     (signed on the page), all money in, all money out, or a card's charges
+         *     printed positive. ``continues``: the table runs on over later pages
+         *     that do not repeat its header.
          */
         TeachTable: {
             /** Bbox */
             bbox: number[];
             /** Columns */
             columns: components["schemas"]["TeachColumn"][];
+            /** Continues */
+            continues?: boolean;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction?: "as_printed" | "money_in" | "money_out" | "card";
             /**
              * Kind
              * @enum {string}
@@ -10783,6 +11289,9 @@ export interface components {
         /**
          * TransactionCreate
          * @description A manual transaction. ``amount.currency`` must be the account's currency.
+         *
+         *     ``source_document_id``: the row is added for that document (a line the
+         *     reader missed, entered in the reconcile view).
          */
         TransactionCreate: {
             /**
@@ -10808,6 +11317,8 @@ export interface components {
             posted_date: string;
             /** Raw Payee */
             raw_payee?: string | null;
+            /** Source Document Id */
+            source_document_id?: string | null;
             /** @default cleared */
             status: components["schemas"]["TransactionStatus"];
             /** Tag Ids */
@@ -16500,6 +17011,324 @@ export interface operations {
             };
         };
     };
+    get_reconciliation_api_v1_documents__document_id__reconciliation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentReconciliation"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_accept_api_v1_documents__document_id__reconciliation_accept_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileAccept"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOutcome"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_confirm_api_v1_documents__document_id__reconciliation_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOutcome"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_remove_earlier_api_v1_documents__document_id__reconciliation_remove_earlier_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileRemoveEarlier"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOutcome"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_restore_api_v1_documents__document_id__reconciliation_restore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileRestore"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOutcome"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_regions_api_v1_documents__document_id__regions_get: {
         parameters: {
             query?: {
@@ -21643,6 +22472,65 @@ export interface operations {
             };
         };
     };
+    get_review_cards_api_v1_review_cards_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewCardPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_review_item_api_v1_review__item_id__get: {
         parameters: {
             query?: never;
@@ -25872,6 +26760,7 @@ export interface operations {
                 review_state?: components["schemas"]["ReviewState"][] | null;
                 status?: components["schemas"]["TransactionStatus"][] | null;
                 transfer?: boolean | null;
+                document?: string | null;
                 q?: string | null;
                 cursor?: string | null;
                 limit?: number;

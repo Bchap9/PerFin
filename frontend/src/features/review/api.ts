@@ -17,19 +17,34 @@ export type ResolveBody =
   | Schemas["ResolveUnknownOwner"]
   | Schemas["ResolveLowConfidence"];
 
+export type ReviewCard = Schemas["ReviewCard"];
+export type ReviewDocument = Schemas["ReviewDocument"];
+export type CardAction = ReviewCard["action"];
+export type DuplicateDecision = Schemas["DuplicateDecision"];
+export type LineFix = Schemas["LineFix"];
+
 export const reviewKeys = {
-  list: (state: ReviewItemState | "all") => [
+  list: (state: ReviewItemState | "all", document?: string | null) => [
     ...queryRoots.review,
     "list",
     state,
+    document ?? "",
   ],
+  cards: () => [...queryRoots.review, "cards"],
   one: (id: string) => [...queryRoots.review, "one", id],
+  reconciliation: (documentId: string) => [
+    ...queryRoots.review,
+    "reconciliation",
+    documentId,
+  ],
 } as const;
 
 export type ReviewFilter = ReviewItemState | "all";
 
+/** The queue's items, oldest first; ``document``: only that document's. */
 export async function listReviewItems(
   state: ReviewFilter,
+  document?: string | null,
 ): Promise<ReviewItem[]> {
   const out: ReviewItem[] = [];
   let cursor: string | null = null;
@@ -41,6 +56,9 @@ export async function listReviewItems(
           query: {
             state,
             limit: 200,
+            ...(document === undefined || document === null || document === ""
+              ? {}
+              : { document }),
             ...(current === null ? {} : { cursor: current }),
           },
         },
@@ -53,6 +71,58 @@ export async function listReviewItems(
     }
   }
   return out;
+}
+
+/** The open items by document, and the open items of no document. */
+export interface ReviewCards {
+  cards: ReviewCard[];
+  loose: ReviewItem[];
+}
+
+/**
+ * ``GET /review/cards``, every page from ``cursor`` on (a document id): one
+ * card per document with what waits on it and the one thing to do next.
+ */
+export async function listReviewCards(cursor?: string): Promise<ReviewCards> {
+  const out: ReviewCards = { cards: [], loose: [] };
+  let next: string | null = cursor ?? null;
+  for (let page = 0; page < 20; page += 1) {
+    const current: string | null = next;
+    const data: Schemas["ReviewCardPage"] = await unwrap(
+      api.GET("/api/v1/review/cards", {
+        params: {
+          query: {
+            limit: 100,
+            ...(current === null ? {} : { cursor: current }),
+          },
+        },
+      }),
+    );
+    out.cards.push(...data.cards);
+    out.loose.push(...data.loose);
+    next = data.next_cursor;
+    if (next === null) {
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Reasons of items that tell and do not ask (the server's
+ * ``NOTICE_REASONS``): they never keep a document waiting.
+ */
+const NOTICE_REASONS: ReadonlySet<string> = new Set([
+  "investment_figures_differ",
+  "same_content_skipped",
+]);
+
+export function itemReason(item: ReviewItem): string | null {
+  return item.reason ?? payloadString(item, "reason");
+}
+
+export function isNotice(item: ReviewItem): boolean {
+  return NOTICE_REASONS.has(itemReason(item) ?? "");
 }
 
 export function resolveItem(
@@ -89,6 +159,7 @@ export function rememberLayout(
   );
 }
 
+/** A rule drafted from the item's first row (kept for the Transactions flow). */
 export function getRuleDraft(id: string): Promise<RuleDraft> {
   return unwrap(
     api.GET("/api/v1/review/{item_id}/rule-draft", {
@@ -432,7 +503,202 @@ export function payloadSuggestions(item: ReviewItem): ReceiptSuggestion[] {
   return out;
 }
 
+/**
+ * A ``near_match`` item that names no row already in the account: its row has
+ * the date and amount of one the person deleted. Saying it is that row
+ * removes it again; there is nothing to compare it with.
+ */
+export function resemblesRemoved(item: ReviewItem): boolean {
+  return (
+    payloadString(item, "reason") === "near_match" &&
+    payloadString(item, "transaction_id") !== null &&
+    payloadIds(item, "candidates").length === 0
+  );
+}
+
+/**
+ * One imported row of a ``near_matches`` item (payload ``rows``) and the
+ * rows already in the account it may repeat.
+ */
+export interface NearMatch {
+  transactionId: string;
+  candidates: string[];
+}
+
+export function payloadNearMatches(item: ReviewItem): NearMatch[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("rows");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: NearMatch[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const id = field(entry, "transaction_id");
+    const candidates = field(entry, "candidates");
+    if (typeof id !== "string") {
+      continue;
+    }
+    out.push({
+      transactionId: id,
+      candidates: Array.isArray(candidates)
+        ? candidates.filter((c): c is string => typeof c === "string")
+        : [],
+    });
+  }
+  return out;
+}
+
+/** The item lists ledger rows (payload ``transactions``) a person can check. */
+export function listsTransactions(item: ReviewItem): boolean {
+  const value: unknown = new Map(Object.entries(item.payload)).get(
+    "transactions",
+  );
+  return Array.isArray(value) && value.length > 0;
+}
+
+/** The ledger rows an item lists (payload ``transactions``), by id. */
+export function payloadTransactionIds(item: ReviewItem): string[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(
+    "transactions",
+  );
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const id = field(entry, "transaction_id");
+    if (typeof id === "string") {
+      ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 // ---- resolution builders ---------------------------------------------------------
+
+/** What a positive amount of the file means (an item held for its sign). */
+export function signResolution(
+  positiveIs: "money_in" | "money_out",
+): Schemas["ResolveUnparsed"] {
+  return { kind: "unparsed", action: "answer_sign", positive_is: positiveIs };
+}
+
+/** One decision per listed row of a ``near_matches`` item. */
+export function nearMatchesResolution(
+  rows: readonly DuplicateDecision[],
+): Schemas["ResolveDuplicate"] {
+  return { kind: "possible_duplicate", decision: "confirm", rows: [...rows] };
+}
+
+/**
+ * The held lines a person corrected, imported with their corrections.
+ * ``lines``: the lines to import. As with "import as read", the item's other
+ * lines are left out for good, so the card sends this only once the person
+ * has said "leave out" for each of them.
+ */
+export function lineFixResolution(
+  lines: readonly number[],
+  fixes: readonly LineFix[],
+): Schemas["ResolveLowConfidence"] {
+  return {
+    kind: "low_confidence_field",
+    transactions: [],
+    confirm: false,
+    import_as_read: true,
+    lines: [...lines],
+    line_fixes: [...fixes],
+  };
+}
+
+/** Doubts of a held line a person settles by typing the value (``LineFix``). */
+const FIXABLE_DOUBTS: ReadonlySet<string> = new Set([
+  "trade_date",
+  "amount",
+  "quantity",
+  "type",
+]);
+
+/** Every doubt of the line is one a correction can settle. */
+export function lineFixable(line: HeldLine): boolean {
+  return (
+    line.fields.length > 0 &&
+    line.fields.every((doubt) => FIXABLE_DOUBTS.has(doubt))
+  );
+}
+
+/** What a person typed for one held line; empty text leaves a value as read. */
+export interface LineDraft {
+  date: string;
+  amount: string;
+  quantity: string;
+  type: string;
+}
+
+export function draftOf(line: HeldLine): LineDraft {
+  return {
+    date: line.date ?? "",
+    amount: line.amount ?? "",
+    quantity: "",
+    type: line.type ?? "",
+  };
+}
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const DIGITS = /^\d+$/;
+
+/** A plain signed decimal number ("-12.50"): digits, at most one point. */
+function isDecimal(text: string): boolean {
+  const parts = text.replace(/^[-+]/, "").split(".");
+  return parts.length <= 2 && parts.every((part) => DIGITS.test(part));
+}
+
+/**
+ * The fix a draft stands for: only the values that differ from what was
+ * read. ``null``: nothing was changed. ``"invalid"``: a value is not a date
+ * or a number, or an amount was typed and the statement names no currency.
+ */
+export function fixFromDraft(
+  line: HeldLine,
+  draft: LineDraft,
+  currency: string | null,
+): LineFix | "invalid" | null {
+  const fix: LineFix = { line: line.index };
+  let changed = false;
+  const day = draft.date.trim();
+  if (day !== "" && day !== (line.date ?? "")) {
+    if (!ISO_DAY.test(day)) {
+      return "invalid";
+    }
+    fix.trade_date = day;
+    changed = true;
+  }
+  const amount = draft.amount.trim();
+  if (amount !== "" && amount !== (line.amount ?? "")) {
+    if (!isDecimal(amount) || currency === null) {
+      return "invalid";
+    }
+    fix.amount = { amount, currency };
+    changed = true;
+  }
+  const quantity = draft.quantity.trim();
+  if (quantity !== "") {
+    if (!isDecimal(quantity) || currency === null) {
+      return "invalid";
+    }
+    fix.quantity = { amount: quantity, currency };
+    changed = true;
+  }
+  if (draft.type !== "" && draft.type !== (line.type ?? "")) {
+    fix.type = draft.type;
+    changed = true;
+  }
+  return changed ? fix : null;
+}
 
 /** `duplicate_of` is required when an imported row has several candidates, and ignored for a repeated file. */
 export function duplicateResolution(
@@ -610,18 +876,75 @@ export function teachDocument(
   );
 }
 
-/** Opening and closing balance a reconciliation item proposes (its figures). */
-export function balanceCorrection(
-  opening: string,
-  closing: string,
-  resolve: boolean,
-): Correction {
-  const document: NonNullable<Correction["document"]> = {};
-  if (opening.trim() !== "") {
-    document.opening_balance = opening.trim();
-  }
-  if (closing.trim() !== "") {
-    document.closing_balance = closing.trim();
-  }
-  return { document, resolve };
+// ---- reconciliation -----------------------------------------------------------
+
+export type DocumentReconciliation = Schemas["DocumentReconciliation"];
+export type StatementReconciliation = Schemas["StatementReconciliation"];
+export type ReconcileRow = Schemas["ReconcileRow"];
+export type ReconcileCause = Schemas["ReconcileCause"];
+export type CauseKind = ReconcileCause["kind"];
+export type RemovedRow = Schemas["RemovedRow"];
+export type ReconcileOutcome = Schemas["ReconcileOutcome"];
+
+/** The statements of a document against the ledger rows they produced. */
+export function getReconciliation(
+  documentId: string,
+): Promise<DocumentReconciliation> {
+  return unwrap(
+    api.GET("/api/v1/documents/{document_id}/reconciliation", {
+      params: { path: { document_id: documentId } },
+    }),
+  );
+}
+
+/** Confirm a statement that balances; the balances are sent as typed. */
+export function confirmReconciliation(
+  documentId: string,
+  body: Schemas["ReconcileConfirm"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/confirm", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Accept a statement as read, without balancing it (no balance is recorded). */
+export function acceptReconciliation(
+  documentId: string,
+  body: Schemas["ReconcileAccept"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/accept", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Put a removed row of the document back. */
+export function restoreRow(
+  documentId: string,
+  body: Schemas["ReconcileRestore"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/restore", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Remove the rows an earlier reading of the statement left behind. */
+export function removeEarlierRows(
+  documentId: string,
+  body: Schemas["ReconcileRemoveEarlier"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/remove-earlier", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
 }

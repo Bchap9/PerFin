@@ -30,6 +30,13 @@ from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, Ba
 from app.domain.budgets.models import Budget, BudgetLine, BudgetPeriod
 from app.domain.fx.models import FxRate
 from app.domain.goals.models import GoalAccount, GoalContribution
+from app.domain.imports.models import ImportTombstone
+from app.domain.imports.tombstones import (
+    add_tombstone,
+    list_tombstones,
+    remove_tombstone,
+    tombstoned_hashes,
+)
 from app.domain.transactions.models import (
     Category,
     CategoryKind,
@@ -516,3 +523,90 @@ def test_check_constraints(db: Session) -> None:
     good = make_account(db, a.id, number_last4="0042", type="manual_asset", asset_kind="vehicle")
     assert good.number_last4 == "0042"
     assert "0042" not in repr(good)
+
+
+# ---------------------------------------------------------------------------
+# Import tombstones (a deleted imported row stays deleted)
+# ---------------------------------------------------------------------------
+
+
+def test_tombstone_is_idempotent_and_goes_with_its_account(db: Session) -> None:
+    owner = make_user(db, role="owner")
+    household_id = owner.household_id
+    assert household_id is not None
+    account = make_account(db, household_id)
+    imported = make_transaction(db, account, amount="-41.07", with_import_hash=True)
+    typed = make_transaction(db, account, amount="-3.00")
+    assert imported.import_hash is not None
+    set_context(db, household_id)
+
+    assert add_tombstone(db, imported, user_id=owner.id) is True
+    assert add_tombstone(db, imported, user_id=owner.id) is False
+    # A row a person typed has no import hash: nothing could bring it back.
+    assert add_tombstone(db, typed, user_id=owner.id) is False
+
+    kept = db.execute(select(ImportTombstone)).scalars().all()
+    assert len(kept) == 1
+    tombstone = kept[0]
+    assert tombstone.household_id == household_id
+    assert tombstone.account_id == account.id
+    assert tombstone.import_hash == imported.import_hash
+    assert tombstone.deleted_by == owner.id
+    assert tombstone.deleted_at is not None
+    assert tombstone.posted_date == imported.posted_date
+    assert tombstone.amount == Decimal("-41.07")
+    listed = list_tombstones(db, household_id, account.id, [imported.import_hash])
+    assert [t.id for t in listed] == [tombstone.id]
+    assert list_tombstones(db, household_id, account.id, []) == []
+
+    # Taking it back removes it once; a second time there is nothing to take back.
+    assert remove_tombstone(db, household_id, uuid.uuid4()) is None
+    removed = remove_tombstone(db, household_id, tombstone.id)
+    assert removed is not None
+    assert removed.import_hash == imported.import_hash
+    assert remove_tombstone(db, household_id, tombstone.id) is None
+    assert tombstoned_hashes(db, household_id, account.id, [imported.import_hash]) == set()
+
+    assert add_tombstone(db, imported, user_id=None) is True
+    with db.begin_nested():
+        db.execute(text('DELETE FROM "account" WHERE id = :id'), {"id": account.id})
+        db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert _count(db, ImportTombstone) == 0
+
+
+def test_tombstoned_hashes_only_names_the_account_asked_for(db: Session) -> None:
+    owner = make_user(db, role="owner")
+    household_id = owner.household_id
+    assert household_id is not None
+    first = make_account(db, household_id)
+    second = make_account(db, household_id)
+    gone = make_transaction(db, first, amount="-18.40", with_import_hash=True)
+    kept = make_transaction(db, first, amount="-18.40", with_import_hash=True, hash_index=1)
+    elsewhere = make_transaction(db, second, amount="-7.25", with_import_hash=True)
+    assert gone.import_hash is not None
+    assert kept.import_hash is not None
+    assert elsewhere.import_hash is not None
+    set_context(db, household_id)
+    add_tombstone(db, gone, user_id=owner.id)
+    add_tombstone(db, elsewhere, user_id=owner.id)
+
+    asked = [gone.import_hash, kept.import_hash, elsewhere.import_hash]
+    assert tombstoned_hashes(db, household_id, first.id, asked) == {gone.import_hash}
+    assert tombstoned_hashes(db, household_id, second.id, asked) == {elsewhere.import_hash}
+    assert tombstoned_hashes(db, household_id, first.id, [kept.import_hash]) == set()
+    assert tombstoned_hashes(db, household_id, first.id, []) == set()
+    assert [t.import_hash for t in list_tombstones(db, household_id, second.id, asked)] == [
+        elsewhere.import_hash
+    ]
+
+    # Another household sees none of it, and cannot take one back.
+    other = make_household(db)
+    tombstone = db.execute(
+        select(ImportTombstone).where(ImportTombstone.account_id == first.id)
+    ).scalar_one()
+    set_context(db, other.id)
+    assert tombstoned_hashes(db, household_id, first.id, asked) == set()
+    assert remove_tombstone(db, household_id, tombstone.id) is None
+    assert remove_tombstone(db, other.id, tombstone.id) is None
+    set_context(db, household_id)
+    assert tombstoned_hashes(db, household_id, first.id, asked) == {gone.import_hash}

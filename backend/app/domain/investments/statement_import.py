@@ -56,7 +56,8 @@ statements"). Per statement:
    * **anything else** (a line moving units or a position in doubt: the
      positions are reconciled against every such line; a source that does
      not say where a failed check comes from: OFX, an activity table; a
-     document with nothing to check against): the statement writes
+     document with nothing to check against that carries another doubt):
+     the statement writes
      **nothing** and an ``investment_reconciliation_failed`` /
      ``investment_low_confidence`` item names the discrepancy: its
      ``differences`` (per failed check, what the statement prints, what its
@@ -66,6 +67,22 @@ statements"). Per statement:
      no row was read for (``unread_summary_lines``), the statement's index
      and key (``statement_answers.statement_key``) and the account's
      currency.
+
+   **A clean read** (:func:`clean_read`; the owner's policy "import clean
+   reads, flag quietly"): a document statement with nothing to check
+   against (reconciliation ``unavailable``) whose rows carry no other doubt
+   than ``reconciliation``, that prints a period, was not truncated, and
+   whose document counted no skipped line and no contradiction warning, is
+   imported whole with no item, and its record says ``unverified``
+   (``statement_record.verification``: ``reconciled`` when the figures
+   agree and all of it was written, ``accepted`` when it was imported as
+   read, else ``unverified``). It writes no balance snapshot (step 9). A
+   document statement on which the only check that could run is
+   ``positions`` (each holding multiplies out) is imported and recorded
+   ``unverified`` too, with no snapshot: no printed figure agreed with
+   anything (:func:`checked_against_figures`). One
+   other doubt (a guessed date, a line the parser skipped, no printed
+   period) and the whole statement waits as above.
 
    A row whose kind is the optional local model's suggestion (its words
    are in no vocabulary of the parser's own; ADR-0010,
@@ -95,7 +112,7 @@ statements"). Per statement:
    (``investment_date_out_of_range``, SECURITY.md F8). A structured
    statement (OFX, or an activity table: ``csv``, every value from a named
    column) with nothing to check is imported like an OFX bank statement; a
-   document one cannot be (its rows score below the threshold). An activity
+   document one is imported only as a clean read (above). An activity
    table whose day/month order was a guess marks every row
    ``low_confidence`` (``trade_date``) and is held like any such row.
 4. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
@@ -459,6 +476,9 @@ class _Context:
     peers: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
     #: The price each (security, day) took in this run: the first one printed.
     prices: dict[tuple[uuid.UUID, date], Decimal] = field(default_factory=dict)
+    #: The document's parse left something unread or contradicted (a skipped
+    #: line, a contradiction warning): no statement of it is a clean read.
+    unread: bool = False
 
     def forget(self) -> None:
         """Drop what a rolled-back statement may have added to the caches."""
@@ -847,6 +867,80 @@ def _doubts(fields: Sequence[str], ignored: frozenset[str]) -> list[str]:
     return [f for f in fields if f not in ignored]
 
 
+def clean_read(
+    statement: InvestmentStatement, check: InvestmentReconciliation, *, unread: bool = False
+) -> bool:
+    """A document statement nothing can be checked against, with no other doubt.
+
+    The owner's policy, "import clean reads, flag quietly" (module doc, step
+    3; the bank side is ``app.domain.imports.service.clean_read``): a PDF or
+    image statement whose reconciliation is ``unavailable`` is imported, and
+    recorded ``unverified``, when that is its **only** doubt:
+
+    * it prints a period (without one no statement record, and so no "not
+      checked" marker, could be kept: a page with a table and no period is a
+      held document, as before);
+    * it has at least one row, and every position's and every line's
+      ``low_confidence`` is empty or exactly ``reconciliation`` (the
+      parser's cap for an unchecked row);
+    * it was not truncated, and the document's parse counted no skipped line
+      and carries no contradiction warning (``unread``).
+
+    One doubt anywhere and the whole statement waits as before. Pure on its
+    arguments.
+    """
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS:
+        return False
+    if check.status != "unavailable" or unread or statement.truncated:
+        return False
+    if investment_facts(statement).period is None:
+        return False
+    rows: list[Sequence[str]] = [p.low_confidence for p in statement.positions]
+    rows += [a.low_confidence for a in statement.activity]
+    return bool(rows) and not any(set(fields) - {RECONCILIATION_DOUBT} for fields in rows)
+
+
+def checked_against_figures(
+    statement: InvestmentStatement, check: InvestmentReconciliation
+) -> bool:
+    """The statement's checks held and they say something about what was read.
+
+    On a page that was read (a PDF or an image), ``positions`` alone (each
+    holding's quantity x price is its market value) is arithmetic inside a
+    row: it compares nothing with a total, a cash balance or an account
+    value the statement prints, and never looks at the activity. A document
+    statement on which only it ran was not checked against a balance: it is
+    imported like any statement whose checks held, recorded ``unverified``
+    and gives no balance snapshot. A file the broker's system wrote (OFX, an
+    export) is not a reading, and its checks holding is all there is to ask.
+    """
+    if check.status != "ok":
+        return False
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS:
+        return True
+    return bool(set(check.checks) - {"positions"})
+
+
+def _verification(
+    statement: InvestmentStatement,
+    check: InvestmentReconciliation,
+    *,
+    accepted: bool,
+    kept: _Kept | None = None,
+) -> str:
+    """How far a committed statement was checked (``statement_record.verification``).
+
+    ``reconciled``: its own figures agree (:func:`checked_against_figures`)
+    and all of it was written (rows that wait or were left out are not in
+    the ledger the figures describe); ``accepted``: a person said to import
+    it as read; else ``unverified``.
+    """
+    whole = kept is None or not (kept.lines_held or kept.positions_held or kept.lines_left_out)
+    if checked_against_figures(statement, check) and whole:
+        return "reconciled"
+    return "accepted" if accepted else "unverified"
+
+
 def _held(
     ctx: _Context,
     statement: InvestmentStatement,
@@ -886,6 +980,10 @@ def _held(
             },
         )
         return None
+    if not accepted and clean_read(statement, check, unread=ctx.unread):
+        # Nothing to check it against and no other doubt: imported as read,
+        # recorded ``unverified`` (no snapshot: ``_value_holds``).
+        return _Kept(statement)
     ignored = CONFIRMABLE_DOUBTS if accepted else frozenset()
     contradicted = frozenset({"market_value"}) | ignored
     mismatched = set(check.position_mismatches) if accepted else set()
@@ -2361,7 +2459,7 @@ def _commit(
             },
         )
     if (
-        _value_holds(check, accepted=accepted)
+        _value_holds(statement, check, accepted=accepted)
         and not positions_held
         and on is not None
         and cash is not None
@@ -2583,15 +2681,19 @@ def _commit_balance(
     return True
 
 
-def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:
+def _value_holds(
+    statement: InvestmentStatement, check: InvestmentReconciliation, *, accepted: bool
+) -> bool:
     """The statement's holdings and closing cash may be the account's balance.
 
-    Every check held; or (not for a statement accepted as read) the parser
+    Every check held and one of them is against a printed figure
+    (:func:`checked_against_figures`); or (not for a statement accepted as read) the parser
     said where the failure lies (``localise``), only the ``cash`` activity
     check failed and holdings + closing cash is the printed account value.
     """
     if check.status == "ok":
-        return True
+        # Not from holdings that only multiply out (no printed figure agreed).
+        return checked_against_figures(statement, check)
     return (
         not accepted
         and check.doubtful_activity is not None
@@ -2664,6 +2766,7 @@ def import_investment_statements(
     answers: StatementAnswers | None = None,
     user_id: uuid.UUID | None = None,
     several: bool = False,
+    unread: bool = False,
 ) -> InvestmentImport:
     """Commit the brokerage statements of ``document`` (module doc).
 
@@ -2677,6 +2780,9 @@ def import_investment_statements(
     1-3). ``several``: the document also holds bank statements of other
     accounts (a combined statement), so even a
     single brokerage statement finds its account by its own digits.
+    ``unread``: the document's parse counted a skipped line or carries a
+    contradiction warning, so no statement of it is a clean read
+    (:func:`clean_read`).
     """
     ctx = _Context(
         db=db,
@@ -2686,6 +2792,7 @@ def import_investment_statements(
         commit_cash=commit_cash,
         user_id=user_id,
         result=InvestmentImport(),
+        unread=unread,
     )
     single = len(statements) == 1 and not several
     takes: Collection[int] = range(len(statements))
@@ -2727,7 +2834,13 @@ def import_investment_statements(
             # A plan statement: the balance or nothing (module doc).
             if _commit_balance(ctx, statement, account, check, index=index, facts=facts):
                 ctx.result.statements += 1
-                record_statement(db, document, account, facts)
+                record_statement(
+                    db,
+                    document,
+                    account,
+                    facts,
+                    verification=_verification(statement, check, accepted=False),
+                )
             else:
                 ctx.result.held += 1
             continue
@@ -2757,7 +2870,13 @@ def import_investment_statements(
             ctx.result.statements += 1
             if accepted and check.status != "ok":
                 ctx.result.accepted_as_read += 1
-            record_statement(db, document, account, facts)
+            record_statement(
+                db,
+                document,
+                account,
+                facts,
+                verification=_verification(statement, check, accepted=accepted, kept=kept),
+            )
         else:
             ctx.result.held += 1
     return ctx.result

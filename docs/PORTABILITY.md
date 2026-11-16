@@ -93,6 +93,8 @@ fails for a household table in neither list):
 | `holding` | derived cache: rebuilt from the imported lots |
 | `idempotency_key`, `event` | request replay cache, live-update stream |
 | `import_hash_alias` | the hash of a deleted duplicate cannot be recomputed for new account ids (see Import) |
+| `import_tombstone` | the hash of a deleted imported row contains the account id and cannot be recomputed for new account ids (see Import) |
+| `statement_record` | the statement duplicate guard's history of this instance's imports, with how each statement was checked (`verification`); documents imported again record their statements anew |
 | `portability_archive`, `tax_export` | the export/import jobs and one-time accountant exports themselves |
 | `review_item`, `ingest_job`, `dropfolder_entry`, `mail_intake_message` | ingestion workflow and history of this instance |
 | `ai_call` | the audit of what this instance's AI clients read (like `audit_log`, which belongs to the instance); its response bodies only repeat exported data |
@@ -236,7 +238,12 @@ Importing the same statement again into the new household is therefore
 still recognised as a duplicate. `import_hash_alias` rows (hashes of
 deleted duplicates) cannot be recomputed and are not exported, so a
 statement whose duplicate was resolved by hand may raise the same review
-question once more.
+question once more. `import_tombstone` rows (imported rows a person
+deleted) are not exported for the same reason: in the new household a
+statement imported again brings such a row back, and it has to be deleted
+there once more. `statement_record` is not exported either, so the new
+household holds no record of how a statement was checked (`verification`)
+until its document is processed again there.
 
 Document originals are checked against both the manifest and the document
 row's SHA-256, sniffed again (an archive's `mime_detected` is not trusted;

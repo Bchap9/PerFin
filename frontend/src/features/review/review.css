@@ -1,0 +1,210 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The reconcile view: the page beside the figures and the rows. */
+.reconcile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.reconcile__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.reconcile__panes {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .reconcile__panes {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.reconcile__pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.reconcile__figures {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  align-items: start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.reconcile__figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.reconcile__figure-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.reconcile__figure-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.reconcile__difference {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border, #8884);
+  border-radius: var(--radius-md, 0.375rem);
+}
+
+.reconcile__difference--balanced {
+  border-color: var(--color-success, #1a7f37);
+}
+
+.reconcile__difference--off,
+.reconcile__difference--invalid {
+  border-color: var(--color-danger, #b3261e);
+}
+
+.reconcile__difference-amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.reconcile__causes,
+.reconcile__removed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.reconcile__causes p {
+  margin: 0 0 var(--space-1);
+}
+
+.reconcile__removed li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.reconcile__row--flagged > th,
+.reconcile__row--flagged > td {
+  background: color-mix(in srgb, var(--color-warning, #b26a00) 12%, transparent);
+}
+
+.reconcile__row--flagged > th {
+  box-shadow: inset 3px 0 0 var(--color-warning, #b26a00);
+}
+
+.reconcile__row--chosen > th,
+.reconcile__row--chosen > td {
+  outline: 2px solid var(--color-accent, #1a73e8);
+  outline-offset: -2px;
+}
+
+.reconcile__note {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+.reconcile__note--flag {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.reconcile__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.reconcile__add {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  align-items: end;
+}
+
+/* Review cards: one per document, one section per finding. */
+.review-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.review-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border, #8884);
+}
+
+.review-section__title {
+  margin: 0;
+  font-size: var(--font-size-md, 1rem);
+}
+
+.review-scope,
+.review-settled p {
+  margin: 0;
+}
+
+.review-settled {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.review-card--settled {
+  border-color: var(--color-success, #1a7f37);
+}
+
+/* Several near duplicates: each pair with its answer under it. */
+.review-near {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.review-near__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.review-near__answer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+/* Correcting one held line of a brokerage statement. */
+.review-line-editor {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  align-items: end;
+}

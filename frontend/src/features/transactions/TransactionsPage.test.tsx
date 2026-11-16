@@ -142,6 +142,88 @@ describe("transactions grid", () => {
   });
 });
 
+describe("rows of one file", () => {
+  it("reads the document filter from the address and sends it", async () => {
+    const api = setup();
+    renderApp("/transactions?document=d-7&account=a-1");
+    const user = userEvent.setup();
+    await screen.findByLabelText("Category of Corner Market");
+    const first = api.callsTo("GET", "/api/v1/transactions")[0];
+    expect(first?.search).toContain("document=d-7");
+    expect(first?.search).toContain("account=a-1");
+    // The chip says the list is narrowed and leads back to the file.
+    expect(screen.getByRole("link", { name: "From one file" })).toHaveAttribute("href", "/documents/d-7");
+    // Other filters are applied on top of it.
+    await user.type(screen.getByLabelText("Search"), "market");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).toContain("q=market");
+      expect(last?.search).toContain("document=d-7");
+    });
+    await user.click(screen.getByRole("button", { name: "Remove the file filter" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).not.toContain("document=");
+      expect(last?.search).toContain("q=market");
+    });
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+    // The filter went with its chip: applying the form does not bring it back.
+    await user.type(screen.getByLabelText("Search"), "s");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).toContain("q=markets");
+    });
+    expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).not.toContain("document=");
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+  });
+
+  it("Clear drops the file filter with the others", async () => {
+    const api = setup();
+    renderApp("/transactions?document=d-7&account=a-1");
+    const user = userEvent.setup();
+    await screen.findByLabelText("Category of Corner Market");
+    expect(screen.getByRole("link", { name: "From one file" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).not.toContain("document=");
+      expect(last?.search).not.toContain("account=");
+    });
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+    // Nothing is left in the draft to bring it back.
+    await user.type(screen.getByLabelText("Search"), "tram");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).toContain("q=tram");
+    });
+    expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).not.toContain("document=");
+  });
+
+  it("shows no chip and sends no document without one in the address", async () => {
+    const api = setup();
+    renderApp("/transactions");
+    await screen.findByLabelText("Category of Corner Market");
+    expect(api.callsTo("GET", "/api/v1/transactions")[0]?.search).not.toContain("document=");
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+  });
+
+  it("the dialog links to the source document", async () => {
+    setup("owner", [tx("x-1", { source_document_id: "d-7" }), tx("x-2", { payee_id: null, raw_payee: "ACME" })]);
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Actions for Corner Market" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Corner Market" })).getByRole("menuitem", { name: "Edit" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByRole("link", { name: "Imported from a document: open it" })).toHaveAttribute("href", "/documents/d-7?row=x-1");
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    // A row typed by hand came from no file.
+    await user.click(screen.getByRole("button", { name: "Actions for ACME" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for ACME" })).getByRole("menuitem", { name: "Edit" }));
+    expect(within(await screen.findByRole("dialog")).queryByRole("link", { name: /Imported from a document/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("split editor", () => {
   it("blocks saving until the lines add up, then posts decimal strings", async () => {
     const api = setup();

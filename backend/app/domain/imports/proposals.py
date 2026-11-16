@@ -74,7 +74,6 @@ from app.domain.imports.schemas import (
     MappingSpec,
 )
 from app.domain.imports.service import (
-    SPLIT_BY_SUMMARY,
     _item_spec,
     _spec,
     _stored_result,
@@ -434,7 +433,6 @@ def _detect(
     fallback_institution = _institution_name(db, document) or _printed_institution(document)
     currency = _base_currency(db, document.household_id)
     out: list[tuple[_Found, DetectedAccount]] = []
-    split = result.parse is not None and SPLIT_BY_SUMMARY in result.parse.warnings
     for found in _found(db, document, result, items):
         institution = found.institution or fallback_institution
         item = _item_for(found, items)
@@ -460,7 +458,10 @@ def _detect(
                 status = "ambiguous" if candidates else "new"
         else:
             match = (
-                # Accounts split at their summaries go by the type each names.
+                # As the importer matched it: accounts split at their
+                # summaries go by the type each names, and a statement that
+                # prints no digits goes to the one account of the document's
+                # institution on its side of the balance sheet.
                 statement_match(
                     db,
                     document.household_id,
@@ -468,9 +469,9 @@ def _detect(
                     found.index,
                     institution=institution,
                     allowed=allowed,
+                    institution_id=document.institution_id,
                 )
                 if found.target == "statement"
-                and split
                 and found.last4 == result.statements[found.index].account.last4
                 else match_account(
                     db,

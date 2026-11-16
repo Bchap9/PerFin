@@ -34,7 +34,18 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      are money in than money out (the suggestion's ``sign_unverified``
      doubt; ``auto_import: sign_unverified`` when it is the only one), and
      a sign on trust is never used to write into a liability account (a
-     card export may list purchases as positive). A table of securities
+     card export may list purchases as positive). Only that account's
+     statement waits: the other accounts of a multi-account file are
+     imported, and each statement held is one ``mapping_required`` item
+     with ``auto_import: sign_unverified``, its ``account_id``, ``group``
+     and row count (``transactions``), the ``mapping_id`` when a mapping
+     exists, and a ``scope``: ``mapping`` when every statement of the table
+     waits (nothing is imported, no mapping is saved; the answer is the
+     layout's sign and is saved on its mapping, so a layout is asked about
+     once), ``account`` when others were imported (the answer is kept for
+     that account of that document, ``statement_answers``: every later run
+     reads that account's rows with the answered sign and holds them no
+     more; no row of another account changes). A table of securities
      trades (``investment_columns``) and direction words that contradict
      the signs (``indicator_contradicts_sign``) are never confident either. A
      table without a header row is read from the shapes of its columns
@@ -45,18 +56,21 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      ``account_required``/``unknown_account`` item, and the mapping saved
      from a suggestion on trust is marked ``sign_unverified``: whenever it
      later meets a liability account (the re-run after a person picks the
-     card, next month's file), or a file whose own suggestion doubts the
-     sign, the import waits as ``mapping_required``
-     (``auto_import: sign_unverified``) until a person saves the mapping's
-     spec in the editor (which clears the mark) or chooses the mapping
-     explicitly for that re-run. With one account-bound mapping among the
+     card, next month's file), that account's statement waits, and with a
+     file whose own suggestion doubts the sign every statement does, as
+     ``mapping_required`` (``auto_import: sign_unverified``) until a
+     person answers for the account, saves the mapping's spec in the
+     editor (which clears the mark: a mapping a person saved holds
+     nothing, whatever a later file's suggestion doubts) or chooses the
+     mapping explicitly for that re-run. With one account-bound mapping among the
      fitting ones, it wins over household mappings for an upload that
      names no account. Anything else is an ``unparsed``
      review item (``mapping_required``) carrying the suggestion and why it
      was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
      the one given on re-run, the document's or the mapping's. A table that
-     is only a header row (:func:`header_only`), and a PDF or image whose
+     is only a header row, or a header row above nothing but total lines
+     (:func:`header_only`), and a PDF or image whose
      page tables hold no dated row (``app.domain.review.layout``), have
      nothing to map: they wait as ``unparsed``/``no_rows`` (``source``:
      ``table`` or ``pages``), which the mapping editor is not offered for.
@@ -121,7 +135,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      match, can be answered one after the other.
    * Deduplication (``app.ingestion.match.dedupe``): exact ``import_hash``
      matches are skipped, near matches (same date and amount) are imported as
-     ``review_state = pending`` with a ``possible_duplicate`` review item.
+     ``review_state = pending`` with a ``possible_duplicate`` review item:
+     ``near_match`` for the one near match of a statement, one
+     ``near_matches`` item listing them all (``count``, ``rows``) for two or
+     more.
    * The household's rules run on the new transactions
      (``app.domain.rules.service.apply_rules_to``; categories that came from
      the file, QIF ``L``, are protected). The closing balance (OFX
@@ -136,6 +153,30 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+     One finding per cause: a row whose only doubt is that its statement did
+     not reconcile (``reconciliation``) waits with the others but is named
+     by the reconciliation item alone, never listed again in the
+     ``low_confidence`` item. That item also carries the statement's index,
+     the lines the parser skipped (``lines_skipped``) and, when the balances
+     agree with the rows and the document's own summary or a section total
+     does not, which of them (``cause``).
+     The exception is a **clean read** (:func:`clean_read`): a statement
+     that prints nothing to check against (reconciliation ``unavailable``
+     and no balance read at all: one balance without the other is a
+     doubt), whose period was printed and not inferred from its rows, whose
+     rows carry no other doubt and whose document the parser neither
+     skipped a line of nor warned about (:data:`CONTRADICTION_WARNINGS`).
+     It is imported as posted (a row waits only as a near duplicate), no
+     item is raised for it and no snapshot is written; its record says
+     ``unverified`` (``statement_record.verification``; ``reconciled`` when
+     a statement's own balances agreed) and the run summary counts it
+     (``unverified_statements``), which the pages show as "not checked
+     against a balance". One doubt anywhere and the whole statement waits.
+     So does one that lands on an account of the other side of the balance
+     sheet than it was read for (:func:`same_side`: a page not read as a
+     card statement whose digits are a credit card's): the sign of its
+     amounts is on trust, and a sign on trust is never used to write into
+     a liability account unasked.
    * Records the extractor could not read (OFX, QFX and QIF: a record with
      no date or amount, an investment activity of a kind it does not read)
      are counted in its ``transaction_skipped:<n>`` warnings, one per
@@ -150,6 +191,54 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      lots, holdings, prices, snapshot; held back when they do not
      reconcile); their cash deposits and withdrawals come back here as
      ledger rows.
+   * **A document read again** (reprocess, a re-run, a taught table): a
+     row a person deleted (an import tombstone) is not written again and is
+     counted (``tombstoned_rows``). Every row a run writes ends with
+     ``updated_at == created_at``, after the rules and payee defaults of
+     the import ran: that is "untouched since import". When the run has
+     committed every statement of the document for an account
+     (:func:`_finish_reading`), the rows this document produced there
+     earlier that the new reading no longer holds are removed when nobody
+     touched them (no tombstone; ``replaced_rows``), and kept and listed in
+     one ``low_confidence_field`` item (``earlier_rows_kept``: the account,
+     a count, transaction ids) otherwise (``kept_rows``); audited as
+     ``import.replace``. A new row that only resembled a row removed this
+     way is no near duplicate; a finding about rows that are all gone is
+     dismissed. The statement records of periods the run did not record
+     again are dropped. Nothing of this happens for an account a statement
+     of the document waits for (an overlap, a sign question, another
+     currency), nor for a document with a statement that has no account
+     yet or with brokerage statements, nor for an account whose new reading
+     says it may be incomplete (:func:`_incomplete`: truncated, or no
+     balance vouches for it and a row or a line was skipped, a running
+     balance disagrees or the parser found a contradiction): the row it no
+     longer holds may be the line it could not read. Rows without an
+     ``import_hash`` (added by hand), rows of other documents and rows a
+     person touched are never removed here; "touched" includes a row a
+     goal contribution or a loan payment was recorded from, which leaves
+     the row's timestamps alone. A statement a person **moved to another
+     account** (:func:`_settle_moved`): when the run committed every
+     statement, an account that still holds rows of the document and got no
+     statement of this reading is settled the same way, but only when every
+     such row is a line the run committed elsewhere. Rows on an account the
+     new reading does not account for (a statement it lost) are left as
+     they are, without a finding: nothing says where they went.
+   * **Answers given in the reconcile view survive a re-read**
+     (:func:`_standing`, :func:`_settle_standing`). A bank statement whose
+     record of this document says ``accepted``, or ``reconciled`` although
+     its reading does not add up by itself (a person balanced it against
+     the ledger), is not asked about again while the run changes no row of
+     its account: none written, none removed as an earlier reading, none
+     newly kept. Its record keeps what it said, no reconciliation finding
+     is raised and no balance is recorded; a ``reconciled`` one must still
+     add up against the ledger rows. When the run did change a row the
+     statement is what its reading says again (``unverified``, with its
+     finding). An accepted statement becomes ``reconciled``, with its
+     balance recorded, only when the reading adds up and the ledger rows
+     do as well. The finding names the statement by its reference
+     (``statement_answers.statement_ref``), and a statement a person put on
+     an account is found there again by that reference when its exact key
+     no longer matches.
    * The document is ``processed`` when nothing is left open for it in the
      review queue, ``needs_review`` otherwise.
 
@@ -158,7 +247,8 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
    ``imports.apply_mapping`` (:func:`run_apply_job`), which runs step 2 again
    on the **stored** extraction (nothing is re-parsed) and resolves the
    review items it answered. Running it again is harmless: every row already
-   imported matches its hash.
+   imported matches its hash, and what an earlier reading left behind is
+   settled as above.
 
 Visibility (SECURITY.md F3): statements of a member's upload only match
 accounts the member can edit; a mapping tied to an account the caller cannot
@@ -173,8 +263,8 @@ import hashlib
 import json
 import re
 import uuid
-from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -194,21 +284,25 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
+from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
     Document,
+    DocumentLink,
     DocumentStatus,
     IngestJob,
     IngestStage,
+    LinkTarget,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
+from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
+from app.domain.goals.models import GoalContribution
 from app.domain.imports import repo
-from app.domain.imports.models import NAME_MAX, ImportMapping
+from app.domain.imports.models import NAME_MAX, ImportMapping, StatementRecord
 from app.domain.imports.payees import PayeeMatcher
 from app.domain.imports.schemas import (
     ACTIVITY_COLUMNS,
@@ -230,26 +324,33 @@ from app.domain.imports.schemas import (
     PreviewStatement,
     PreviewTable,
     PreviewTransaction,
+    Sign,
 )
 from app.domain.imports.statement_answers import (
+    REF_FIELD,
+    SCOPE_ACCOUNT,
     StatementAnswers,
     document_answers,
     placement,
     statement_key,
+    statement_refs,
 )
 from app.domain.imports.statement_records import (
     StatementFacts,
     bank_facts,
     check_overlap,
+    drop_stale_records,
     record_statement,
     table_facts,
+    withdraw_snapshot,
 )
 from app.domain.investments.statement_import import import_investment_statements
+from app.domain.loans.models import LoanPayment
 from app.domain.review import repo as review_repo
 from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
-from app.domain.transactions.import_hash import HashInput
+from app.domain.transactions.import_hash import HashInput, assign_import_hashes
 from app.domain.transactions.models import (
     MEMO_MAX,
     PAYEE_MAX,
@@ -274,6 +375,7 @@ from app.ingestion.parsers.brokerage_table import (
     read_activity_table,
     suggest_activity_mapping,
 )
+from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.positions_table import PARSER_NAME as POSITIONS_PARSER
 from app.ingestion.parsers.positions_table import PARSER_VERSION as POSITIONS_PARSER_VERSION
 from app.ingestion.parsers.positions_table import TABLE_KINDS as POSITIONS_TABLE_KINDS
@@ -282,6 +384,7 @@ from app.ingestion.parsers.structured import (
     MappingSuggestion,
     ParsedStatement,
     ParsedTransaction,
+    best_date_format,
     candidate_fingerprints,
     from_statement,
     from_table_grouped,
@@ -290,7 +393,14 @@ from app.ingestion.parsers.structured import (
     spec_fingerprint,
     suggest_mapping,
 )
-from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Table
+from app.ingestion.sandbox.protocol import (
+    DOCUMENT_STATEMENT_FORMATS,
+    ExtractResult,
+    InvestmentStatement,
+    Reconciliation,
+    Statement,
+    Table,
+)
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -316,6 +426,23 @@ IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentSta
 AUTO_MAPPING_KINDS: Final = frozenset({"csv", "tsv", "xlsx"})
 #: Longest name given to a mapping saved from a suggestion (the editor's limit).
 SUGGESTED_NAME_MAX: Final = 120
+#: Parse warnings that say the document's own figures contradict its rows
+#: (``table_statement``): a statement of such a document is never a clean
+#: read (:func:`clean_read`).
+CONTRADICTION_WARNINGS: Final = frozenset(
+    {"summary_totals_mismatch", "section_total_mismatch", "rows_outside_account"}
+)
+#: Parse warnings that say a balance was printed and not used: its sign was
+#: open (``Ending Balance - $992.50``) and no row settled it
+#: (``table_statement``). A printed balance nothing could be checked
+#: against is a doubt: never a clean read (:func:`clean_read`).
+UNUSED_BALANCE_WARNINGS: Final = frozenset({"balance_sign_unsettled"})
+#: The same, in the order a ``reconciliation_failed`` item names its ``cause``.
+_CAUSE_ORDER: Final = ("summary_totals_mismatch", "section_total_mismatch", "rows_outside_account")
+#: The one doubt a clean read may carry on a row: nothing to check it against.
+#: On any row it is the statement's doubt, not the row's: the reconciliation
+#: item speaks for it and the ``low_confidence`` item leaves it out.
+UNCHECKED_FIELD: Final = "reconciliation"
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +847,50 @@ class ImportResult:
 
 
 @dataclass
+class _NearGroup:
+    """The near duplicates of one committed statement, held back to the end of the run."""
+
+    statement_index: int | None
+    #: The row written, the rows it resembles, and whether the row waits for
+    #: a doubt of its own as well.
+    rows: list[tuple[Transaction, list[uuid.UUID], bool]]
+
+
+@dataclass
+class _Standing:
+    """A statement a person settled in the reconcile view, read again.
+
+    Its record of this document says ``accepted`` or ``reconciled`` and the
+    reading alone would say otherwise (:func:`_standing`). What becomes of
+    it is known when the run ends (:func:`_settle_standing`).
+    """
+
+    index: int | None
+    statement: Statement
+    parsed: ParsedStatement
+    facts: StatementFacts
+    ref: str | None
+    #: What the record said before this run.
+    prior: Verification
+    #: The statement is a clean read (:func:`clean_read`): never asked about.
+    clean: bool = False
+
+    @property
+    def vouched(self) -> bool:
+        """The reading's own check passed (opening + rows = closing)."""
+        check = self.parsed.reconciliation
+        return check is not None and check.status == "ok"
+
+
+def _comparable(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A review payload without its statement reference.
+
+    An item raised before payloads carried one is the same finding.
+    """
+    return {name: value for name, value in payload.items() if name != REF_FIELD}
+
+
+@dataclass
 class _Run:
     db: Session
     document: Document
@@ -762,6 +933,53 @@ class _Run:
     answers: StatementAnswers = field(default_factory=StatementAnswers)
     #: Statements held (``statement_overlap``) or skipped as already imported.
     overlaps: int = 0
+    #: What the document parsers said about the whole document
+    #: (``ExtractResult.parse``): lines they counted as skipped, and their
+    #: warnings. Zero and empty for a file no document parser read.
+    parse_skipped: int = 0
+    parse_warnings: tuple[str, ...] = ()
+    #: Statements of a document format (PDF, image) committed without a
+    #: balance that vouches for them: the ones shown as "not checked against
+    #: a balance" (``statement_record.verification = unverified``).
+    unverified_statements: int = 0
+    #: Rows the files carry that a person deleted (an import tombstone):
+    #: never written again.
+    tombstoned: int = 0
+    #: Rows of an earlier reading of the document the new reading no longer
+    #: holds: removed because nobody had touched them, or kept and listed.
+    replaced: int = 0
+    kept: int = 0
+    #: The hashes of every row this run read for an account (the document's
+    #: current reading of it), by account.
+    read: dict[uuid.UUID, set[str]] = field(default_factory=dict)
+    #: Period starts of the bank statements this run recorded, by account.
+    periods: dict[uuid.UUID, set[date]] = field(default_factory=dict)
+    #: Accounts a statement of the document was not committed to in this run
+    #: (held as an overlap, another currency, its sign waits for an answer).
+    waiting: set[uuid.UUID] = field(default_factory=set)
+    #: Accounts a statement of which this run committed although the reading
+    #: says it may not hold every row (:func:`_incomplete`): a row it no
+    #: longer holds is not an earlier reading's.
+    incomplete: set[uuid.UUID] = field(default_factory=set)
+    #: The rows of every statement this run committed, statement by
+    #: statement, as they were hashed (:func:`_settle_moved`).
+    committed: list[list[HashInput]] = field(default_factory=list)
+    #: A statement of the document has no account yet, or the document holds
+    #: brokerage statements: nothing says which rows are an earlier reading.
+    unplaced: bool = False
+    #: Near duplicates whose finding waits for the end of the run, by
+    #: account: a candidate is a row of this very document, which the run
+    #: may still remove as an earlier reading (:func:`_replace_earlier`).
+    near_waiting: dict[uuid.UUID, list[_NearGroup]] = field(default_factory=dict)
+    #: Accounts a row of which this run wrote, removed as an earlier reading,
+    #: or kept and listed for the first time.
+    changed: set[uuid.UUID] = field(default_factory=set)
+    #: The bank statements of the document this run put on each account, in
+    #: document order (committed or held).
+    placed: dict[uuid.UUID, list[Statement]] = field(default_factory=dict)
+    #: Statements a person accepted or balanced, by account, until the run
+    #: knows whether it changed a row (:func:`_settle_standing`).
+    standing: dict[uuid.UUID, list[_Standing]] = field(default_factory=dict)
     _payees: PayeeMatcher | None = None
     _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
@@ -780,14 +998,14 @@ class _Run:
         if kind not in RERUN_ANSWERS:
             if self._open is None:
                 self._open = [
-                    (item.kind, item.payload)
+                    (item.kind, _comparable(item.payload or {}))
                     for item in repo.open_review_items(
                         self.db, self.household_id, self.document.id, set(ReviewKind)
                     )
                 ]
-            if (kind, payload) in self._open:
+            if (kind, _comparable(payload)) in self._open:
                 return
-            self._open.append((kind, payload))
+            self._open.append((kind, _comparable(payload)))
         documents_repo.add_review_item(
             self.db, self.household_id, kind, payload, document_id=self.document.id
         )
@@ -824,6 +1042,10 @@ class _Run:
             "statements": self.statements,
             "low_confidence": self.low_confidence,
             "statement_overlaps": self.overlaps,
+            "unverified_statements": self.unverified_statements,
+            "replaced_rows": self.replaced,
+            "kept_rows": self.kept,
+            "tombstoned_rows": self.tombstoned,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
             "mapping_suggested": self.mapping_suggested,
@@ -866,9 +1088,156 @@ def _category_id(run: _Run, name: str | None) -> uuid.UUID | None:
     return run.categories().get(name.strip().casefold())
 
 
-def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+#: Liability account types as a statement may spell them (``creditcard``,
+#: OFX ``CREDITLINE``): compared without case and underscores.
+_LIABILITY_WORDS: Final = frozenset(
+    {str(kind).replace("_", "") for kind in LIABILITY_TYPES} | {"creditline"}
+)
+
+
+def liability_side(account_type: str | None) -> bool | None:
+    """Whether the type a statement names for its account is a liability.
+
+    None when it names none: the reader then took the amounts as printed,
+    money in positive (a bank statement).
+    """
+    if not account_type:
+        return None
+    return account_type.replace("_", "").lower() in _LIABILITY_WORDS
+
+
+def same_side(account_type: AccountType, read_as: str | None) -> bool:
+    """The account is on the side of the balance sheet its statement was read for.
+
+    A reader that knows it has a card statement turns the printed amounts
+    (a purchase is printed positive) into the ledger's signs; one that does
+    not takes them as printed. So a statement read without a type, or as an
+    asset account's, is a bank statement, and what a positive amount means
+    on a liability account is something nothing on it proves: the table
+    importer never writes into a liability account on such a sign
+    (:func:`_sign_held`) and neither does a clean read.
+    """
+    return (account_type in LIABILITY_TYPES) is bool(liability_side(read_as))
+
+
+def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
+    """A statement that read cleanly and that nothing contradicts (module doc).
+
+    The owner's policy, "import clean reads, flag quietly": a PDF or image
+    statement that prints nothing to check its rows against (no opening or
+    closing balance, no running balance: reconciliation ``unavailable``) is
+    imported as posted when that is its **only** doubt. It is one only when
+    all of this holds:
+
+    * **no balance was read at all**: neither an opening nor a closing one.
+      ``unavailable`` is also what one balance without the other is, and a
+      balance the statement printed and nothing could be checked against is
+      a doubt, not a silence. Nor one the parser withheld because nothing
+      settled its sign (:data:`UNUSED_BALANCE_WARNINGS`);
+    * **the period was printed**: its confidence
+      (``ParsedStatement.period_confidence``) is not below
+      ``confidence.DEFAULT_THRESHOLD``. A period that is only the rows' own
+      first and last day scores ``confidence.INFERRED`` at most: nothing on
+      the page then says which statement this is, or that its rows are
+      dated right. A statement nothing scored a period of (hand-built) is
+      not refused for it;
+    * it has at least one row, and every row's ``low_confidence`` is empty
+      or exactly ``reconciliation`` (the parser's cap for an unchecked row);
+    * the importer skipped no row of it, no running balance disagrees, it
+      was not truncated and its date order was not assumed;
+    * the document's parse counted no skipped line and carries no warning of
+      :data:`CONTRADICTION_WARNINGS`.
+
+    One doubt anywhere and the whole statement waits as before. A statement
+    whose check failed (``mismatch``) is never one; neither is a format
+    that is not a document (OFX, QIF, CSV), which was never held for this.
+    Pure on its arguments: of ``run`` only the parse facts are read.
+    """
+    check = parsed.reconciliation
+    if parsed.source_format not in DOCUMENT_STATEMENT_FORMATS:
+        return False
+    if check is None or check.status != "unavailable":
+        return False
+    if (
+        check.opening is not None
+        or check.closing is not None
+        or parsed.opening_balance is not None
+        or parsed.closing_balance is not None
+    ):
+        return False
+    if parsed.period_confidence is not None and parsed.period_confidence < DEFAULT_THRESHOLD:
+        return False
+    if not parsed.transactions:
+        return False
+    if any(set(t.low_confidence) - {UNCHECKED_FIELD} for t in parsed.transactions):
+        return False
+    if (
+        parsed.skipped_rows
+        or parsed.balance_mismatches
+        or parsed.truncated
+        or parsed.date_order_assumed
+    ):
+        return False
+    if UNUSED_BALANCE_WARNINGS.intersection(run.parse_warnings):
+        return False
+    return not run.parse_skipped and not CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
+
+
+def _incomplete(run: _Run, parsed: ParsedStatement) -> bool:
+    """The reading itself says it may not hold every row of the statement.
+
+    A truncated statement always. Else, unless its own balances vouch for
+    its rows (opening + rows = closing: none is missing), one of which a
+    row was skipped or a running balance disagrees, in a document whose
+    parse counted a skipped line or carries a warning of
+    :data:`CONTRADICTION_WARNINGS`. The rows such a reading no longer holds
+    are not removed as an earlier reading's (:func:`_finish_reading`): the
+    line it could not read may be one of them.
+    """
+    if parsed.truncated:
+        return True
+    check = parsed.reconciliation
+    if check is not None and check.status == "ok":
+        return False
+    return bool(
+        parsed.skipped_rows
+        or parsed.balance_mismatches
+        or run.parse_skipped
+        or CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
+    )
+
+
+def _contradiction(run: _Run, check: Reconciliation) -> str | None:
+    """Why a statement whose balances agree with its rows still failed its check.
+
+    A ``mismatch`` with no difference (opening + rows = closing, or no
+    difference could be worked out) on a document the parser warned about
+    (:data:`CONTRADICTION_WARNINGS`): the first such warning in
+    :data:`_CAUSE_ORDER`. None when the difference itself is the finding.
+    """
+    if check.status != "mismatch" or check.difference:
+        return None
+    return next((name for name in _CAUSE_ORDER if name in run.parse_warnings), None)
+
+
+def _row_problems(
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    clean: bool = False,
+    statement_index: int | None = None,
+    ref: str | None = None,
+    settled: bool = False,
+) -> None:
     # Footers and pending rows are not problems: ``rows_skipped`` is raised
     # for the rows that should have read (``parsed.skipped_rows``) only.
+    # ``clean``: a clean read (:func:`clean_read`) is not asked about: its
+    # record says ``unverified`` instead of a ``reconciliation_unavailable`` item.
+    # ``statement_index``: the statement's index in the document (None: a table).
+    # ``ref``: its stable reference (``statement_answers.statement_ref``).
+    # ``settled``: a person accepted or balanced the statement; whether it is
+    # asked about again is decided when the run ends (:func:`_settle_standing`).
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
@@ -908,36 +1277,67 @@ def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {"reason": "truncated", "account_id": str(account.id)},
         )
-    if not parsed.reconciled and parsed.reconciliation is not None:
-        # SECURITY.md C12: the statement's own figures disagree (or cannot be
-        # checked); its rows are imported pending and no snapshot is written.
-        check = parsed.reconciliation
-        run.review(
-            ReviewKind.LOW_CONFIDENCE_FIELD,
-            {
-                "reason": (
-                    "reconciliation_failed"
-                    if check.status == "mismatch"
-                    else "reconciliation_unavailable"
-                ),
-                "field": "reconciliation",
-                "account_id": str(account.id),
-                "parser": parsed.parser,
-                "opening": _decimal_text(check.opening),
-                "closing": _decimal_text(check.closing),
-                "total": _decimal_text(check.total),
-                "difference": _decimal_text(check.difference),
-                "running_mismatches": len(check.running_mismatches),
-                "rows": check.running_mismatches[:IDS_MAX],
-                # How many of the statement's rows the failed check leaves
-                # in doubt (imported pending); the others are vouched for by
-                # the statement's own running balance and imported as usual.
-                "rows_in_doubt": (
-                    len(check.doubtful) if check.doubtful is not None else len(parsed.transactions)
-                ),
-                "rows_total": len(parsed.transactions),
-            },
-        )
+    if not clean and not settled:
+        _reconciliation_review(run, parsed, account, statement_index=statement_index, ref=ref)
+
+
+def _reconciliation_review(
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    statement_index: int | None,
+    ref: str | None,
+) -> None:
+    """The finding of a statement whose check failed or could not be made.
+
+    SECURITY.md C12: the statement's own figures disagree (or cannot be
+    checked and something else is in doubt); its rows are imported pending
+    and no snapshot is written. Nothing is raised for a statement that
+    reconciles or carries no check (OFX, QIF, a table).
+    """
+    check = parsed.reconciliation
+    if parsed.reconciled or check is None:
+        return
+    payload: dict[str, Any] = {
+        "reason": (
+            "reconciliation_failed" if check.status == "mismatch" else "reconciliation_unavailable"
+        ),
+        "field": "reconciliation",
+        "account_id": str(account.id),
+        # Which statement of the document, and how many lines of the
+        # document no reader could read (a likely place for a missing row).
+        "statement": statement_index,
+        "lines_skipped": run.parse_skipped,
+    }
+    if ref is not None:
+        # The statement whatever its figures read as (``statement_answers``).
+        payload[REF_FIELD] = ref
+    cause = _contradiction(run, check)
+    if cause is not None:
+        # The balances agree with the rows; the statement's own summary
+        # or a section total does not.
+        payload["cause"] = cause
+    run.review(
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {
+            **payload,
+            "parser": parsed.parser,
+            "opening": _decimal_text(check.opening),
+            "closing": _decimal_text(check.closing),
+            "total": _decimal_text(check.total),
+            "difference": _decimal_text(check.difference),
+            "running_mismatches": len(check.running_mismatches),
+            "rows": check.running_mismatches[:IDS_MAX],
+            # How many of the statement's rows the failed check leaves
+            # in doubt (imported pending); the others are vouched for by
+            # the statement's own running balance and imported as usual.
+            "rows_in_doubt": (
+                len(check.doubtful) if check.doubtful is not None else len(parsed.transactions)
+            ),
+            "rows_total": len(parsed.transactions),
+        },
+    )
 
 
 def _decimal_text(value: Decimal | None) -> str | None:
@@ -948,17 +1348,73 @@ def _confidence(value: float | None) -> Decimal | None:
     return Decimal(str(round(value, 4))) if value is not None else None
 
 
+def _own_doubts(txn: ParsedTransaction) -> list[str]:
+    """The fields of a row in doubt for a reason of the row's own."""
+    return [name for name in txn.low_confidence if name != UNCHECKED_FIELD]
+
+
+def _near_duplicates_review(
+    run: _Run,
+    account: Account,
+    near: Sequence[tuple[Transaction, Sequence[uuid.UUID]]],
+    *,
+    statement_index: int | None,
+) -> None:
+    """The ``possible_duplicate`` finding for a statement's near duplicates.
+
+    One row: a ``near_match`` item, as always. Two or more: one
+    ``near_matches`` item listing them (at most :data:`IDS_MAX`; ``count``
+    is all of them), so a statement entered by hand first is one question
+    instead of one per row.
+    """
+    if not near:
+        return
+    if len(near) == 1:
+        row, candidates = near[0]
+        run.review(
+            ReviewKind.POSSIBLE_DUPLICATE,
+            {
+                "reason": "near_match",
+                "account_id": str(account.id),
+                "transaction_id": str(row.id),
+                "candidates": [str(c) for c in candidates],
+            },
+        )
+        return
+    run.review(
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {
+            "reason": "near_matches",
+            "account_id": str(account.id),
+            "statement": statement_index,
+            "count": len(near),
+            "rows": [
+                {"transaction_id": str(row.id), "candidates": [str(c) for c in candidates]}
+                for row, candidates in near[:IDS_MAX]
+            ],
+        },
+    )
+
+
 def _low_confidence_review(
     run: _Run,
     parsed: ParsedStatement,
     account: Account,
     low: list[tuple[Transaction, ParsedTransaction]],
 ) -> None:
-    """One ``low_confidence_field`` item for the rows a document parser was unsure of."""
+    """One ``low_confidence_field`` item for the rows a document parser was unsure of.
+
+    Only rows with a doubt of their own: ``reconciliation`` on a row says its
+    *statement* did not add up or could not be checked, which the
+    ``reconciliation_failed``/``reconciliation_unavailable`` item already
+    says once, with the figures. Such a row still waits (``pending``); it is
+    not listed a second time here, and the field is left out of ``fields``.
+    """
+    low = [(row, txn) for row, txn in low if _own_doubts(txn)]
     if not low:
         return
     run.low_confidence += len(low)
-    fields = sorted({name for _, txn in low for name in txn.low_confidence})
+    fields = sorted({name for _, txn in low for name in _own_doubts(txn)})
     run.review(
         ReviewKind.LOW_CONFIDENCE_FIELD,
         {
@@ -970,7 +1426,7 @@ def _low_confidence_review(
             "transactions": [
                 {
                     "transaction_id": str(row.id),
-                    "fields": list(txn.low_confidence),
+                    "fields": _own_doubts(txn),
                     "confidence": txn.confidence,
                     "page": txn.page,
                 }
@@ -981,11 +1437,34 @@ def _low_confidence_review(
 
 
 def _commit_statement(
-    run: _Run, parsed: ParsedStatement, account: Account, *, statement_index: int | None
-) -> bool:
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    statement_index: int | None,
+    ref: str | None = None,
+    standing: _Standing | None = None,
+) -> Verification | None:
     """Write one statement's new transactions, review items and closing balance.
 
-    False when nothing could be written (the statement is in another currency).
+    None when nothing could be written (the statement is in another
+    currency). Else how far the statement was checked, for its record:
+    ``reconciled`` when a document parser's reconciliation passed,
+    ``unverified`` for everything else (a statement that does not add up or
+    cannot be checked; OFX, QIF and tables, which carry no reconciliation).
+
+    A *clean read* (:func:`clean_read`, with no row left out for its
+    currency, on an account of the side it was read for: :func:`same_side`)
+    is imported as posted: a row of it is ``pending`` only when it
+    is a near duplicate, no ``reconciliation_unavailable`` and no
+    ``low_confidence`` item is raised for it, and, as for every statement
+    that did not reconcile, no balance snapshot is written.
+
+    ``standing``: a person accepted or balanced this statement in the
+    reconcile view (:func:`_standing`). Its record keeps what it said, no
+    reconciliation finding is raised and no snapshot is written here;
+    :func:`_settle_standing` decides at the end of the run, when it is known
+    whether the run changed a row of the account.
     """
     db = run.db
     if parsed.currency is not None and parsed.currency != account.currency:
@@ -999,7 +1478,8 @@ def _commit_statement(
                 "account_currency": account.currency,
             },
         )
-        return False
+        run.waiting.add(account.id)
+        return None
     run.statements += 1
     if account.id not in run.accounts:
         run.accounts.append(account.id)
@@ -1016,14 +1496,28 @@ def _commit_statement(
                 "count": foreign,
             },
         )
-    _row_problems(run, parsed, account)
-    plan = dedupe(
-        db,
-        run.household_id,
-        account.id,
-        [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows],
+    # A row left out for its currency is a doubt of its own: not a clean read.
+    # Neither is a statement read for the other side of the balance sheet
+    # than its account's (:func:`same_side`): its sign is on trust.
+    clean = not foreign and same_side(account.type, parsed.account_type) and clean_read(run, parsed)
+    _row_problems(
+        run,
+        parsed,
+        account,
+        clean=clean,
+        statement_index=statement_index,
+        ref=ref,
+        settled=standing is not None,
     )
+    inputs = [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows]
+    plan = dedupe(db, run.household_id, account.id, inputs)
+    run.committed.append(inputs)
+    if _incomplete(run, parsed):
+        run.incomplete.add(account.id)
     run.duplicates += len(plan.exact)
+    # Rows a person deleted are in none of the plan's lists to write.
+    run.tombstoned += len(plan.removed)
+    run.read.setdefault(account.id, set()).update(plan.hashes)
     payees = run.payees() if plan.to_insert else None
     created: list[tuple[Transaction, bool]] = []
     split_lines: dict[int, list[dict[str, Any]]] = {}
@@ -1045,7 +1539,7 @@ def _commit_statement(
             import_hash=plan.hashes[index],
             review_state=(
                 ReviewState.PENDING
-                if index in plan.near or txn.low_confidence
+                if index in plan.near or (txn.low_confidence and not clean)
                 else ReviewState.NONE
             ),
             confidence=_confidence(txn.confidence),
@@ -1086,16 +1580,24 @@ def _commit_statement(
                 row.category_id = defaults[row.payee_id]
                 run.payee_categorised += 1
     positions = {index: position for position, index in enumerate(plan.to_insert)}
-    for index, candidates in plan.near.items():
-        position = positions[index]
-        run.review(
-            ReviewKind.POSSIBLE_DUPLICATE,
-            {
-                "reason": "near_match",
-                "account_id": str(account.id),
-                "transaction_id": str(created[position][0].id),
-                "candidates": [str(c) for c in candidates],
-            },
+    near = [
+        (
+            created[positions[index]][0],
+            list(candidates),
+            bool(rows[index].low_confidence) and not clean,
+        )
+        for index, candidates in plan.near.items()
+    ]
+    if _own_rows(run, account, [c for _, candidates, _ in near for c in candidates]):
+        # A row resembles a row of this very document: whether that one is
+        # an earlier reading is known when the run ends.
+        run.near_waiting.setdefault(account.id, []).append(_NearGroup(statement_index, near))
+    else:
+        _near_duplicates_review(
+            run,
+            account,
+            [(row, candidates) for row, candidates, _ in near],
+            statement_index=statement_index,
         )
     run.imported += len(created)
     run.possible_duplicates += len(plan.near)
@@ -1106,21 +1608,15 @@ def _commit_statement(
         [
             (created[positions[index]][0], rows[index])
             for index in plan.to_insert
-            if rows[index].low_confidence
+            if rows[index].low_confidence and not clean
         ],
     )
-    if parsed.closing_balance is not None and parsed.reconciled:
-        accounts_repo.upsert_snapshot(
-            db,
-            account,
-            parsed.closing_balance.as_of,
-            to_storage(parsed.closing_balance.amount),
-            BalanceSource.STATEMENT,
-            source_document_id=run.document.id,
-        )
-        run.snapshots += 1
-        emit(db, run.household_id, "balance.updated", {"account_id": str(account.id)})
+    # An accepted statement whose reading adds up is checked against the
+    # ledger first (:func:`_settle_standing`): its rows may have been edited.
+    if parsed.reconciled and not (standing is not None and standing.vouched):
+        _write_snapshot(run, parsed, account)
     if created:
+        run.changed.add(account.id)
         ids = [row.id for row, _ in created]
         audit(
             db,
@@ -1132,6 +1628,7 @@ def _commit_statement(
                 "count": len(ids),
                 "possible_duplicates": len(plan.near),
                 "duplicates": len(plan.exact),
+                "tombstoned": len(plan.removed),
                 "transaction_ids": [str(i) for i in ids[:IDS_MAX]],
             },
             household_id=run.household_id,
@@ -1148,7 +1645,94 @@ def _commit_statement(
                 "ids": [str(i) for i in ids[:IDS_MAX]],
             },
         )
-    return True
+    # Rules and payee defaults ran as part of the import: the rows are as
+    # imported, untouched until a person changes one.
+    _mark_untouched(db, [row for row, _ in created])
+    if standing is not None:
+        standing.clean = clean
+        run.standing.setdefault(account.id, []).append(standing)
+        return standing.prior
+    check = parsed.reconciliation
+    return "reconciled" if check is not None and check.status == "ok" else "unverified"
+
+
+def _write_snapshot(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+    """Record the statement's closing balance as the account's balance that day."""
+    if parsed.closing_balance is None:
+        return
+    accounts_repo.upsert_snapshot(
+        run.db,
+        account,
+        parsed.closing_balance.as_of,
+        to_storage(parsed.closing_balance.amount),
+        BalanceSource.STATEMENT,
+        source_document_id=run.document.id,
+    )
+    run.snapshots += 1
+    emit(run.db, run.household_id, "balance.updated", {"account_id": str(account.id)})
+
+
+def _mark_untouched(db: Session, rows: Sequence[Transaction]) -> None:
+    """Set ``updated_at`` of ``rows`` to their ``created_at`` ("untouched since import").
+
+    Whatever the import itself did to a row (a rule, a payee's default
+    category) is flushed first, so the equal timestamps are the last write.
+    """
+    db.flush()
+    changed = [row for row in rows if row.updated_at != row.created_at]
+    for row in changed:
+        row.updated_at = row.created_at
+    if changed:
+        db.flush()
+
+
+def _own_rows(run: _Run, account: Account, candidates: Collection[uuid.UUID]) -> bool:
+    """One of ``candidates`` is a row this document produced on the account."""
+    if not candidates:
+        return False
+    found = run.db.execute(
+        select(Transaction.id)
+        .where(
+            Transaction.household_id == run.household_id,
+            Transaction.account_id == account.id,
+            Transaction.id.in_(sorted(set(candidates))),
+            Transaction.source_document_id == run.document.id,
+        )
+        .limit(1)
+    ).first()
+    return found is not None
+
+
+def _record_committed(
+    run: _Run,
+    account: Account,
+    facts: StatementFacts,
+    verification: Verification,
+    *,
+    lower_accepted: bool = False,
+) -> None:
+    """Record a committed statement with how far it was checked.
+
+    A recorded statement of a document format (PDF, image) that is
+    ``unverified`` is the one shown as "not checked against a balance":
+    counted for the run's summary (``unverified_statements``).
+    """
+    recorded = record_statement(
+        run.db,
+        run.document,
+        account,
+        facts,
+        verification=verification,
+        lower_accepted=lower_accepted,
+    )
+    if recorded and facts.kind == "bank" and facts.period_start is not None:
+        run.periods.setdefault(account.id, set()).add(facts.period_start)
+    if (
+        recorded
+        and verification == "unverified"
+        and facts.source_format in DOCUMENT_STATEMENT_FORMATS
+    ):
+        run.unverified_statements += 1
 
 
 def _guarded(
@@ -1167,6 +1751,7 @@ def _guarded(
     )
     if verdict != "import":
         run.overlaps += 1
+        run.waiting.add(account.id)
         if account.id not in run.accounts:
             run.accounts.append(account.id)
         return False
@@ -1241,8 +1826,16 @@ def statement_match(
     *,
     institution: str | None = None,
     allowed: Collection[uuid.UUID] | None,
+    institution_id: uuid.UUID | None = None,
 ) -> AccountMatch:
     """The account the digits (and institution) of bank statement ``index`` name.
+
+    A statement that prints no digits goes to the one open account at the
+    document's institution (``institution_id``; ``match_account``), on the
+    side of the balance sheet its type names (:func:`liability_side`): a
+    card statement never lands on the bank's lone checking account. Only
+    when it is the document's one statement: of two without digits nothing
+    says which is whose.
 
     In a document the parser split at its accounts' summaries, statements
     may carry the same last four digits (two accounts printed under one
@@ -1269,24 +1862,32 @@ def statement_match(
             told_apart=named.count((account.last4, account.account_type)) == 1,
             allowed=allowed,
         )
+    alone = len(result.statements) == 1 and not result.investments
     return match_account(
         db,
         household_id,
         last4=account.last4,
         institution=institution or account.institution,
         allowed=allowed,
+        institution_id=institution_id if alone else None,
+        liability=liability_side(account.account_type),
     )
 
 
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
     single = len(result.statements) == 1 and not _several_kinds(result)
+    refs = statement_refs("statement", result.statements)
     for index, statement in enumerate(result.statements):
         parsed = from_statement(statement)
         key = statement_key(statement)
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
-        # The run's own assignment, else the account an answer put it on.
-        assigned = run.assigned.get(("statement", index)) or run.answers.account("statement", key)
+        # The run's own assignment, else the account an answer put it on: the
+        # statement exactly as read, else the statement by its reference (its
+        # balances were corrected, or a parser reads it differently now).
+        assigned = run.assigned.get(("statement", index)) or run.answers.account(
+            "statement", key, refs[index]
+        )
         if assigned is not None:
             account = _usable_account(run, assigned)
         if (
@@ -1304,6 +1905,7 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
                 index,
                 institution=parsed.institution,
                 allowed=run.allowed,
+                institution_id=run.document.institution_id,
             )
             candidates = match.candidates
             if account_id is not None and (match.account_id is None or single):
@@ -1311,6 +1913,7 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
             else:
                 account = _usable_account(run, match.account_id)
         if account is None:
+            run.unplaced = True
             run.review(
                 ReviewKind.UNKNOWN_ACCOUNT,
                 {
@@ -1323,11 +1926,133 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
                 },
             )
             continue
+        run.placed.setdefault(account.id, []).append(statement)
         facts = bank_facts(statement)
         if not _guarded(run, account, facts, index, key):
             continue
-        if _commit_statement(run, parsed, account, statement_index=index):
-            record_statement(run.db, run.document, account, facts)
+        verification = _commit_statement(
+            run,
+            parsed,
+            account,
+            statement_index=index,
+            ref=refs[index],
+            standing=_standing(run, statement, parsed, account, facts, index, refs[index]),
+        )
+        if verification is not None:
+            _record_committed(run, account, facts, verification)
+            if verification == "unverified":
+                _withdraw(run, account, statement)
+
+
+def _withdraw(run: _Run, account: Account, statement: Statement) -> None:
+    """Take back the balance an earlier run of the document recorded for ``statement``.
+
+    For a statement this run records as ``unverified``: an ``unverified``
+    statement of a document (PDF, image) vouches for no balance, so the
+    snapshot it wrote while it was ``reconciled`` does not outlive that
+    (``statement_records.withdraw_snapshot``; nothing is removed for a
+    bank file or a table, and nothing another document recorded).
+    """
+    withdraw_snapshot(run.db, run.document, account, statement)
+
+
+def _standing(
+    run: _Run,
+    statement: Statement,
+    parsed: ParsedStatement,
+    account: Account,
+    facts: StatementFacts,
+    index: int,
+    ref: str,
+) -> _Standing | None:
+    """The answer a person gave about this statement in the reconcile view, if it stands.
+
+    The document's record of the statement (this account, this period
+    start) says ``accepted``, or says ``reconciled`` although the reading
+    does not add up by itself (the person balanced it against the ledger:
+    a row edited, a row removed). None for every other statement: one that
+    was never settled, and a reconciled one whose reading vouches for
+    itself.
+    """
+    if facts.period_start is None:
+        return None
+    prior = run.db.execute(
+        select(StatementRecord.verification).where(
+            StatementRecord.household_id == run.household_id,
+            StatementRecord.account_id == account.id,
+            StatementRecord.document_id == run.document.id,
+            StatementRecord.kind == "bank",
+            StatementRecord.outcome == "imported",
+            StatementRecord.period_start == facts.period_start,
+        )
+    ).scalar_one_or_none()
+    if prior not in ("accepted", "reconciled"):
+        return None
+    found = _Standing(
+        index=index,
+        statement=statement,
+        parsed=parsed,
+        facts=facts,
+        ref=ref,
+        prior="accepted" if prior == "accepted" else "reconciled",
+    )
+    if found.prior == "reconciled" and found.vouched:
+        return None
+    return found
+
+
+def _settle_standing(run: _Run, account: Account) -> None:
+    """Decide the statements of ``account`` a person had settled (decision at the run's end).
+
+    An acceptance, and a balance a person struck in the reconcile view, are
+    answers about the ledger rows as they were. They hold while the run
+    changed no row of the account (``_Run.changed``: none written, none
+    removed as an earlier reading, none newly kept):
+
+    * the record stays ``accepted``: nothing is asked again, no row is made
+      pending, no balance is recorded;
+    * the record stays ``reconciled`` while the ledger rows still add up to
+      the statement's balances
+      (``app.domain.review.reconciliation.ledger_status``).
+
+    Otherwise the statement is what its reading says again: ``unverified``,
+    with the reconciliation finding unless the reading adds up or is a clean
+    read. An accepted statement becomes ``reconciled``, and its closing
+    balance is recorded, only when the reading adds up **and** the ledger
+    rows do: a reading that balances says nothing about rows a person
+    edited since.
+    """
+    # Imported here: the review package imports this module.
+    from app.domain.review.reconciliation import ledger_status
+
+    held = run.standing.pop(account.id, [])
+    if not held:
+        return
+    changed = account.id in run.changed
+    statements = run.placed.get(account.id, [])
+    for item in held:
+        position = next(i for i, s in enumerate(statements) if s is item.statement)
+        balanced = ledger_status(run.db, run.document, account, statements, position) == "balanced"
+        verdict: Verification
+        if item.vouched:
+            verdict = "reconciled" if balanced else "unverified" if changed else item.prior
+        elif not changed and (item.prior == "accepted" or balanced):
+            verdict = item.prior
+        else:
+            verdict = "unverified"
+        if verdict == item.prior:
+            continue
+        _record_committed(run, account, item.facts, verdict, lower_accepted=True)
+        if verdict == "reconciled":
+            _write_snapshot(run, item.parsed, account)
+            continue
+        if verdict == "unverified":
+            # Reconciled until this run: the balance it recorded goes with it.
+            _withdraw(run, account, item.statement)
+        if not item.clean:
+            _reconciliation_review(
+                run, item.parsed, account, statement_index=item.index, ref=item.ref
+            )
 
 
 class _GroupFacts(BaseModel):
@@ -1490,25 +2215,75 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     return None
 
 
-def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> str | None:
-    """A sign taken on trust is never used to write into a liability account.
+def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> list[_Target]:
+    """The statements of a table that wait because nothing proves their sign.
+
+    A sign taken on trust is never used to write into a liability account
+    (a card export may list purchases as positive), and it holds back that
+    account's statement only: the other accounts of the file are imported.
 
     ``on_trust``: a suggestion without ``sign_evidence``, or a mapping saved
     from one (``sign_unverified``). Statements whose account is not known
     yet are left to their ``unknown_account`` / ``account_required`` item;
     the mapping saved meanwhile keeps ``sign_unverified``, so the re-run
-    after a person picks a liability account is held here again.
+    after a person picks a liability account holds that statement here.
 
     ``doubted``: the suggestion for this very table doubts the sign
     (``sign_unverified``: a card-like header, no money out, more money
     in than out). A mapping still on trust is not used for such a
     file whatever the account, which also stops a mapping saved from a card
-    export before those doubts existed.
+    export before those doubts existed: every statement waits.
+
+    Empty when the sign is proven (or a person saved or chose the mapping).
     """
     if not on_trust:
-        return None
-    if doubted or any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
-        return "sign_unverified"
+        return []
+    if doubted:
+        return list(targets)
+    return [t for t in targets if t.account is not None and t.account.type in LIABILITY_TYPES]
+
+
+def _answered_signs(run: _Run, targets: list[_Target], waiting: list[_Target]) -> dict[int, Sign]:
+    """The sign a person answered for a target's account, by the target's place in ``targets``.
+
+    ``statement_answers``: "what does a positive amount mean" answered for
+    one account of this document. Such a statement is never held for its
+    sign again and is always read with the answered sign, whatever the
+    mapping says by then, so its rows keep the hashes they were imported
+    under.
+
+    An answer counts only for a statement the question can be about: one
+    of ``waiting`` (:func:`_sign_held`), or one on a liability account
+    (held before a person saved the mapping). An answer naming any other
+    account is ignored: that account's rows were imported as the file
+    prints them, and reading them the other way round now would add every
+    one of them again with its sign turned.
+    """
+    found: dict[int, Sign] = {}
+    for index, target in enumerate(targets):
+        if target.account is None:
+            continue
+        sign = run.answers.signs.get(target.account.id)
+        if sign is None:
+            continue
+        if target.account.type in LIABILITY_TYPES or any(target is other for other in waiting):
+            found[index] = Sign(sign)
+    return found
+
+
+def _read_with_sign(
+    table: Table, spec: MappingSpec, parsed: ParsedStatement, sign: Sign
+) -> ParsedStatement | None:
+    """``parsed`` (a statement of ``table`` read with ``spec``) read with ``sign`` instead.
+
+    The same statement is the one made of the same table rows. None when
+    the other sign groups the rows differently, which no table read so far
+    does: the caller holds the statement rather than guess.
+    """
+    rows = [t.row for t in parsed.transactions]
+    for other in from_table_grouped(table, spec.model_copy(update={"sign": sign})):
+        if other.last4 == parsed.last4 and [t.row for t in other.transactions] == rows:
+            return other
     return None
 
 
@@ -1579,21 +2354,60 @@ def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> I
     return mapping
 
 
+#: The first filled cell of a total line, whole: a total word alone, with
+#: punctuation after it, or with one of the tails a summary line prints
+#: (``Total for period``, ``Total debits``). A payee that only starts with
+#: the word (``Total Wine Shop``, ``Balance Transfer Fee``) is no total.
+_TOTAL_LABEL: Final = re.compile(
+    r"(?:totals?|(?:(?:ending|closing)\s+)?balance)"
+    r"(?:\s*[:.\-]*|\s+(?:for|of|as\s+of|amount|debits?|credits?|deposits?|withdrawals?)\b.*)",
+    re.IGNORECASE,
+)
+#: A cell that may be a date: digits around two separators, eight digits in
+#: a row, or a month name beside a digit. Wide on purpose: a row with such
+#: a cell is never called a total line.
+_DATE_SHAPED: Final = re.compile(
+    r"[0-9]{1,4}\s*[/.\-]\s*[0-9]{1,2}\s*[/.\-]\s*[0-9]{1,4}"
+    r"|(?<![0-9])[0-9]{8}(?![0-9])"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*[0-9]"
+    r"|[0-9](?:st|nd|rd|th)?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+    re.IGNORECASE,
+)
+
+
+def _date_shaped(cell: str) -> bool:
+    return _DATE_SHAPED.search(cell) is not None or best_date_format([cell])[1] > 0
+
+
+def _total_line(row: Sequence[str]) -> bool:
+    """A row that only sums up: a total's label (:data:`_TOTAL_LABEL`) and no date."""
+    cells = [cell.strip() for cell in row if cell.strip()]
+    if not cells or _TOTAL_LABEL.fullmatch(cells[0]) is None:
+        return False
+    return not any(_date_shaped(cell) for cell in cells)
+
+
 def header_only(table: Table) -> bool:
-    """A table that is a header row and nothing else (or nothing at all).
+    """A table that is a header row and nothing to import under it (or nothing at all).
 
     One row with text, at least two cells of it filled and none with a
     digit: column names. A single row with a digit in it may be the file's
     only transaction (an export without a header) and is never called
     empty; it is asked about like any other table.
+
+    Under such a header, rows that are all total lines (:func:`_total_line`:
+    ``Total,,0.00``, ``Ending Balance,,1204.18``) are the export of a period
+    without a transaction: there is no row to map either. One row with a
+    date-shaped cell, or one that starts with anything else, and the table
+    is asked about as before.
     """
     rows = [row for row in table.rows if any(cell.strip() for cell in row)]
     if not rows:
         return True
-    if len(rows) > 1:
-        return False
     cells = [cell for cell in rows[0] if cell.strip()]
-    return len(cells) >= 2 and not any(ch.isdigit() for cell in cells for ch in cell)
+    if len(cells) < 2 or any(ch.isdigit() for cell in cells for ch in cell):
+        return False
+    return all(_total_line(row) for row in rows[1:])
 
 
 def _mapping_review(
@@ -1602,7 +2416,13 @@ def _mapping_review(
     choice: MappingChoice,
     suggestion: MappingSuggestion | None,
     held: str | None,
+    **facts: Any,
 ) -> None:
+    """Ask for the table's columns (or, ``held == "sign_unverified"``, its sign).
+
+    ``facts``: the keys a sign question about one statement adds
+    (:func:`_sign_review`).
+    """
     run.review(
         ReviewKind.UNPARSED,
         {
@@ -1617,7 +2437,40 @@ def _mapping_review(
             ),
             "suggestion": suggestion.summary() if suggestion is not None else None,
             "auto_import": held,
+            **facts,
         },
+    )
+
+
+def _sign_review(
+    run: _Run,
+    table: Table,
+    choice: MappingChoice,
+    suggestion: MappingSuggestion | None,
+    target: _Target,
+    *,
+    whole: bool,
+    mapping: ImportMapping | None,
+) -> None:
+    """One statement of the table waits until a person says what a positive amount means.
+
+    ``scope`` says what the answer is for: ``mapping`` when every statement
+    of the table waits (``whole``: the answer is the layout's sign, saved on
+    its mapping, so the layout is asked about once), ``account`` when the
+    others were imported (the answer is kept for this account of this
+    document, ``statement_answers``). Ids and counts only.
+    """
+    _mapping_review(
+        run,
+        table,
+        choice,
+        suggestion,
+        "sign_unverified",
+        account_id=str(target.account.id) if target.account is not None else None,
+        group=target.group,
+        transactions=len(target.parsed.transactions),
+        scope="mapping" if whole else SCOPE_ACCOUNT,
+        **({"mapping_id": str(mapping.id)} if mapping is not None else {}),
     )
 
 
@@ -1686,29 +2539,61 @@ def _import_table(
         account_id=account_id,
         group=group,
     )
+    asked: MappingSuggestion | None
     if saved is None:
         if suggestion is None:  # pragma: no cover - set whenever no mapping was saved
             return
-        held = _sign_held(suggestion.sign_evidence is None, targets)
-        mapping = None if held is not None else _save_suggested(run, table, suggestion)
-        if mapping is None:
-            _mapping_review(run, table, choice, suggestion, held or "not_saved")
-            return
-        run.mapping_suggested = True
+        asked = suggestion
+        waiting = _sign_held(suggestion.sign_evidence is None, targets)
     else:
         # A mapping saved from a trust-only suggestion is checked again
         # whenever it meets a liability account or a file whose sign the
-        # suggestion doubts, unless the person chose it.
+        # suggestion doubts, unless the person chose it. One a person saved
+        # (``sign_unverified`` False) is their answer for the layout: it
+        # holds nothing, whatever a fresh suggestion would doubt.
         on_trust = saved.sign_unverified and mapping_id is None
-        fresh = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
-        doubted = fresh is not None and "sign_unverified" in fresh.doubts
-        if _sign_held(on_trust, targets, doubted) is not None:
-            _mapping_review(run, table, choice, fresh, "sign_unverified")
+        asked = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
+        doubted = asked is not None and "sign_unverified" in asked.doubts
+        waiting = _sign_held(on_trust, targets, doubted)
+    # What a person answered for an account of this document settles its sign.
+    answered = _answered_signs(run, targets, waiting)
+    unsettled = [
+        place
+        for place, item in enumerate(targets)
+        if place not in answered and any(item is other for other in waiting)
+    ]
+    if unsettled and len(unsettled) == len(targets):
+        # Every statement waits: nothing is imported and no mapping is
+        # saved; the answer is for the layout.
+        for place in unsettled:
+            _sign_review(run, table, choice, asked, targets[place], whole=True, mapping=saved)
+        return
+    if saved is None:
+        mapping = _save_suggested(run, table, suggestion) if suggestion is not None else None
+        if mapping is None:
+            _mapping_review(run, table, choice, suggestion, "not_saved")
             return
+        run.mapping_suggested = True
+    else:
         mapping = saved
     run.mapping_id = mapping.id
     committed = False
-    for item in targets:
+    for place, item in enumerate(targets):
+        if place in unsettled:
+            # Only this account's rows wait; the others go on below.
+            _not_committed(run, item)
+            _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
+            continue
+        sign = answered.get(place)
+        if sign is not None and sign is not spec.sign:
+            reread = _read_with_sign(table, spec, item.parsed, sign)
+            if reread is None:  # pragma: no cover - the sign never regroups rows
+                _not_committed(run, item)
+                _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
+                continue
+            item = replace(item, parsed=reread)
+        if item.account is None:
+            _not_committed(run, item)
         if item.account is None and item.group is None:
             run.review(
                 ReviewKind.UNKNOWN_ACCOUNT,
@@ -1735,11 +2620,11 @@ def _import_table(
                 },
             )
             continue
-        if _commit_statement(run, item.parsed, item.account, statement_index=None):
+        verification = _commit_statement(run, item.parsed, item.account, statement_index=None)
+        if verification is not None:
             closing = item.parsed.closing_balance
-            record_statement(
-                run.db,
-                run.document,
+            _record_committed(
+                run,
                 item.account,
                 table_facts(
                     item.parsed.source_format,
@@ -1747,6 +2632,7 @@ def _import_table(
                     item.parsed.period_end,
                     closing.amount if closing is not None else None,
                 ),
+                verification,
             )
         committed = True
     if not committed:
@@ -1754,6 +2640,14 @@ def _import_table(
     repo.mark_used(run.db, mapping)
     if run.document.institution_id is None and mapping.institution_id is not None:
         run.document.institution_id = mapping.institution_id
+
+
+def _not_committed(run: _Run, item: _Target) -> None:
+    """A statement of the table this run does not commit: no row of it is replaced."""
+    if item.account is None:
+        run.unplaced = True
+    else:
+        run.waiting.add(item.account.id)
 
 
 def _received_on(document: Document) -> date | None:
@@ -2056,6 +2950,319 @@ def _import_positions(run: _Run, positions: PositionsTable) -> None:
         run.document.period_start = run.document.period_end = positions.as_of
 
 
+# ---------------------------------------------------------------------------
+# A document read again: the rows of its earlier reading
+# ---------------------------------------------------------------------------
+
+#: Resolution of an open finding the run's own replacement answered.
+_SUPERSEDED: Final = {"action": "superseded", "by": "import.replace"}
+
+
+def _named_rows(payload: Mapping[str, Any]) -> set[str]:
+    """The transaction ids a review payload names (its own row, or the rows it lists)."""
+    named: set[str] = set()
+    own = payload.get("transaction_id")
+    if isinstance(own, str):
+        named.add(own)
+    for key in ("transactions", "rows"):
+        listed = payload.get(key)
+        if not isinstance(listed, list):
+            continue
+        for entry in listed:
+            found = entry.get("transaction_id") if isinstance(entry, dict) else None
+            if isinstance(found, str):
+                named.add(found)
+    return named
+
+
+def _supersede(run: _Run, answered: Callable[[ReviewItem], bool]) -> int:
+    """Dismiss the document's open findings ``answered`` picks; how many."""
+    found = [
+        item
+        for item in repo.open_review_items(
+            run.db, run.household_id, run.document.id, set(ReviewKind)
+        )
+        if answered(item)
+    ]
+    now = clock.utcnow()
+    for item in found:
+        item.state = ReviewItemState.DISMISSED
+        item.resolved_at = now
+        item.resolved_by = run.user_id
+        item.resolution = dict(_SUPERSEDED)
+    if found:
+        run.db.flush()
+        # The run's memory of what is open is read again.
+        run._open = None
+    return len(found)
+
+
+def _answered_before(run: _Run, finding: Mapping[str, Any]) -> bool:
+    """A resolved finding of the document says exactly what ``finding`` says."""
+    resolved = run.db.execute(
+        select(ReviewItem.payload).where(
+            ReviewItem.household_id == run.household_id,
+            ReviewItem.document_id == run.document.id,
+            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.kind == ReviewKind.LOW_CONFIDENCE_FIELD,
+        )
+    ).scalars()
+    return any(payload == finding for payload in resolved)
+
+
+def _person_linked(run: _Run, ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+    """Which of the transactions ``ids`` a person tied something to.
+
+    A document attached to the row, a goal contribution or a loan payment
+    recorded from it. None of these moves the row's ``updated_at``, and the
+    last two would lose their link with the row (``ON DELETE SET NULL``).
+    """
+    if not ids:
+        return set()
+    db, household_id = run.db, run.household_id
+    found = set(
+        db.execute(
+            select(DocumentLink.target_id).where(
+                DocumentLink.household_id == household_id,
+                DocumentLink.target_type == LinkTarget.TRANSACTION,
+                DocumentLink.target_id.in_(ids),
+            )
+        ).scalars()
+    )
+    for model in (GoalContribution, LoanPayment):
+        found.update(
+            linked
+            for linked in db.execute(
+                select(model.transaction_id).where(
+                    model.household_id == household_id, model.transaction_id.in_(ids)
+                )
+            ).scalars()
+            if linked is not None
+        )
+    return found
+
+
+def _replace_earlier(
+    run: _Run, account: Account, *, moved: Collection[str] | None = None
+) -> set[uuid.UUID]:
+    """Settle the rows an earlier reading of the document left on ``account``.
+
+    Called once per account, when every statement of the document for it was
+    committed by this run. An earlier row
+    (``app.domain.review.reconciliation.earlier_rows_of``: a row of this
+    document with a hash the run did not read) is **removed** when nobody
+    touched it: ``updated_at == created_at``, no transfer link, and nothing
+    a person tied to it (:func:`_person_linked`: a document, a goal
+    contribution, a loan payment). No tombstone is written: the row was
+    never the person's to
+    delete, and a later reading that holds it again imports it. Every other
+    earlier row is **kept** and listed in one ``earlier_rows_kept`` finding
+    of the account (ids only, at most :data:`IDS_MAX`), which the reconcile
+    view answers; a list a person already answered is not raised again.
+    Audited as ``import.replace``. Returns the ids removed.
+
+    ``moved`` (:func:`_settle_moved`): the account got no statement of this
+    reading, and these are the hashes the rows the run committed elsewhere
+    would have on it. Every row of the document on the account is then an
+    earlier row, and the account is settled only when each of them is one
+    of ``moved``; else nothing is done.
+
+    Never touched here: rows of another document, rows on another account
+    that the run did not read again, rows without an ``import_hash`` (added
+    by hand for the document).
+    """
+    # Imported here: the review package imports this module.
+    from app.domain.review.reconciliation import EARLIER_KEPT, earlier_rows_of
+
+    db = run.db
+    read = run.read[account.id] if moved is None else set()
+    earlier = earlier_rows_of(db, run.document, account.id, read, lock=True)
+    if moved is not None and any(row.import_hash not in moved for row in earlier):
+        return set()
+    attached = _person_linked(run, [row.id for row in earlier])
+    removed: list[uuid.UUID] = []
+    kept: list[uuid.UUID] = []
+    for row in earlier:
+        untouched = (
+            row.updated_at == row.created_at
+            and row.transfer_group_id is None
+            and row.id not in attached
+        )
+        if untouched:
+            removed.append(row.id)
+            transactions_repo.delete_transaction(db, row)
+            db.expunge(row)
+        else:
+            kept.append(row.id)
+    run.replaced += len(removed)
+    run.kept += len(kept)
+    finding = {
+        "reason": EARLIER_KEPT,
+        "account_id": str(account.id),
+        "count": len(kept),
+        "transactions": [{"transaction_id": str(i)} for i in kept[:IDS_MAX]],
+    }
+    gone = {str(i) for i in removed}
+
+    def answered(item: ReviewItem) -> bool:
+        payload = item.payload or {}
+        if payload.get("reason") == EARLIER_KEPT:
+            # An earlier list of kept rows that no longer says what is kept.
+            return payload.get("account_id") == str(account.id) and payload != finding
+        named = _named_rows(payload)
+        # A finding about rows that are all gone with the earlier reading.
+        return bool(named) and named <= gone
+
+    _supersede(run, answered)
+    if removed:
+        run.changed.add(account.id)
+    if kept and not _answered_before(run, finding):
+        # Listed once: a person who accepted or balanced the statement with
+        # these very rows kept is not asked about them on every later run.
+        run.changed.add(account.id)
+        run.review(ReviewKind.LOW_CONFIDENCE_FIELD, finding)
+    if removed or kept:
+        audit(
+            db,
+            action="import.replace",
+            target_type="document",
+            target_id=run.document.id,
+            after={
+                "account_id": account.id,
+                "replaced": len(removed),
+                "kept": len(kept),
+                "transaction_ids": [str(i) for i in removed[:IDS_MAX]],
+                "kept_ids": [str(i) for i in kept[:IDS_MAX]],
+            },
+            household_id=run.household_id,
+            user_id=run.user_id,
+        )
+    if removed:
+        emit(
+            db,
+            run.household_id,
+            "transaction.deleted",
+            {
+                "document_id": str(run.document.id),
+                "account_id": str(account.id),
+                "count": len(removed),
+                "ids": [str(i) for i in removed[:IDS_MAX]],
+            },
+        )
+    return set(removed)
+
+
+def _settle_near(run: _Run, account: Account, removed: Collection[uuid.UUID]) -> None:
+    """Raise the near-duplicate findings held back for ``account`` (``_Run.near_waiting``).
+
+    A row that resembled only rows the run has just removed as an earlier
+    reading (the same line, read with another description) is no duplicate
+    of anything: it is posted like its neighbours unless it waits for a
+    doubt of its own, and no finding is raised for it. A row that resembled
+    a row a person deleted (no candidate from the start) still waits.
+    """
+    released: list[Transaction] = []
+    for group in run.near_waiting.pop(account.id, []):
+        still: list[tuple[Transaction, list[uuid.UUID]]] = []
+        for row, candidates, doubted in group.rows:
+            left = [c for c in candidates if c not in removed]
+            if candidates and not left:
+                run.possible_duplicates -= 1
+                if not doubted:
+                    row.review_state = ReviewState.NONE
+                    released.append(row)
+                continue
+            still.append((row, left))
+        _near_duplicates_review(run, account, still, statement_index=group.statement_index)
+    _mark_untouched(run.db, released)
+
+
+def _finish_reading(run: _Run) -> None:
+    """After every statement of the run: replace earlier readings, account by account.
+
+    An account is settled only when the run committed a statement to it and
+    none of the document's statements for it waits (``_Run.waiting``), and
+    only when every statement of the document found its account
+    (``_Run.unplaced``): a statement that is held or unplaced may be the
+    one whose rows would look like an earlier reading. Then the rows of the
+    earlier reading go or are listed (:func:`_replace_earlier`) and the
+    statement records of periods the run did not record are dropped
+    (``statement_records.drop_stale_records``). An account whose reading
+    says it may be incomplete (``_Run.incomplete``) is not settled either:
+    what it no longer holds may be what it could not read. Then the
+    statements a person had accepted or balanced are decided
+    (:func:`_settle_standing`). Last, the accounts a statement was moved
+    away from (:func:`_settle_moved`).
+    """
+    for account_id in list(run.read):
+        account = accounts_repo.get_account(run.db, run.household_id, account_id)
+        if account is None:  # pragma: no cover - the run has just written to it
+            continue
+        removed: set[uuid.UUID] = set()
+        settled = account_id not in run.waiting and account_id not in run.incomplete
+        if not run.unplaced and settled:
+            removed = _replace_earlier(run, account)
+            if account_id in run.periods:
+                drop_stale_records(run.db, run.document, account, run.periods[account_id])
+        _settle_near(run, account, removed)
+        _settle_standing(run, account)
+    _settle_moved(run)
+
+
+def _settle_moved(run: _Run) -> None:
+    """Settle the accounts a statement of the document was moved away from.
+
+    A person put a statement on another account (the Accounts dialog, an
+    answer, a mapping's account), and the run committed it there: the rows
+    its earlier reading left on the first account are the same lines a
+    second time. Only when the run committed every statement of the
+    document (none waits, none is without an account, no brokerage
+    statement), and only for an account the actor may import into that got
+    no statement of this reading. Every row of the document there must be a
+    line the run committed elsewhere (the hash it would have on this
+    account is one of the run's rows); then the untouched ones are removed
+    and the others kept and listed, as :func:`_replace_earlier` does, and
+    with no row of the document left the document's statement records of
+    the account are dropped. An account with a row the new reading does not
+    hold anywhere is left as it is: a statement the reading lost is not a
+    statement that moved.
+    """
+    if run.unplaced or run.waiting or not run.read or not any(run.committed):
+        return
+    db = run.db
+    holding = db.execute(
+        select(Transaction.account_id)
+        .where(
+            Transaction.household_id == run.household_id,
+            Transaction.source_document_id == run.document.id,
+            Transaction.import_hash.is_not(None),
+            Transaction.account_id.not_in(sorted(run.read)),
+        )
+        .distinct()
+        .order_by(Transaction.account_id)
+    ).scalars()
+    for account_id in list(holding):
+        account = _usable_account(run, account_id)
+        if account is None:
+            continue
+        moved = {
+            value for rows in run.committed for value in assign_import_hashes(account.id, rows)
+        }
+        _replace_earlier(run, account, moved=moved)
+        left = run.db.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.household_id == run.household_id,
+                Transaction.account_id == account.id,
+                Transaction.source_document_id == run.document.id,
+                Transaction.import_hash.is_not(None),
+            )
+            .limit(1)
+        ).first()
+        if left is None:
+            drop_stale_records(db, run.document, account, ())
+
+
 def _open_items(db: Session, document: Document) -> int:
     """The document's open items that wait on a person (a notice does not)."""
     return review_repo.open_items_of(db, document.household_id, document.id)
@@ -2104,6 +3311,8 @@ def import_extraction(
         assigned={(a.target, a.index): a.account_id for a in assignments},
         allow_overlap=frozenset(allow_overlap),
         answers=document_answers(db, document),
+        parse_skipped=result.parse.skipped_lines if result.parse is not None else 0,
+        parse_warnings=tuple(result.parse.warnings) if result.parse is not None else (),
     )
     statements: Sequence[InvestmentStatement] = result.investments
     if unread is not None and result.parse is not None and result.parse.parser is not None:
@@ -2168,12 +3377,18 @@ def import_extraction(
             answers=run.answers,
             user_id=user_id,
             several=_several_kinds(result),
+            unread=bool(run.parse_skipped)
+            or bool(CONTRADICTION_WARNINGS.intersection(run.parse_warnings)),
         )
         run.overlaps += done.overlaps
         for investment_account in done.accounts:
             if investment_account not in run.accounts:
                 run.accounts.append(investment_account)
         investments = done.summary()
+        # Brokerage cash rows are written from the lines a statement's own
+        # checks let through: what an earlier reading wrote is left alone.
+        run.unplaced = True
+    _finish_reading(run)
     if document.account_id is None and len(run.accounts) == 1:
         document.account_id = run.accounts[0]
     if document.institution_id is None and len(run.accounts) == 1:
@@ -2283,12 +3498,17 @@ def _placed(
     )
     if account_id is None or str(account_id) not in imported_into:
         return {}
-    statements: Sequence[BaseModel] = (
+    statements: Sequence[Statement | InvestmentStatement] = (
         stored_investments(document, db) if investment else result.statements
     )
     if not 0 <= index < len(statements):
         return {}
-    return placement(target, statement_key(statements[index]), account_id)
+    return placement(
+        target,
+        statement_key(statements[index]),
+        account_id,
+        statement_refs(target, statements)[index],
+    )
 
 
 def _placed_group(

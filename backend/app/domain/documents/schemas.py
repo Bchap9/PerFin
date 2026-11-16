@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -72,6 +73,10 @@ class DocumentListItem(DocumentOut):
 
     rank: float | None = None
     snippet: list[SnippetPart] | None = None
+    #: A statement of the document was imported without a balance to check
+    #: it against (``ImportedStatement.unchecked``), on an account the
+    #: caller can see.
+    unchecked: bool = False
 
 
 class DocumentPage(BaseModel):
@@ -100,7 +105,8 @@ class DocumentDetailOut(DocumentOut):
     ``downloadable`` says whether ``GET /documents/{id}/download`` would
     serve the caller (not quarantined, and member or above, or a viewer in a
     household that allows viewer downloads); ``can_edit`` whether the caller
-    may reprocess, link or delete it.
+    may reprocess, link or delete it; ``previewable`` whether ``GET
+    /documents/{id}/preview`` would show the caller its pages.
     """
 
     links: list[DocumentLinkOut]
@@ -108,6 +114,34 @@ class DocumentDetailOut(DocumentOut):
     quarantined: bool
     downloadable: bool
     can_edit: bool
+    previewable: bool = False
+
+
+#: How far a statement was checked against its own balances
+#: (``statement_record.verification``, ``STATEMENT_VERIFICATIONS``).
+Verification = Literal["reconciled", "unverified", "accepted"]
+
+
+class ImportedStatement(BaseModel):
+    """A statement the document produced and the account it went to.
+
+    ``unchecked``: imported, of a document format (PDF or image) and not
+    checked against a balance (``verification = unverified``): the marker
+    "Not checked against a balance". ``transactions`` and ``pending`` count
+    the ledger rows the document produced on the account for this period.
+    """
+
+    account_id: uuid.UUID
+    account_name: str
+    kind: Literal["bank", "investment"]
+    period_start: date | None
+    period_end: date | None
+    outcome: str
+    verification: Verification
+    source_format: str
+    unchecked: bool
+    transactions: int
+    pending: int
 
 
 class DocumentImportedOut(BaseModel):
@@ -115,7 +149,9 @@ class DocumentImportedOut(BaseModel):
 
     Counts only rows in accounts the caller can see. ``child_documents`` are
     attachments or archive members received from this file (an email or ZIP);
-    their own imported rows are included in the other counts.
+    their own imported rows are included in the other counts. ``statements``
+    lists what the file imported, per account and period; ``skipped_lines``
+    is how many lines of the file were counted but not read.
     """
 
     transactions: int
@@ -123,6 +159,8 @@ class DocumentImportedOut(BaseModel):
     loan_payments: int
     balance_snapshots: int
     child_documents: int
+    statements: list[ImportedStatement] = []
+    skipped_lines: int = 0
 
 
 class DocumentReceivedOut(BaseModel):

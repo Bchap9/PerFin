@@ -319,7 +319,11 @@ def _low_confidence(
 def _account_alternatives(
     db: Session, principal: Principal, item: ReviewItem, document: Document | None
 ) -> list[Alternative]:
-    """Accounts the caller edits, best fit first (last four digits, institution, currency)."""
+    """Accounts the caller edits, best fit first (last four digits, institution, currency).
+
+    Equal fits are in the order of their ids, so the order is stable and the
+    first can be pre-selected exactly when its score is above the second's.
+    """
     payload = item.payload or {}
     result = stored_result(document.extraction) if document is not None else None
     last4: str | None = None
@@ -360,7 +364,7 @@ def _account_alternatives(
         if currency and account.currency == currency:
             score += 0.15
         scored.append((round(score, 4), account))
-    scored.sort(key=lambda pair: -pair[0])
+    scored.sort(key=lambda pair: (-pair[0], pair[1].id))
     return [
         Alternative(
             field="account_id",

@@ -106,7 +106,11 @@ class _In(BaseModel):
 
 
 class TransactionCreate(_In):
-    """A manual transaction. ``amount.currency`` must be the account's currency."""
+    """A manual transaction. ``amount.currency`` must be the account's currency.
+
+    ``source_document_id``: the row is added for that document (a line the
+    reader missed, entered in the reconcile view).
+    """
 
     account_id: uuid.UUID
     posted_date: date
@@ -119,6 +123,7 @@ class TransactionCreate(_In):
     notes: NotesText = None
     status: TransactionStatus = TransactionStatus.CLEARED
     tag_ids: TagIds = Field(default_factory=list)
+    source_document_id: uuid.UUID | None = None
 
 
 class TransactionUpdate(_In):

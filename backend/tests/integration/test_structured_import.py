@@ -43,7 +43,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
-from app.domain.imports import proposals
+from app.domain.imports import proposals, statement_answers
 from app.domain.imports import service as imports_service
 from app.domain.imports.models import ImportMapping, StatementRecord
 from app.domain.imports.schemas import (
@@ -62,6 +62,7 @@ from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_csv_layouts as layouts
 from tests.fixtures import synth_ofx_variants as ofx_variants
+from tests.fixtures import synth_trust
 from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.households import Actors, problem_type
 from tests.fixtures.imports import (
@@ -818,6 +819,63 @@ def test_near_duplicates_go_to_review(env: Env) -> None:
     flagged = [r for r in rows if r.review_state is ReviewState.PENDING]
     assert [str(r.id) for r in flagged] == [item.payload["transaction_id"]]
     assert flagged[0].raw_payee == "Initech Payroll"
+
+
+def test_one_near_duplicate_keeps_its_item(env: Env) -> None:
+    stmt = sample_statement(46)
+    account = env.checking(stmt)
+    target = stmt.transactions[0]
+    manual = env.ledger.transaction(
+        account, amount=target.amount, posted_date=target.posted, raw_payee="Typed by hand"
+    )
+    document_id = env.ingest(ofx_sgml_bytes(stmt))
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.POSSIBLE_DUPLICATE
+    (flagged,) = [r for r in env.transactions(account) if r.review_state is ReviewState.PENDING]
+    # One near duplicate: the item per row, as before.
+    assert item.payload == {
+        "reason": "near_match",
+        "account_id": str(account.id),
+        "transaction_id": str(flagged.id),
+        "candidates": [str(manual.id)],
+    }
+
+
+def test_several_near_duplicates_are_one_item(env: Env) -> None:
+    stmt = sample_statement(47)
+    account = env.checking(stmt)
+    # Three statement rows no two of which share a date and an amount.
+    targets: list[Any] = []
+    for txn in stmt.transactions:
+        if all((txn.posted, txn.amount) != (t.posted, t.amount) for t in targets):
+            targets.append(txn)
+        if len(targets) == 3:
+            break
+    assert len(targets) == 3
+    typed = [
+        env.ledger.transaction(
+            account, amount=t.amount, posted_date=t.posted, raw_payee="Typed by hand"
+        )
+        for t in targets
+    ]
+    document_id = env.ingest(ofx_sgml_bytes(stmt))
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.POSSIBLE_DUPLICATE
+    payload = item.payload
+    assert (payload["reason"], payload["count"], payload["statement"]) == ("near_matches", 3, 0)
+    assert payload["account_id"] == str(account.id)
+    assert set(payload) == {"reason", "account_id", "statement", "count", "rows"}
+    flagged = {
+        str(r.id): r for r in env.transactions(account) if r.review_state is ReviewState.PENDING
+    }
+    assert len(flagged) == 3
+    assert {r["transaction_id"] for r in payload["rows"]} == set(flagged)
+    by_day = {(t.posted_date, t.amount): str(t.id) for t in typed}
+    for entry in payload["rows"]:
+        row = flagged[entry["transaction_id"]]
+        assert entry["candidates"] == [by_day[(row.posted_date, row.amount)]]
 
 
 # ---------------------------------------------------------------------------
@@ -2041,3 +2099,254 @@ def test_headerless_card_export_is_never_imported_on_its_balance_owed(env: Env) 
     assert item.payload["reason"] == "mapping_required"
     assert "sign_unverified" in item.payload["suggestion"]["doubts"]
     assert _mappings(env) == []
+
+
+# ---------------------------------------------------------------------------
+# Only the account whose sign is unproven waits (import 1d)
+# ---------------------------------------------------------------------------
+
+
+def _mixed_accounts(env: Env) -> tuple[Account, Account]:
+    """The checking account and the card of ``synth_trust.mixed_sign_accounts_csv``."""
+    checking = env.ledger.account(
+        env.household_id, type=AccountType.CHECKING, number_last4=synth_trust.LAST4
+    )
+    card = env.ledger.account(
+        env.household_id, type=AccountType.CREDIT_CARD, number_last4=synth_trust.CSV_CARD_LAST4
+    )
+    return checking, card
+
+
+def _printed(rows: tuple[synth_trust.Row, ...], *, flipped: bool = False) -> list[Any]:
+    return sorted((day, -amount if flipped else amount) for day, amount, _ in rows)
+
+
+def _answer_sign(env: Env, item: ReviewItem, account: Account, sign: str) -> None:
+    """Resolve ``item`` the way the review queue records a sign answer for one account."""
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        stored = db.get(ReviewItem, item.id)
+        assert stored is not None
+        stored.state = ReviewItemState.RESOLVED
+        stored.resolved_at = datetime.now(UTC)
+        stored.resolution = {
+            "action": "answer_sign",
+            **statement_answers.sign_answer(sign, account.id, "account"),
+        }
+
+
+def _import_again(env: Env, document_id: uuid.UUID) -> imports_service.ImportResult:
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        return imports_service.import_extraction(db, document, result, user_id=env.owner.user.id)
+
+
+def test_only_the_card_group_waits_for_the_sign(env: Env) -> None:
+    """A checking account and a card in one export: the checking rows are not held back."""
+    checking, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    assert _amounts(env.transactions(checking)) == _printed(synth_trust.CSV_CHECKING)
+    assert env.transactions(card) == []
+    (mapping,) = _mappings(env)
+    assert mapping.sign_unverified is True
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "sign_unverified"
+    assert item.payload["account_id"] == str(card.id)
+    assert item.payload["scope"] == "account"
+    assert item.payload["group"] == 1  # the card's first row is the file's second
+    assert item.payload["transactions"] == len(synth_trust.CSV_CARD)
+    assert item.payload["mapping_id"] == str(mapping.id)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    # Ids, counts and the spec only: no payee and no account digits.
+    text = str(item.payload)
+    assert synth_trust.CSV_CARD_LAST4 not in text
+    assert "Hardware" not in text
+
+
+def test_single_card_file_is_held_whole_with_mapping_scope(env: Env) -> None:
+    """One account, a card: the answer is for the layout, and nothing is saved before it."""
+    card = env.ledger.account(env.household_id, type=AccountType.CREDIT_CARD)
+    document_id = env.ingest(layouts.checking_signed_no_balance(), account=card, name="card.csv")
+    assert env.transactions(card) == []
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "sign_unverified"
+    assert item.payload["scope"] == "mapping"
+    assert item.payload["account_id"] == str(card.id)
+    assert item.payload["transactions"] == 6
+    assert "mapping_id" not in item.payload
+    assert _mappings(env) == []
+
+
+def test_two_cards_in_one_file_are_both_held_with_mapping_scope(env: Env) -> None:
+    """Every account of the file is a liability: nothing is imported, the layout is asked about."""
+    first = env.ledger.account(
+        env.household_id, type=AccountType.CREDIT_CARD, number_last4=synth_trust.LAST4
+    )
+    second = env.ledger.account(
+        env.household_id, type=AccountType.LOAN, number_last4=synth_trust.CSV_CARD_LAST4
+    )
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    assert env.transactions(first) == []
+    assert env.transactions(second) == []
+    items = env.open_reviews(document_id)
+    assert [i.payload["scope"] for i in items] == ["mapping", "mapping"]
+    assert {i.payload["account_id"] for i in items} == {str(first.id), str(second.id)}
+    assert _mappings(env) == []
+
+
+def test_account_sign_answer_is_applied_on_the_next_run(env: Env) -> None:
+    """Money out is positive on the card: its rows are spending, the checking rows untouched."""
+    checking, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    before = {t.id: t.amount for t in env.transactions(checking)}
+    (item,) = env.open_reviews(document_id)
+    _answer_sign(env, item, card, "outflow_positive")
+    outcome = _import_again(env, document_id)
+    assert outcome.status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    assert _amounts(env.transactions(card)) == _printed(synth_trust.CSV_CARD, flipped=True)
+    assert sum(1 for t in env.transactions(card) if t.amount < 0) == 3  # the purchases
+    assert {t.id: t.amount for t in env.transactions(checking)} == before
+    # The mapping is still on trust: the answer was for this account of this file.
+    (mapping,) = _mappings(env)
+    assert mapping.sign_unverified is True
+    assert mapping.spec["sign"] == "inflow_positive"
+    # Another run changes nothing: the answer is read again, the rows are known.
+    again = _import_again(env, document_id)
+    assert again.summary["imported"] == 0
+    assert len(env.transactions(card)) == len(synth_trust.CSV_CARD)
+
+
+def test_account_sign_answer_outlives_the_question(env: Env) -> None:
+    """Once the layout's sign is no longer on trust, the card's answer is still read.
+
+    A person saves the mapping in the editor (its sign is theirs now), or a
+    run names the mapping: the card group no longer waits, and reading it
+    with the mapping's sign instead of the answer would add every card row a
+    second time with the sign turned.
+    """
+    checking, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    (item,) = env.open_reviews(document_id)
+    _answer_sign(env, item, card, "outflow_positive")
+    _import_again(env, document_id)
+    flipped = _printed(synth_trust.CSV_CARD, flipped=True)
+    assert _amounts(env.transactions(card)) == flipped
+    (mapping,) = _mappings(env)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        saved = db.get(ImportMapping, mapping.id)
+        assert saved is not None
+        saved.sign_unverified = False
+
+    again = _import_again(env, document_id)
+    assert again.summary["imported"] == 0
+    assert _amounts(env.transactions(card)) == flipped
+
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        named = imports_service.import_extraction(
+            db, document, result, user_id=env.owner.user.id, mapping_id=mapping.id
+        )
+    assert named.summary["imported"] == 0
+    assert _amounts(env.transactions(card)) == flipped
+    assert _amounts(env.transactions(checking)) == _printed(synth_trust.CSV_CHECKING)
+    assert env.open_reviews(document_id) == []
+
+
+def test_a_sign_answer_that_agrees_with_the_file_imports_it_as_printed(env: Env) -> None:
+    _, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    (item,) = env.open_reviews(document_id)
+    _answer_sign(env, item, card, "inflow_positive")
+    assert _import_again(env, document_id).status is DocumentStatus.PROCESSED
+    assert _amounts(env.transactions(card)) == _printed(synth_trust.CSV_CARD)
+
+
+@pytest.mark.parametrize("answer", ["other_account", "bad_sign", "mapping_scope"])
+def test_a_sign_answer_for_something_else_leaves_the_card_held(env: Env, answer: str) -> None:
+    """An answer about another account, or one that is no account answer, imports nothing."""
+    checking, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    (item,) = env.open_reviews(document_id)
+    if answer == "other_account":
+        _answer_sign(env, item, checking, "outflow_positive")
+    else:
+        _answer_sign(env, item, card, "outflow_positive")
+        with env.factories.transaction() as db:
+            set_context(db, env.household_id)
+            stored = db.get(ReviewItem, item.id)
+            assert stored is not None
+            assert stored.resolution is not None
+            stored.resolution = {
+                **stored.resolution,
+                **({"sign": "negative"} if answer == "bad_sign" else {"scope": "mapping"}),
+            }
+    outcome = _import_again(env, document_id)
+    assert outcome.status is DocumentStatus.NEEDS_REVIEW
+    assert env.transactions(card) == []
+    assert _amounts(env.transactions(checking)) == _printed(synth_trust.CSV_CHECKING)
+    (held,) = env.open_reviews(document_id)
+    assert held.payload["account_id"] == str(card.id)
+    assert held.payload["scope"] == "account"
+
+
+#: ``Date,Description,Amount``: four deposits and one withdrawal (a savings
+#: export). Nothing proves the sign and most rows are money in.
+_DEPOSITS = (
+    "Date,Description,Amount\r\n"
+    "2026-{month}-02,Transfer from everyday account,400.00\r\n"
+    "2026-{month}-09,Transfer from everyday account,250.00\r\n"
+    "2026-{month}-16,Interest paid,3.18\r\n"
+    "2026-{month}-21,Transfer to everyday account,-120.00\r\n"
+    "2026-{month}-28,Transfer from everyday account,400.00\r\n"
+)
+
+
+def test_answered_layout_is_not_asked_again(env: Env) -> None:
+    """A mostly-deposit export: asked about once, then its saved mapping is the answer."""
+    savings = env.ledger.account(env.household_id, type=AccountType.SAVINGS)
+    first = env.ingest(_DEPOSITS.format(month="05").encode(), account=savings, name="may.csv")
+    (item,) = env.open_reviews(first)
+    assert item.payload["auto_import"] == "sign_unverified"
+    assert item.payload["suggestion"]["doubts"] == ["sign_unverified"]
+    assert env.transactions(savings) == []
+    # The person answers for the layout: the mapping is saved as theirs.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        saved = make_import_mapping(
+            db,
+            env.household_id,
+            spec=item.payload["suggested_spec"],
+            rows=[["Date", "Description", "Amount"]],
+        )
+        assert saved.sign_unverified is False
+    second = env.ingest(_DEPOSITS.format(month="06").encode(), account=savings, name="june.csv")
+    assert env.open_reviews(second) == []
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    amounts = [t.amount for t in env.transactions(savings)]
+    assert len(amounts) == 5
+    assert sum(1 for amount in amounts if amount > 0) == 4
+    # The same holds when the account is a card: the person said what the sign is.
+    card = env.ledger.account(env.household_id, type=AccountType.CREDIT_CARD)
+    third = env.ingest(_DEPOSITS.format(month="07").encode(), account=card, name="july.csv")
+    assert env.open_reviews(third) == []
+    assert len(env.transactions(card)) == 5
+
+
+def test_a_header_and_a_total_row_has_nothing_to_map(env: Env) -> None:
+    """An export of an empty period: column names and a total of nothing."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    data = b"Date,Description,Amount\r\nTotal,,0.00\r\n"
+    document_id = env.ingest(data, account=account, name="empty.csv")
+    (item,) = env.open_reviews(document_id)
+    assert item.payload == {"reason": "no_rows", "source": "table", "table": 0}

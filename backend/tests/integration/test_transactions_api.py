@@ -18,17 +18,25 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import func, select
 
-from app.auth.models import GrantLevel
+from app.auth.models import GrantLevel, HouseholdRole
+from app.auth.principal import Principal
 from app.core.settings import Settings
 from app.db.models import Setting, SettingScope
 from app.db.rls import set_context
 from app.domain.accounts.models import Account
+from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.documents.models import Document
+from app.domain.imports.models import ImportTombstone
+from app.domain.review import repo as review_repo
+from app.domain.review.models import ImportHashAlias
 from app.domain.transactions import service
+from app.domain.transactions.import_hash import import_hash
 from app.domain.transactions.models import (
     ReviewState,
     Transaction,
@@ -36,6 +44,7 @@ from app.domain.transactions.models import (
     TransactionStatus,
     TransactionTag,
 )
+from tests.fixtures.documents import make_document
 from tests.fixtures.factories import AuthedClient, Factories, UserRecord
 from tests.fixtures.households import (
     API,
@@ -226,6 +235,76 @@ def test_filters(world: World) -> None:
     assert world.owner.get(TXN, params={"review_state": "bogus"}).status_code == 422
     too_many = [str(uuid.uuid4()) for _ in range(51)]
     assert world.owner.get(TXN, params={"account": too_many}).status_code == 422
+
+
+def _document(world: World, tmp_path: Path, account: Account, name: str) -> Document:
+    """A stored statement of ``account`` (bytes differ per ``name``)."""
+    store = LocalFSBlobStore(tmp_path / "documents", tmp_path / "quarantine")
+    with world.factories.transaction() as db:
+        return make_document(
+            db,
+            store,
+            world.factories.keyring,
+            account.household_id,
+            data=f"Date,Payee,Amount\n2026-03-02,{name},-1.00\n".encode(),
+            filename=f"{name}.csv",
+            account_id=account.id,
+        )
+
+
+def test_list_by_source_document(world: World, tmp_path: Path) -> None:
+    ledger, acct = world.ledger, world.edit_acct
+    first = _document(world, tmp_path, acct, "first-export")
+    second = _document(world, tmp_path, acct, "second-export")
+    hidden = _document(world, tmp_path, world.hidden_acct, "hidden-export")
+    a1 = ledger.transaction(acct, amount="-4.10", source_document_id=first.id)
+    a2 = ledger.transaction(acct, amount="-5.20", source_document_id=first.id)
+    b1 = ledger.transaction(acct, amount="-6.30", source_document_id=second.id)
+    manual = ledger.transaction(acct, amount="-7.40")
+    on_hidden = ledger.transaction(world.hidden_acct, amount="-8.50", source_document_id=hidden.id)
+
+    def ids(client: AuthedClient, document: Document) -> set[str]:
+        return set(_ids(client.get(TXN, params={"document": str(document.id)})))
+
+    assert ids(world.owner, first) == {str(a1.id), str(a2.id)}
+    assert ids(world.owner, second) == {str(b1.id)}
+    assert ids(world.member, first) == {str(a1.id), str(a2.id)}
+    assert str(manual.id) not in ids(world.owner, first) | ids(world.owner, second)
+    # Rows on an account the caller cannot see: an empty page, never 403 or 404.
+    assert ids(world.owner, hidden) == {str(on_hidden.id)}
+    for client in (world.member, world.viewer, world.outsider):
+        response = client.get(TXN, params={"document": str(hidden.id)})
+        assert response.status_code == 200, response.text
+        assert response.json() == {"items": [], "next_cursor": None}
+    # Another household's document, or one that does not exist, reads the same.
+    assert ids(world.outsider, first) == set()
+    response = world.owner.get(TXN, params={"document": str(uuid.uuid4())})
+    assert response.json() == {"items": [], "next_cursor": None}
+    assert world.owner.get(TXN, params={"document": "not-a-uuid"}).status_code == 422
+
+
+def test_document_filter_combines_with_review_state(world: World, tmp_path: Path) -> None:
+    ledger, acct = world.ledger, world.edit_acct
+    first = _document(world, tmp_path, acct, "first-export")
+    second = _document(world, tmp_path, acct, "second-export")
+    waiting = ledger.transaction(
+        acct, amount="-4.10", source_document_id=first.id, review_state=ReviewState.PENDING
+    )
+    posted = ledger.transaction(acct, amount="-5.20", source_document_id=first.id)
+    ledger.transaction(
+        acct, amount="-6.30", source_document_id=second.id, review_state=ReviewState.PENDING
+    )
+
+    def ids(**params: Any) -> set[str]:
+        return set(_ids(world.owner.get(TXN, params={"document": str(first.id), **params})))
+
+    assert ids(review_state="pending") == {str(waiting.id)}
+    assert ids(review_state="none") == {str(posted.id)}
+    assert ids(account=str(acct.id), review_state=["pending", "none"]) == {
+        str(waiting.id),
+        str(posted.id),
+    }
+    assert ids(account=str(world.view_acct.id)) == set()
 
 
 def _tag(db: Any, transaction: Transaction, tag: Any) -> None:
@@ -511,6 +590,196 @@ def test_delete_keeps_audit_row(world: World) -> None:
     assert rows[0].before["account_id"] == str(world.edit_acct.id)
     assert [e.payload["id"] for e in household_events(world.factories, hh, "transaction.deleted")]
     assert world.member.delete(f"{TXN}/{row.id}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Tombstones; a row added for a document
+# ---------------------------------------------------------------------------
+
+
+def _tombstones(world: World) -> list[ImportTombstone]:
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        rows = list(
+            db.execute(
+                select(ImportTombstone)
+                .where(ImportTombstone.household_id == world.household_id)
+                .order_by(ImportTombstone.id)
+            ).scalars()
+        )
+        for row in rows:
+            db.expunge(row)
+        return rows
+
+
+def _alias(world: World, kept: Transaction, hash_index: int) -> str:
+    """Give ``kept`` one more hash (a confirmed duplicate's), and return it."""
+    value = import_hash(kept.account_id, kept.posted_date, kept.amount, "merged copy", hash_index)
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        review_repo.add_alias(db, world.household_id, kept.account_id, kept.id, value)
+    return value
+
+
+def test_deleting_an_imported_row_leaves_a_tombstone(world: World) -> None:
+    hh = world.household_id
+    row = world.ledger.transaction(
+        world.edit_acct,
+        amount="-19.75",
+        posted_date=date(2026, 4, 9),
+        raw_payee="Synthetic Bakery",
+        with_import_hash=True,
+    )
+    assert row.import_hash is not None
+    assert world.member.delete(f"{TXN}/{row.id}").status_code == 204
+    [stone] = _tombstones(world)
+    assert stone.import_hash == row.import_hash
+    assert stone.account_id == world.edit_acct.id
+    assert stone.posted_date == date(2026, 4, 9)
+    assert stone.amount == Decimal("-19.75")
+    assert stone.deleted_by == world.member.user.id
+    assert stone.deleted_at is not None
+    [entry] = household_audit(world.factories, hh, "transaction.delete")
+    assert entry.before is not None
+    assert entry.before["tombstoned"] is True
+    assert "Synthetic Bakery" not in str(entry.before)
+    assert row.import_hash not in str(entry.before)
+
+
+def test_deleting_a_manual_row_leaves_none(world: World) -> None:
+    hh = world.household_id
+    row = world.ledger.transaction(world.edit_acct, amount="-3.00")
+    assert row.import_hash is None
+    assert world.member.delete(f"{TXN}/{row.id}").status_code == 204
+    assert _tombstones(world) == []
+    [entry] = household_audit(world.factories, hh, "transaction.delete")
+    assert entry.before is not None
+    assert entry.before["tombstoned"] is False
+
+
+def test_alias_hashes_are_tombstoned_with_the_kept_row(world: World) -> None:
+    acct = world.edit_acct
+    kept = world.ledger.transaction(acct, amount="-8.00", with_import_hash=True)
+    other = world.ledger.transaction(acct, amount="-9.00", with_import_hash=True, hash_index=1)
+    typed = world.ledger.transaction(acct, amount="-10.00")
+    assert kept.import_hash is not None
+    first, second = _alias(world, kept, 7), _alias(world, kept, 8)
+    of_other = _alias(world, other, 9)
+    of_typed = _alias(world, typed, 10)
+
+    assert world.member.delete(f"{TXN}/{kept.id}").status_code == 204
+    stones = _tombstones(world)
+    assert {s.import_hash for s in stones} == {kept.import_hash, first, second}
+    assert {(s.posted_date, s.amount, s.account_id) for s in stones} == {
+        (kept.posted_date, Decimal("-8.00"), acct.id)
+    }
+    assert of_other not in {s.import_hash for s in stones}
+    assert _count(world.factories, world.household_id, ImportHashAlias) == 2
+
+    # A typed row that stands for an imported one: its alias is all there is to remember.
+    assert world.member.delete(f"{TXN}/{typed.id}").status_code == 204
+    assert {s.import_hash for s in _tombstones(world)} == {
+        kept.import_hash,
+        first,
+        second,
+        of_typed,
+    }
+    [_, entry] = household_audit(world.factories, world.household_id, "transaction.delete")
+    assert entry.before is not None
+    assert entry.before["tombstoned"] is True
+    assert entry.before["imported"] is False
+
+
+def test_bulk_delete_tombstones_each_imported_row(world: World) -> None:
+    hh, ledger = world.household_id, world.ledger
+    a = ledger.transaction(world.edit_acct, amount="-1.10", with_import_hash=True)
+    b = ledger.transaction(world.edit_acct, amount="-2.20", with_import_hash=True, hash_index=1)
+    typed = ledger.transaction(world.edit_acct, amount="-3.30")
+    view_only = ledger.transaction(world.view_acct, amount="-4.40", with_import_hash=True)
+    b_alias = _alias(world, b, 5)
+    ids = [a.id, b.id, typed.id, view_only.id]
+    response = world.member.post(
+        f"{TXN}/bulk", json={"action": "delete", "ids": [str(i) for i in ids]}
+    )
+    assert response.status_code == 200, response.text
+    assert {r["id"]: r["result"] for r in response.json()["results"]} == {
+        str(a.id): "deleted",
+        str(b.id): "deleted",
+        str(typed.id): "deleted",
+        str(view_only.id): "not_found",
+    }
+    stones = _tombstones(world)
+    assert {s.import_hash for s in stones} == {a.import_hash, b.import_hash, b_alias}
+    assert {s.deleted_by for s in stones} == {world.member.user.id}
+    marks = {
+        r.target_id: (r.before or {}).get("tombstoned")
+        for r in household_audit(world.factories, hh, "transaction.bulk_delete")
+    }
+    assert marks == {str(a.id): True, str(b.id): True, str(typed.id): False}
+
+
+def test_a_delete_made_for_another_change_leaves_no_tombstone(world: World) -> None:
+    """Deleting a document with its rows (plan 1d, decision 9: the file can be
+    uploaded again whole) and confirming a duplicate (its hash moves to the row
+    that is kept) call the service as it is: only a person's own delete of one
+    row asks for a tombstone."""
+    row = world.ledger.transaction(world.edit_acct, amount="-1.00", with_import_hash=True)
+    _alias(world, row, 3)
+    principal = Principal(
+        user=world.owner.user,
+        household_id=world.household_id,
+        role=HouseholdRole.OWNER,
+        auth_method="session",
+    )
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        loaded = service.get_visible_transaction(db, principal, row.id, need="edit", lock=True)
+        service.delete_transaction(db, principal, loaded, request=None)
+    assert world.owner.get(f"{TXN}/{row.id}").status_code == 404
+    assert _tombstones(world) == []
+    [entry] = household_audit(world.factories, world.household_id, "transaction.delete")
+    assert entry.before is not None
+    assert entry.before["tombstoned"] is False
+
+
+def test_create_for_a_document_needs_an_editable_document(world: World, tmp_path: Path) -> None:
+    hh = world.household_id
+    own = _document(world, tmp_path, world.edit_acct, "own-export")
+    read_only = _document(world, tmp_path, world.view_acct, "read-only-export")
+    hidden = _document(world, tmp_path, world.hidden_acct, "hidden-export")
+    foreign = _document(world, tmp_path, world.foreign_acct, "foreign-export")
+
+    def create(document_id: uuid.UUID) -> Any:
+        body = _create_body(world.edit_acct, amount="-6.60", source_document_id=str(document_id))
+        return world.member.post(TXN, json=body)
+
+    for document_id in (foreign.id, hidden.id, uuid.uuid4()):
+        refused = create(document_id)
+        assert refused.status_code == 404, refused.text
+        assert problem_type(refused) == "document-not-found"
+    refused = create(read_only.id)
+    assert refused.status_code == 403, refused.text
+    assert _count(world.factories, hh, Transaction) == 0
+    assert household_audit(world.factories, hh, "transaction.create") == []
+
+    made = create(own.id)
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert body["source_document_id"] == str(own.id)
+    assert _ids(world.owner.get(TXN, params={"document": str(own.id)})) == [body["id"]]
+    with world.factories.transaction() as db:
+        set_context(db, hh)
+        row = db.get(Transaction, uuid.UUID(body["id"]))
+        assert row is not None
+        assert row.import_hash is None
+        assert row.source_document_id == own.id
+    [entry] = household_audit(world.factories, hh, "transaction.create")
+    assert entry.after is not None
+    assert entry.after["source_document_id"] == str(own.id)
+    assert entry.after["imported"] is False
+    # Deleting it again leaves nothing behind: nothing could bring it back.
+    assert world.member.delete(f"{TXN}/{body['id']}").status_code == 204
+    assert _tombstones(world) == []
 
 
 # ---------------------------------------------------------------------------

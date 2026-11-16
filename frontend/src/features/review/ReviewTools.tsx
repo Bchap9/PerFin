@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** The review tools: page highlights, alternative readings, remember layout, rule draft, owner. */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+/** The review tools: page highlights, alternative readings, remember layout, owner, held lines. */
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { Button } from "../../components/Button";
 import { Checkbox } from "../../components/Checkbox";
@@ -19,27 +24,29 @@ import { useAccounts, accountLabel } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { PageViewer } from "../documents/PageViewer";
 import { updateInvestmentTxn } from "../investments/api";
-import { createRule } from "../rules/api";
 import { listMembers, settingsKeys } from "../settings/api";
 import { getTransaction, txKeys } from "../transactions/api";
 import {
-  balanceCorrection,
-  correctItem,
+  draftOf,
   fixFromAlternative,
+  fixFromDraft,
   getReviewItem,
-  getRuleDraft,
   institutionChoices,
   layoutRequest,
+  lineFixable,
   lowConfidenceResolution,
   mergeFix,
   ownerResolution,
   payloadLines,
   payloadPositions,
   payloadString,
+  payloadTransactionIds,
   rememberLayout,
   resolveItem,
   reviewKeys,
   type Alternative,
+  type HeldLine,
+  type LineDraft,
   type ResolveBody,
   type ReviewItem,
   type TransactionFix,
@@ -71,14 +78,21 @@ export function ItemViewer({
   );
 }
 
-function rowIds(detail: ReviewItem): string[] {
-  const ids = new Set<string>();
-  for (const region of detail.regions ?? []) {
+/**
+ * The ledger rows an item is about: the ones its payload lists, then any
+ * other its detail names. A row is listed whether or not the detail has a
+ * box for it: the server gives a box only while the stored reading still
+ * equals the ledger row, so a row corrected after the import has none and
+ * still waits.
+ */
+function rowIds(item: ReviewItem, detail: ReviewItem | undefined): string[] {
+  const ids = new Set<string>(payloadTransactionIds(item));
+  for (const region of detail?.regions ?? []) {
     if (region.transaction_id !== null && region.transaction_id !== undefined) {
       ids.add(region.transaction_id);
     }
   }
-  for (const alt of detail.alternatives ?? []) {
+  for (const alt of detail?.alternatives ?? []) {
     if (alt.transaction_id !== null && alt.transaction_id !== undefined) {
       ids.add(alt.transaction_id);
     }
@@ -86,20 +100,27 @@ function rowIds(detail: ReviewItem): string[] {
   return [...ids];
 }
 
-function useResolve(
+/** The row is gone from the ledger (deleted, or no longer the caller's to see). */
+function isGone(error: unknown): boolean {
+  return isApiError(error) && error.status === 404;
+}
+
+/**
+ * Resolve the item and reload what it may have changed. No toast: the card
+ * says what happened once the list is back.
+ */
+export function useResolve(
   item: ReviewItem,
-  title: string,
-  onError: (message: string) => void,
+  onError: (message: string | null) => void,
 ) {
   const queryClient = useQueryClient();
-  const toast = useToast();
   return useMutation({
     mutationFn: (body: ResolveBody) => resolveItem(item.id, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
       void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
-      toast.notify({ title, tone: "success" });
+      onError(null);
     },
     onError: (caught) => {
       onError(errorMessage(caught));
@@ -188,29 +209,74 @@ function DoubtfulRow({
   );
 }
 
-/** Doubtful rows: highlighted on the page, with other readings to pick from. */
+/**
+ * Doubtful rows: highlighted on the page, with other readings to pick from.
+ * Rendered for an item that lists ledger rows; "Confirm as read" is offered
+ * while one of them still waits (``review_state`` ``pending``), whether or
+ * not the page has a box for it. ``trailing``: the section's other buttons,
+ * shown in the same row.
+ */
 export function LowConfidenceTools({
   item,
   actionable,
+  trailing,
 }: {
   item: ReviewItem;
   actionable: boolean;
+  trailing?: ReactNode;
 }) {
   const detail = useItemDetail(item);
+  const ids = rowIds(item, detail.data);
+  const rows = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: txKeys.one(id),
+      queryFn: () => getTransaction(id),
+    })),
+  });
   const [fixes, setFixes] = useState<TransactionFix[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const resolve = useResolve(item, "Rows confirmed", setError);
+  const resolve = useResolve(item, setError);
+  const actions =
+    trailing === undefined || trailing === null ? null : (
+      <div className="ledger-actions">{trailing}</div>
+    );
   if (detail.isPending) {
-    return <Spinner label="Loading the page" />;
+    return (
+      <>
+        <Spinner label="Loading the page" />
+        {actions}
+      </>
+    );
   }
   if (detail.isError) {
     return (
-      <p role="alert" className="ledger-error">
-        {errorMessage(detail.error)}
-      </p>
+      <>
+        <p role="alert" className="ledger-error">
+          {errorMessage(detail.error)}
+        </p>
+        {actions}
+      </>
     );
   }
-  const ids = rowIds(detail.data);
+  if (rows.some((row) => row.isPending)) {
+    return (
+      <>
+        <Spinner label="Loading the rows" />
+        {actions}
+      </>
+    );
+  }
+  // A row waits when the ledger says so. One that could not be read (other
+  // than because it is gone) may still wait: the server decides on confirm.
+  const waiting = rows.some(
+    (row) =>
+      row.data?.review_state === "pending" ||
+      (row.isError && !isGone(row.error)),
+  );
+  if (!waiting) {
+    // Every row of the item is confirmed or gone: nothing to confirm or correct.
+    return actions;
+  }
   return (
     <div className="ledger-stack">
       <p>
@@ -249,88 +315,12 @@ export function LowConfidenceTools({
               ? "Confirm as read"
               : "Save corrections and confirm"}
           </Button>
-          <RuleDraftButton item={item} />
+          {trailing}
         </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** "Create a rule from this": the server drafts it from the item's first row, one click saves it. */
-export function RuleDraftButton({ item }: { item: ReviewItem }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const [savedId, setSavedId] = useState<string | null>(null);
-  const draft = useMutation({
-    mutationFn: () => getRuleDraft(item.id),
-    onError: (c) => {
-      setError(errorMessage(c));
-    },
-  });
-  const save = useMutation({
-    mutationFn: () => {
-      if (draft.data === undefined) {
-        throw new Error("no draft");
-      }
-      return createRule(draft.data.rule);
-    },
-    onSuccess: (rule) => {
-      setSavedId(rule.id);
-      void queryClient.invalidateQueries({ queryKey: queryRoots.rules });
-    },
-    onError: (c) => {
-      setError(errorMessage(c));
-    },
-  });
-  if (savedId !== null) {
-    return (
-      <Link
-        to="/rules/$ruleId"
-        params={{ ruleId: savedId }}
-        className="link-action"
-      >
-        Rule saved. Open it
-      </Link>
-    );
-  }
-  if (draft.data === undefined) {
-    return (
-      <>
-        <Button
-          loading={draft.isPending}
-          onClick={() => {
-            setError(null);
-            draft.mutate();
-          }}
-        >
-          Create a rule from this
-        </Button>
-        {error === null ? null : (
-          <span role="alert" className="ledger-error">
-            {error}
-          </span>
-        )}
-      </>
-    );
-  }
-  return (
-    <span className="ledger-actions" role="group" aria-label="Rule draft">
-      <span>Draft rule: {draft.data.rule.name}</span>
-      <Button
-        variant="primary"
-        loading={save.isPending}
-        onClick={() => {
-          save.mutate();
-        }}
-      >
-        Save this rule
-      </Button>
-      {error === null ? null : (
-        <span role="alert" className="ledger-error">
-          {error}
-        </span>
+      ) : (
+        actions
       )}
-    </span>
+    </div>
   );
 }
 
@@ -451,9 +441,11 @@ export function NewInstitutionTools({
 export function UnknownOwnerTools({
   item,
   actionable,
+  trailing,
 }: {
   item: ReviewItem;
   actionable: boolean;
+  trailing?: ReactNode;
 }) {
   const { session } = useAuthSession();
   const householdId = session?.household?.id ?? "";
@@ -467,7 +459,7 @@ export function UnknownOwnerTools({
   const [accountId, setAccountId] = useState("");
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const resolve = useResolve(item, "File assigned", setError);
+  const resolve = useResolve(item, setError);
   return (
     <div className="ledger-stack">
       <p>
@@ -527,6 +519,7 @@ export function UnknownOwnerTools({
             >
               Assign this file
             </Button>
+            {trailing}
           </div>
         </>
       ) : null}
@@ -628,7 +621,6 @@ function CostBasisRow({ position }: { position: OpeningPosition }) {
       <div className="ledger-actions">
         <Button
           size="sm"
-          variant="primary"
           disabled={!valid}
           loading={save.isPending}
           onClick={() => {
@@ -660,86 +652,6 @@ export function CostBasisTools({ item, actionable }: { item: ReviewItem; actiona
         <CostBasisRow key={position.transactionId} position={position} />
       ))}
       <p className="ledger-muted">Dismiss this item once every basis is entered.</p>
-    </div>
-  );
-}
-
-/** Enter the statement's opening and closing balance (``POST /review/{id}/correct``). */
-export function BalanceTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const [opening, setOpening] = useState(payloadString(item, "opening") ?? "");
-  const [closing, setClosing] = useState(payloadString(item, "closing") ?? "");
-  const [error, setError] = useState<string | null>(null);
-  const save = useMutation({
-    mutationFn: (resolve: boolean) => correctItem(item.id, balanceCorrection(opening, closing, resolve)),
-    onSuccess: (out, resolve) => {
-      setError(null);
-      void queryClient.invalidateQueries({ queryKey: queryRoots.review });
-      void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
-      void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
-      toast.notify({
-        title: resolve ? "Statement accepted" : "Balances saved",
-        tone: out.payload["status"] === "mismatch" ? "warning" : "success",
-      });
-    },
-    onError: (caught) => {
-      setError(errorMessage(caught));
-    },
-  });
-  const difference = payloadString(item, "difference");
-  if (!actionable) {
-    return null;
-  }
-  return (
-    <div className="ledger-stack" role="group" aria-label="Statement balances">
-      <p>
-        If PerFin misread a balance, enter the balances the statement prints.
-        {difference === null ? "" : ` The rows differ from them by ${difference}.`}
-      </p>
-      <Field label="Opening balance">
-        <Input
-          inputMode="decimal"
-          value={opening}
-          onChange={(event) => {
-            setOpening(event.target.value);
-          }}
-        />
-      </Field>
-      <Field label="Closing balance">
-        <Input
-          inputMode="decimal"
-          value={closing}
-          onChange={(event) => {
-            setClosing(event.target.value);
-          }}
-        />
-      </Field>
-      <div className="ledger-actions">
-        <Button
-          variant="primary"
-          loading={save.isPending}
-          disabled={opening.trim() === "" && closing.trim() === ""}
-          onClick={() => {
-            save.mutate(true);
-          }}
-        >
-          Check and accept
-        </Button>
-        <Button
-          disabled={save.isPending || (opening.trim() === "" && closing.trim() === "")}
-          onClick={() => {
-            save.mutate(false);
-          }}
-        >
-          Save balances only
-        </Button>
-      </div>
-      {error === null ? null : (
-        <p role="alert" className="ledger-error">
-          {error}
-        </p>
-      )}
     </div>
   );
 }
@@ -779,23 +691,122 @@ function doubtWords(fields: string[]): string {
   return fields.map((f) => DOUBT_WORDS.get(f) ?? f).join("; ");
 }
 
+function lineName(line: HeldLine): string {
+  const day =
+    line.date === null ? "this row" : (formatDate(line.date) ?? line.date);
+  return `${day}${line.description === null ? "" : `, ${line.description}`}`;
+}
+
+const KIND_OPTIONS = [...KIND_WORDS].map(([value, label]) => ({ value, label }));
+
+/**
+ * The values of one held line, to type over: its date, amount, quantity and
+ * kind. What is left as read is not sent (``fixFromDraft``).
+ */
+function LineEditor({
+  line,
+  draft,
+  currency,
+  onChange,
+  onClose,
+}: {
+  line: HeldLine;
+  draft: LineDraft;
+  currency: string | null;
+  onChange: (draft: LineDraft) => void;
+  onClose: () => void;
+}) {
+  const invalid = fixFromDraft(line, draft, currency) === "invalid";
+  return (
+    <div
+      className="review-line-editor"
+      role="group"
+      aria-label={`Correct the line of ${lineName(line)}`}
+    >
+      <Field label="Date">
+        <Input
+          type="date"
+          value={draft.date}
+          onChange={(event) => {
+            onChange({ ...draft, date: event.target.value });
+          }}
+        />
+      </Field>
+      {currency === null ? null : (
+        <>
+          <Field label="Amount" hint="Money out is negative.">
+            <Input
+              inputMode="decimal"
+              value={draft.amount}
+              onChange={(event) => {
+                onChange({ ...draft, amount: event.target.value });
+              }}
+            />
+          </Field>
+          <Field label="Quantity" hint="Leave empty to keep what was read.">
+            <Input
+              inputMode="decimal"
+              value={draft.quantity}
+              onChange={(event) => {
+                onChange({ ...draft, quantity: event.target.value });
+              }}
+            />
+          </Field>
+        </>
+      )}
+      <Field label="Kind">
+        <Select
+          placeholder="As read"
+          options={KIND_OPTIONS}
+          value={draft.type}
+          onChange={(event) => {
+            onChange({ ...draft, type: event.target.value });
+          }}
+        />
+      </Field>
+      <div className="ledger-actions">
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          Leave as read
+        </Button>
+      </div>
+      {invalid ? (
+        <p role="alert" className="ledger-error">
+          Enter the date as a day and the amounts as plain numbers.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * The activity lines of a brokerage statement that are in doubt (payload
  * ``lines``): the date, section, description and amount printed, the page
  * to find each on, and why PerFin doubts it. Nothing here is in the ledger
  * yet; the item's actions decide about all of them, or, where the lines
  * stand alone (``selected`` and ``onSelect`` given), about the ticked ones.
- * The holdings that wait with them (payload ``positions``) are listed under
- * the lines.
+ * With ``drafts`` and ``onDraft``, a line whose only doubts are its date,
+ * amount, quantity or kind gets "Correct": the values are typed over and the
+ * card imports the corrected lines. With ``left`` and ``onLeave`` too, every
+ * line has a "Leave out" tick: importing the corrected lines drops the others
+ * for good, so the person says so line by line. The holdings that wait with
+ * them (payload ``positions``) are listed under the lines.
  */
 export function HeldLines({
   item,
   selected,
   onSelect,
+  drafts,
+  onDraft,
+  left,
+  onLeave,
 }: {
   item: ReviewItem;
   selected?: ReadonlySet<number>;
   onSelect?: (index: number, chosen: boolean) => void;
+  drafts?: ReadonlyMap<number, LineDraft>;
+  onDraft?: (index: number, draft: LineDraft | null) => void;
+  left?: ReadonlySet<number>;
+  onLeave?: (index: number, chosen: boolean) => void;
 }) {
   const lines = payloadLines(item);
   const positions = payloadPositions(item);
@@ -804,6 +815,9 @@ export function HeldLines({
   }
   const currency = payloadString(item, "currency");
   const choosing = selected !== undefined && onSelect !== undefined;
+  const correcting =
+    drafts !== undefined && onDraft !== undefined && lines.some(lineFixable);
+  const leaving = correcting && left !== undefined && onLeave !== undefined;
   return (
     <>
       {lines.length === 0 ? null : (
@@ -825,6 +839,12 @@ export function HeldLines({
                 <th scope="col">Amount</th>
                 <th scope="col">Page</th>
                 <th scope="col">Why</th>
+                {correcting ? (
+                  <th scope="col">
+                    <span className="visually-hidden">Correct</span>
+                  </th>
+                ) : null}
+                {leaving ? <th scope="col">Leave out</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -834,7 +854,7 @@ export function HeldLines({
                     <td>
                       <input
                         type="checkbox"
-                        aria-label={`Import the line of ${line.date === null ? "this row" : (formatDate(line.date) ?? line.date)}${line.description === null ? "" : `, ${line.description}`}`}
+                        aria-label={`Import the line of ${lineName(line)}`}
                         checked={selected.has(line.index)}
                         onChange={(event) => {
                           onSelect(line.index, event.target.checked);
@@ -865,12 +885,60 @@ export function HeldLines({
                   </td>
                   <td>{line.page === null ? "" : String(line.page)}</td>
                   <td>{doubtWords(line.fields)}</td>
+                  {correcting ? (
+                    <td>
+                      {lineFixable(line) ? (
+                        <Button
+                          size="sm"
+                          aria-expanded={drafts.has(line.index)}
+                          onClick={() => {
+                            if (!drafts.has(line.index)) {
+                              onDraft(line.index, draftOf(line));
+                            }
+                          }}
+                        >
+                          Correct
+                        </Button>
+                      ) : null}
+                    </td>
+                  ) : null}
+                  {leaving ? (
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Leave out the line of ${lineName(line)}`}
+                        checked={left.has(line.index)}
+                        onChange={(event) => {
+                          onLeave(line.index, event.target.checked);
+                        }}
+                      />
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      {correcting
+        ? lines.map((line) => {
+            const draft = drafts.get(line.index);
+            return draft === undefined ? null : (
+              <LineEditor
+                key={line.index}
+                line={line}
+                draft={draft}
+                currency={currency}
+                onChange={(next) => {
+                  onDraft(line.index, next);
+                }}
+                onClose={() => {
+                  onDraft(line.index, null);
+                }}
+              />
+            );
+          })
+        : null}
       {positions.length === 0 ? null : (
         <div
           className="mapping-grid"

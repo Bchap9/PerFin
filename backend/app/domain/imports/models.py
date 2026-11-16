@@ -44,6 +44,21 @@ imported (it then stays out). A new statement whose stated period overlaps
 an imported, stated one of the same account from another document waits in
 review (``statement_overlap``). Both references cascade: the record goes
 with its account or document.
+
+``statement_record.verification`` says how far the statement was checked
+against its own balances (SECURITY.md C12): ``reconciled`` (its balances
+agreed with its rows, at import or later in the reconcile view),
+``accepted`` (a person accepted it without balancing) or ``unverified``
+(everything else, including CSV, OFX and QIF, which carry nothing to
+reconcile). Only a ``reconciled`` statement writes a balance snapshot.
+
+``import_tombstone`` is one imported ledger row a person deleted: the
+account and the row's ``import_hash``, when and by whom, and the row's
+date and amount so the reconcile view can list it and offer "Put back".
+No payee text is kept. A hash with a tombstone is never imported into that
+account again (the same statement read again, or arriving as another
+file). The account reference cascades; ``deleted_by`` is cleared with the
+user.
 """
 
 from __future__ import annotations
@@ -88,6 +103,8 @@ NAME_MAX = 200
 STATEMENT_KINDS: Final = ("bank", "investment")
 #: ``statement_record.outcome`` values.
 STATEMENT_OUTCOMES: Final = ("imported", "skipped")
+#: ``statement_record.verification`` values (module doc).
+STATEMENT_VERIFICATIONS: Final = ("reconciled", "unverified", "accepted")
 
 
 class ImportMapping(UUIDPk, Timestamps, HouseholdScoped, Base):
@@ -148,6 +165,9 @@ class StatementRecord(UUIDPk, Timestamps, HouseholdScoped, Base):
         CheckConstraint("kind IN ('bank', 'investment')", name="kind_known"),
         CheckConstraint("outcome IN ('imported', 'skipped')", name="outcome_known"),
         CheckConstraint("source_format ~ '^[a-z]{1,16}$'", name="source_format_code"),
+        CheckConstraint(
+            "verification IN ('reconciled', 'unverified', 'accepted')", name="verification_known"
+        ),
         currency_check(),
         Index("ix_statement_record_account_period", "household_id", "account_id", "period_start"),
     )
@@ -170,6 +190,36 @@ class StatementRecord(UUIDPk, Timestamps, HouseholdScoped, Base):
     closing_cash: Mapped[Decimal | None] = mapped_column(AMOUNT)
     holdings_value: Mapped[Decimal | None] = mapped_column(AMOUNT)
     total_value: Mapped[Decimal | None] = mapped_column(AMOUNT)
+    #: One of :data:`STATEMENT_VERIFICATIONS` (module doc).
+    verification: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default=text("'unverified'")
+    )
 
     def __repr__(self) -> str:
         return f"StatementRecord(id={self.id!s}, kind={self.kind})"
+
+
+class ImportTombstone(UUIDPk, Timestamps, HouseholdScoped, Base):
+    """One imported row a person deleted: its hash stays out of the account (module doc)."""
+
+    __tablename__ = "import_tombstone"
+    __table_args__ = (
+        household_fk("import_tombstone", "account_id", "account"),
+        UniqueConstraint(
+            "household_id", "account_id", "import_hash", name="uq_import_tombstone_hash"
+        ),
+        CheckConstraint("import_hash ~ '^[0-9a-f]{64}$'", name="import_hash_hex"),
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    import_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("app_user.id", ondelete="SET NULL")
+    )
+    #: The deleted row's date and amount, for the list of removed rows.
+    posted_date: Mapped[date | None] = mapped_column(Date)
+    amount: Mapped[Decimal | None] = mapped_column(AMOUNT)
+
+    def __repr__(self) -> str:
+        return f"ImportTombstone(id={self.id!s}, account_id={self.account_id!s})"

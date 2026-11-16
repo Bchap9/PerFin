@@ -6,7 +6,8 @@
   and ``document`` rows and enqueue ``ingest_document`` **in the caller's
   transaction** (the job exists exactly when the document does). A file whose
   SHA-256 is already in the household does not go through the pipeline: it is
-  ``needs_review`` with a ``possible_duplicate`` review item.
+  skipped (``rejected``, error ``duplicate``) with a ``possible_duplicate``
+  notice (``same_content_skipped``); reprocessing the copy imports it anyway.
 * :func:`open_plaintext`: the decrypted content as a stream (the worker feeds
   it to the sandbox; the download route will stream it as an attachment).
 * :func:`promote_blob`: quarantine -> permanent without re-encryption; the
@@ -59,6 +60,9 @@ from app.domain.documents.schemas import INGEST_JOB_TYPE, IngestDocumentPayload
 log = get_logger(__name__)
 
 FILENAME_MAX = 255
+# ``document.error`` of a file whose content the household already holds (the
+# same word the review resolution writes when a person confirms a duplicate).
+DUPLICATE_ERROR = "duplicate"
 
 
 def document_not_found() -> ProblemError:
@@ -137,6 +141,11 @@ def record_received(
     With ``hold`` (a review kind and payload) the document waits in
     ``needs_review`` behind that item instead of being enqueued; the item's
     resolution sends it through the pipeline (drop-folder ``unknown_owner``).
+
+    A byte-identical copy of a live document is not a question: it is recorded
+    as ``rejected`` with ``error = "duplicate"`` and an open notice that names
+    the earlier document, and no job is queued. A held copy is not skipped: it
+    waits for its answer as before (``same_content`` beside the hold's item).
     """
     blob = Blob(
         id=sealed.blob_id,
@@ -155,14 +164,18 @@ def record_received(
     db.add(blob)
     db.flush()
     duplicate_of = repo.find_duplicate(db, household_id, sha256)
+    skipped = duplicate_of is not None and hold is None
+    if hold is not None:
+        status = DocumentStatus.NEEDS_REVIEW
+    elif skipped:
+        status = DocumentStatus.REJECTED
+    else:
+        status = DocumentStatus.RECEIVED
     document = Document(
         household_id=household_id,
         blob_id=blob.id,
-        status=(
-            DocumentStatus.NEEDS_REVIEW
-            if duplicate_of is not None or hold is not None
-            else DocumentStatus.RECEIVED
-        ),
+        status=status,
+        error=DUPLICATE_ERROR if skipped else None,
         source=source,
         source_meta=dict(source_meta or {}),
         sha256=sha256,
@@ -182,7 +195,10 @@ def record_received(
             db,
             household_id,
             ReviewKind.POSSIBLE_DUPLICATE,
-            {"reason": "same_content", "duplicate_of": str(duplicate_of)},
+            {
+                "reason": "same_content_skipped" if skipped else "same_content",
+                "duplicate_of": str(duplicate_of),
+            },
             document_id=document.id,
         )
     elif hold is None:

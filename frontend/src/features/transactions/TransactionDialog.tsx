@@ -7,6 +7,7 @@
  * transfer leg (`409`), so the amount is locked there with the reason.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "../../components/Button";
@@ -397,7 +398,12 @@ export function TransactionDialog({ transaction, defaultAccountId, onClose }: Tr
           />
         </Field>
         {transaction?.source_document_id == null ? null : (
-          <p className="ledger-muted tx-form__wide">This transaction was imported from a document. Changes here do not change the document.</p>
+          <p className="ledger-muted tx-form__wide">
+            <Link to="/documents/$documentId" params={{ documentId: transaction.source_document_id }} search={{ row: transaction.id }}>
+              Imported from a document: open it
+            </Link>
+            . Changes here do not change the document.
+          </p>
         )}
         {serverError === null ? null : (
           <p role="alert" className="ledger-error tx-form__wide">

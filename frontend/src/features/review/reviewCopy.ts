@@ -15,6 +15,7 @@ import {
   payloadNumber,
   payloadSections,
   payloadString,
+  resemblesRemoved,
   type Difference,
   type ReviewItem,
   type SectionDifference,
@@ -248,15 +249,40 @@ const MAPPING_DOUBTS: readonly (readonly [string, ReturnType<Copy>])[] = [
   ],
 ];
 
+/**
+ * How to answer the sign question where the card asks it (two buttons, no
+ * mapping editor): a file held for nothing but the sign of its amounts.
+ */
+const SIGN_ANSWER_STEPS = [
+  "Find a row you recognise on the file, a purchase for example.",
+  "Choose “Money out” if purchases are printed as positive amounts, “Money in” otherwise.",
+  "The file is imported right away with your answer.",
+];
+
 /** `mapping_required`: the question of the suggestion's doubt, else the general words. */
 function mappingRequired(item: ReviewItem): ReturnType<Copy> {
   const doubts = suggestionDoubts(item);
-  if (payloadString(item, "auto_import") === "sign_unverified") {
+  const signOnly = payloadString(item, "auto_import") === "sign_unverified";
+  if (signOnly) {
     doubts.push("sign_unverified");
   }
   const found = MAPPING_DOUBTS.find(([doubt]) => doubts.includes(doubt));
-  return found === undefined ? MAPPING_REQUIRED : found[1];
+  if (found === undefined) {
+    return MAPPING_REQUIRED;
+  }
+  // The card answers a file held only for its sign in place; the mapping
+  // editor's steps would point at a link the card does not show.
+  return signOnly && found[0] === "sign_unverified"
+    ? { ...found[1], steps: SIGN_ANSWER_STEPS }
+    : found[1];
 }
+
+/** A statement to settle in the reconcile view: the one button, then what to do there. */
+const RECONCILE_STEPS = [
+  "Open “Check against the statement”.",
+  "Correct, add or remove rows until the difference is zero, then confirm.",
+  "If the statement cannot be made to balance, accept it as read.",
+];
 
 const ACCOUNT_STEPS = [
   "Choose the account below and import.",
@@ -336,12 +362,38 @@ const COPY: Readonly<Record<string, Copy>> = {
       "“Not a duplicate” to import it anyway.",
     ],
   }),
-  "possible_duplicate:near_match": () => ({
-    title: "Possible duplicate row",
-    what: "A row of this file has the same date and amount as a transaction already recorded.",
+  "possible_duplicate:near_match": (item) =>
+    resemblesRemoved(item)
+      ? {
+          title: "A row you deleted?",
+          what: "A row of this file has the same date and amount as a row you deleted from this account.",
+          steps: [
+            "“Remove it again” if it is the row you deleted.",
+            "“Keep it” if it is another payment of that amount on that day.",
+          ],
+        }
+      : {
+          title: "Possible duplicate row",
+          what: "A row of this file has the same date and amount as a transaction already recorded.",
+          steps: [
+            "Compare the two rows.",
+            "“It is a duplicate” removes the new one; “Not a duplicate” keeps both.",
+          ],
+        },
+  "possible_duplicate:near_matches": (item) => ({
+    title: "Rows that may already be in PerFin",
+    what: `${count(item, "count")} rows of this statement have the same date and amount as rows already in the account.`,
     steps: [
-      "Compare the two rows.",
-      "“It is a duplicate” removes the new one; “Not a duplicate” keeps both.",
+      "Compare each pair.",
+      "Say which are the same row; the others are kept as new.",
+    ],
+  }),
+  "possible_duplicate:same_content_skipped": () => ({
+    title: "Already uploaded",
+    what: "This file is byte for byte the same as one you uploaded before, so PerFin skipped it.",
+    steps: [
+      "Nothing to do.",
+      "If you do want it read again, choose “Import it anyway”.",
     ],
   }),
   // -- unparsed --------------------------------------------------------------
@@ -706,15 +758,12 @@ const COPY: Readonly<Record<string, Copy>> = {
         : `The statement's running balance vouches for the other ${String(total - doubted)} rows, so only ${doubted === 1 ? "1 row is" : `${String(doubted)} rows are`} pending; no balance was recorded.`;
     return {
       title: "The statement does not add up",
-      what: "The rows read from this statement do not add up to its opening and closing balance.",
+      what:
+        payloadString(item, "cause") === "summary_totals_mismatch"
+          ? "The opening balance, the rows and the closing balance agree, but the statement's own summary of payments and charges does not match the rows."
+          : "The rows read from this statement do not add up to its opening and closing balance.",
       why,
-      steps: [
-        "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
-        some && doubted !== 0
-          ? "Otherwise compare the pending rows with the document and correct the wrong ones."
-          : "Otherwise compare the rows with the document and correct the wrong ones.",
-        "Confirm when the totals match.",
-      ],
+      steps: RECONCILE_STEPS,
     };
   },
   "low_confidence_field:accounts_not_read": (item) => {
@@ -777,10 +826,7 @@ const COPY: Readonly<Record<string, Copy>> = {
   "low_confidence_field:reconciliation_unavailable": () => ({
     title: "Could not check the totals",
     what: "PerFin found no balances on this statement to check its rows against, so they are pending.",
-    steps: [
-      "If the statement prints its opening and closing balance, enter them and “Check and accept”.",
-      "Or glance over the rows and confirm them.",
-    ],
+    steps: RECONCILE_STEPS,
   }),
   "low_confidence_field:investment_opening_basis_unknown": (item) => {
     // A statement's holding without a printed cost is opened at its price;
@@ -976,7 +1022,14 @@ const COPY: Readonly<Record<string, Copy>> = {
         "Dismiss this item.",
       ],
     };
-  },
+  },  "low_confidence_field:earlier_rows_kept": (item) => ({
+    title: "Rows from an earlier reading",
+    what: `PerFin read this file again. ${count(item, "count")} rows from the earlier reading are not in the new one and were kept because they had been changed.`,
+    steps: [
+      "Open “Check against the statement”.",
+      "Remove the rows that are wrong, or keep them.",
+    ],
+  }),
 };
 
 /** The explanation of an item (falls back to the kind's own words). */

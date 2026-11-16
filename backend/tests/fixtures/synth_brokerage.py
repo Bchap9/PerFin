@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import io
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -380,6 +380,7 @@ def _us(day: date) -> str:
 
 def _activity_lines(
     rows: Sequence[SynthActivity],
+    relabel: Mapping[str, str] | None = None,
 ) -> list[tuple[date, str, str, Decimal | None, Decimal | None, Decimal]]:
     out: list[tuple[date, str, str, Decimal | None, Decimal | None, Decimal]] = []
     labels = {
@@ -390,6 +391,7 @@ def _activity_lines(
         "fee": "Fee",
         "deposit": "Deposit",
         "withdrawal": "Withdrawal",
+        **(relabel or {}),
     }
     for a in rows:
         if a.type == "reinvest":
@@ -406,9 +408,23 @@ def placeholder_pdf(
     tamper: Tamper = None,
     rows_per_page: int = 9,
     institution: str = INSTITUTION,
+    totals: bool = True,
+    relabel: Mapping[str, str] | None = None,
+    prices: bool | None = None,
 ) -> bytes:
-    """The Placeholder Brokerage statement as a PDF (module doc)."""
-    activity = _activity_lines(_printed_activity(stmt, tamper))
+    """The Placeholder Brokerage statement as a PDF (module doc).
+
+    ``totals=False``: a statement that prints nothing to check its rows
+    against: no portfolio summary, no holdings total, and holdings listed
+    without a price (quantity, market value and cost basis only), so not
+    even a row multiplies out. ``relabel``: the word printed in the
+    *Activity* column for a type, in place of the usual one. ``prices``:
+    whether the holdings print their Price column (default: as ``totals``);
+    ``totals=False, prices=True`` is a statement on which each holding
+    multiplies out and nothing says anything about the activity.
+    """
+    priced = totals if prices is None else prices
+    activity = _activity_lines(_printed_activity(stmt, tamper), relabel)
     positions = list(stmt.positions)
     values = [p.market_value for p in positions]
     if tamper == "market_value":
@@ -428,21 +444,23 @@ def placeholder_pdf(
             c.drawString(72, 732, "Investment Account Statement")
             c.drawString(72, 716, f"Account XXXX-{stmt.last4}")
             c.drawString(300, 716, f"Statement period: {_us(stmt.start)} - {_us(stmt.end)}")
-            c.setFont(BOLD, 11)
-            c.drawString(72, 694, "Portfolio Summary")
-            c.setFont(FONT, 10)
-            summary = (
-                ("Beginning cash balance", stmt.cash_opening),
-                ("Ending cash balance", stmt.cash_closing),
-                ("Total holdings value", sum(values, Decimal(0))),
-                ("Total account value", total_value),
-            )
-            y = 678
-            for label, value in summary:
-                c.drawString(72, y, label)
-                c.drawRightString(330, y, _money_text(value, symbol="$"))
-                y -= 14
-            y -= 10
+            y = 694
+            if totals:
+                c.setFont(BOLD, 11)
+                c.drawString(72, y, "Portfolio Summary")
+                c.setFont(FONT, 10)
+                summary = (
+                    ("Beginning cash balance", stmt.cash_opening),
+                    ("Ending cash balance", stmt.cash_closing),
+                    ("Total holdings value", sum(values, Decimal(0))),
+                    ("Total account value", total_value),
+                )
+                y = 678
+                for label, value in summary:
+                    c.drawString(72, y, label)
+                    c.drawRightString(330, y, _money_text(value, symbol="$"))
+                    y -= 14
+                y -= 10
             c.setFont(BOLD, 11)
             c.drawString(72, y, f"Holdings as of {_us(stmt.end)}")
             y -= 18
@@ -450,7 +468,8 @@ def placeholder_pdf(
             c.drawString(h["symbol"], y, "Symbol")
             c.drawString(h["desc"], y, "Description")
             c.drawRightString(h["qty"], y, "Quantity")
-            c.drawRightString(h["price"], y, "Price")
+            if priced:
+                c.drawRightString(h["price"], y, "Price")
             c.drawRightString(h["value"], y, "Market Value")
             c.drawRightString(h["cost"], y, "Cost Basis")
             c.setFont(FONT, 9)
@@ -459,12 +478,14 @@ def placeholder_pdf(
                 c.drawString(h["symbol"], y, position.symbol)
                 c.drawString(h["desc"], y, position.security.name)
                 c.drawRightString(h["qty"], y, _qty_text(position.quantity))
-                c.drawRightString(h["price"], y, f"{position.price:,.4f}")
+                if priced:
+                    c.drawRightString(h["price"], y, f"{position.price:,.4f}")
                 c.drawRightString(h["value"], y, _money_text(value))
                 c.drawRightString(h["cost"], y, _money_text(position.cost))
                 y -= 14
-            c.drawString(h["symbol"], y, "Total holdings")
-            c.drawRightString(h["value"], y, _money_text(sum(values, Decimal(0))))
+            if totals:
+                c.drawString(h["symbol"], y, "Total holdings")
+                c.drawRightString(h["value"], y, _money_text(sum(values, Decimal(0))))
             y -= 26
             c.setFont(BOLD, 11)
             c.drawString(72, y, "Account Activity")

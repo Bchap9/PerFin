@@ -1,135 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * Review: one card per document that waits on a person, with its one next
+ * action. `?document=<id>` shows only that document. Resolved and dismissed
+ * items are listed one by one (the queue's history).
+ */
 import "../accounts/ledger.css";
+import "./review.css";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link, useSearch } from "@tanstack/react-router";
+import { useState, type ReactNode } from "react";
 
-import { Badge } from "../../components/Badge";
-import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
-import { Checkbox } from "../../components/Checkbox";
-import { Dialog } from "../../components/Dialog";
 import { EmptyState } from "../../components/EmptyState";
 import { Field } from "../../components/Field";
-import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
-import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
-import { formatDate, formatDateTime } from "../../lib/dates";
-import { queryRoots } from "../../lib/queryKeys";
-import { accountLabel, useAccounts } from "../accounts/api";
-import { PageViewer } from "../documents/PageViewer";
-import { getDocument, importKeys } from "../imports/api";
-import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
-import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
-  accountResolution,
-  canImportAsRead,
-  hasSuggestedKinds,
-  dismissItem,
-  duplicateResolution,
-  importAsReadResolution,
-  linesSelectable,
+  listReviewCards,
   listReviewItems,
-  payloadIds,
-  payloadLines,
-  payloadString,
-  payloadSuggestions,
-  receiptResolution,
-  reprocessResolution,
-  resolveItem,
   reviewKeys,
-  type ResolveBody,
+  type ReviewCards,
+  type ReviewDocument,
   type ReviewFilter,
-  type ReviewItem,
 } from "./api";
-import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
-import { TeachDialog, currentReadings } from "./TeachDialog";
 import {
-  BalanceTools,
-  CostBasisTools,
-  HeldLines,
-  LowConfidenceTools,
-  NewInstitutionTools,
-  ReceiptPreview,
-  UnknownOwnerTools,
-} from "./ReviewTools";
+  ClosedItem,
+  DocumentCard,
+  LooseCard,
+  SettledCard,
+  SettledLine,
+} from "./DocumentCard";
 
-const RECEIPT_REASONS: ReadonlyMap<string, string> = new Map(
-  Object.entries({
-    ambiguous: "Several transactions fit this receipt equally well.",
-    not_confident:
-      "A transaction may fit this receipt, but not clearly enough to attach it automatically.",
-    receipt_uncertain:
-      "Parts of this receipt could not be read with confidence.",
-    already_has_receipt: "The best fit already has another receipt attached.",
-    no_candidates:
-      "No transaction fits this receipt yet. It is attached automatically when its statement arrives.",
-    no_total: "No total could be read on this receipt.",
-  }),
-);
-
-const AMOUNT_LABELS: Readonly<Record<string, string>> = {
-  exact: "same amount",
-  refund: "refund of the same amount",
-  tip: "amount plus a tip",
-};
-
-/** The matcher's ranked suggestions, one to choose. */
-function ReceiptBody({
-  item,
-  chosen,
-  onChoose,
-}: {
-  item: ReviewItem;
-  chosen: string | null;
-  onChoose: (id: string) => void;
-}) {
-  const reason = payloadString(item, "reason");
-  const suggestions = payloadSuggestions(item);
-  return (
-    <div className="ledger-stack">
-      <p>
-        {(reason === null ? undefined : RECEIPT_REASONS.get(reason)) ??
-          "Choose the transaction this receipt belongs to."}
-      </p>
-      {suggestions.length === 0 ? null : (
-        <div role="radiogroup" aria-label="Suggested transactions">
-          {suggestions.map((suggestion, index) => (
-            <div key={suggestion.transactionId}>
-              <TransactionLookup
-                id={suggestion.transactionId}
-                title={`Suggestion ${String(index + 1)}`}
-              />
-              <p className="ledger-muted">
-                {AMOUNT_LABELS[suggestion.amount] ?? suggestion.amount}
-                {suggestion.days === null
-                  ? ""
-                  : `, ${String(suggestion.days)} day(s) apart`}
-                {suggestion.alreadyLinked ? ", already has a receipt" : ""}
-              </p>
-              {item.state === "open" && item.can_resolve ? (
-                <label>
-                  <input
-                    type="radio"
-                    name={`suggestion-${item.id}`}
-                    checked={chosen === suggestion.transactionId}
-                    onChange={() => {
-                      onChoose(suggestion.transactionId);
-                    }}
-                  />{" "}
-                  Attach to suggestion {index + 1}
-                </label>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+export { DocumentLine, ExplanationBlock } from "./DocumentCard";
 
 const FILTERS: readonly { value: ReviewFilter; label: string }[] = [
   { value: "open", label: "Open" },
@@ -142,628 +46,99 @@ function isFilter(value: string): value is ReviewFilter {
   return FILTERS.some((filter) => filter.value === value);
 }
 
-function TransactionFacts({
-  title,
-  transaction,
-}: {
-  title: string;
-  transaction: Transaction;
-}) {
-  return (
-    <div>
-      <h4>{title}</h4>
-      <dl>
-        <dt>Date</dt>
-        <dd>
-          {formatDate(transaction.posted_date) ?? transaction.posted_date}
-        </dd>
-        <dt>Payee</dt>
-        <dd>{transaction.raw_payee ?? "-"}</dd>
-        <dt>Memo</dt>
-        <dd>{transaction.memo ?? "-"}</dd>
-        <dt>Amount</dt>
-        <dd>
-          <MoneyText
-            amount={transaction.amount.amount}
-            currency={transaction.amount.currency}
-          />
-        </dd>
-      </dl>
-    </div>
-  );
+/** A document that waited on a person while this page was open, and where its card stood. */
+interface Waited {
+  document: ReviewDocument;
+  place: number;
 }
 
-function TransactionLookup({ id, title }: { id: string; title: string }) {
-  const query = useQuery({
-    queryKey: txKeys.one(id),
-    queryFn: () => getTransaction(id),
+/** `seen` with the documents of `cards` that wait on a person added (first place kept). */
+function withWaiting(
+  seen: ReadonlyMap<string, Waited>,
+  cards: ReviewCards,
+): ReadonlyMap<string, Waited> {
+  const next = new Map(seen);
+  cards.cards.forEach((card, place) => {
+    if (card.open > 0 && !next.has(card.document.id)) {
+      next.set(card.document.id, { document: card.document, place });
+    }
   });
-  if (query.isPending) {
-    return <Spinner label={`Loading ${title}`} />;
-  }
-  if (query.isError) {
-    return (
-      <div>
-        <h4>{title}</h4>
-        <p className="ledger-muted">No longer available.</p>
-      </div>
-    );
-  }
-  return <TransactionFacts title={title} transaction={query.data} />;
-}
-
-/** Side by side: the imported row against each kept candidate. */
-/** A statement whose period overlaps one already imported (``statement_overlap``). */
-function isStatementOverlap(item: ReviewItem): boolean {
-  return (item.reason ?? payloadString(item, "reason")) === "statement_overlap";
-}
-
-function DuplicateBody({
-  item,
-  chosen,
-  onChoose,
-}: {
-  item: ReviewItem;
-  chosen: string | null;
-  onChoose: (id: string) => void;
-}) {
-  const transactionId = payloadString(item, "transaction_id");
-  const candidates = payloadIds(item, "candidates");
-  const documentId = item.document_id;
-  const overlap = isStatementOverlap(item);
-  const otherId = payloadString(item, "other_document_id");
-  const document = useQuery({
-    queryKey: importKeys.document(documentId ?? ""),
-    queryFn: () => getDocument(documentId ?? ""),
-    enabled: documentId !== null && transactionId === null && !overlap,
-  });
-  const other = useQuery({
-    queryKey: importKeys.document(otherId ?? ""),
-    queryFn: () => getDocument(otherId ?? ""),
-    enabled: overlap && otherId !== null,
-    retry: false,
-  });
-  if (overlap) {
-    const period = payloadPeriod(item, "period_start", "period_end");
-    const otherPeriod = payloadPeriod(
-      item,
-      "other_period_start",
-      "other_period_end",
-    );
-    return (
-      <div role="group" aria-label="Compare statements">
-        <p>
-          This statement{period === null ? "" : ` (${period})`} overlaps one
-          already imported for the account
-          {otherPeriod === null ? "" : ` (${otherPeriod})`}.
-        </p>
-        {otherId === null ? null : (
-          <p>
-            Imported from{" "}
-            <Link to="/documents/$documentId" params={{ documentId: otherId }}>
-              {other.data?.original_filename ?? "another file"}
-            </Link>
-            .
-          </p>
-        )}
-      </div>
-    );
-  }
-  if (transactionId === null) {
-    return (
-      <p>
-        The file {document.data?.original_filename ?? "you uploaded"} has the
-        same content as one already stored. Keeping both would import its rows
-        twice.
-      </p>
-    );
-  }
-  return (
-    <div
-      className="side-by-side"
-      role="group"
-      aria-label="Compare transactions"
-    >
-      <TransactionLookup id={transactionId} title="Imported row" />
-      {candidates.map((candidate, index) => (
-        <div key={candidate}>
-          <TransactionLookup
-            id={candidate}
-            title={
-              candidates.length > 1
-                ? `Existing row ${String(index + 1)}`
-                : "Existing row"
-            }
-          />
-          {candidates.length > 1 ? (
-            <label>
-              <input
-                type="radio"
-                name={`candidate-${item.id}`}
-                checked={chosen === candidate}
-                onChange={() => {
-                  onChoose(candidate);
-                }}
-              />{" "}
-              Same as existing row {index + 1}
-            </label>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const SOURCES: Readonly<Record<string, string>> = {
-  upload: "uploaded",
-  dropfolder: "from the drop folder",
-  email: "by email",
-  archive: "from an archive",
-};
-
-/** The file an item is about: its name (a link), when it arrived, its period. */
-export function DocumentLine({ item }: { item: ReviewItem }) {
-  const document = item.document;
-  if (document === null || document === undefined) {
-    return null;
-  }
-  const period =
-    document.period_start !== null && document.period_end !== null
-      ? `${formatDate(document.period_start) ?? document.period_start} to ${formatDate(document.period_end) ?? document.period_end}`
-      : null;
-  return (
-    <p className="review-document">
-      <Link to="/documents/$documentId" params={{ documentId: document.id }}>
-        {document.original_filename ?? "Unnamed file"}
-      </Link>
-      <span className="ledger-muted">
-        {" "}
-        {SOURCES[document.source] ?? ""}{" "}
-        {formatDateTime(document.created_at) ?? ""}
-        {period === null ? "" : `, covering ${period}`}
-      </span>
-    </p>
-  );
-}
-
-/** A page preview shown on request (only for files whose pages the caller may see). */
-function DocumentPeek({ item }: { item: ReviewItem }) {
-  const [shown, setShown] = useState(false);
-  if (item.document?.previewable !== true || item.kind === "receipt_match") {
-    return null;
-  }
-  return (
-    <div className="ledger-stack">
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => {
-          setShown(!shown);
-        }}
-      >
-        {shown ? "Hide document" : "Show document"}
-      </Button>
-      {shown ? <PageViewer documentId={item.document.id} /> : null}
-    </div>
-  );
-}
-
-/** Why the item exists and what to do, as a short list of steps. */
-export function ExplanationBlock({
-  explanation,
-  full,
-}: {
-  explanation: Explanation;
-  full: boolean;
-}) {
-  return (
-    <div className="review-explanation">
-      <p>{explanation.what}</p>
-      {full && explanation.why !== undefined ? (
-        <p className="ledger-muted">{explanation.why}</p>
-      ) : null}
-      {full ? (
-        <>
-          <h4>How to fix it</h4>
-          <ol>
-            {explanation.steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-export function ReviewItemCard({ item }: { item: ReviewItem }) {
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const accounts = useAccounts();
-  const [accountId, setAccountId] = useState("");
-  const [remember, setRemember] = useState(true);
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [fixing, setFixing] = useState(false);
-  const [settingUp, setSettingUp] = useState(false);
-  const [teaching, setTeaching] = useState(false);
-  const explanation = explain(item);
-  const open = item.state === "open";
-  const actionable = open && item.can_resolve;
-  const candidates = payloadIds(item, "candidates");
-
-  const done = (title: string): void => {
-    void queryClient.invalidateQueries({ queryKey: queryRoots.review });
-    void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
-    void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
-    toast.notify({ title, tone: "success" });
-  };
-  const resolve = useMutation({
-    mutationFn: (body: ResolveBody) => resolveItem(item.id, body),
-    onSuccess: () => {
-      setError(null);
-      setFixing(false);
-      done("Item resolved");
-    },
-    onError: (caught) => {
-      setError(errorMessage(caught));
-    },
-  });
-  const dismiss = useMutation({
-    mutationFn: () => dismissItem(item.id),
-    onSuccess: () => {
-      setError(null);
-      setFixing(false);
-      done("Item dismissed");
-    },
-    onError: (caught) => {
-      setError(errorMessage(caught));
-    },
-  });
-  const busy = resolve.isPending || dismiss.isPending;
-  // Lines that stand alone (none moves shares) are imported or left out one
-  // by one: all ticked to begin with; null until the person unticks one.
-  const selectable = linesSelectable(item);
-  const [unticked, setUnticked] = useState<ReadonlySet<number>>(new Set());
-  const listed = payloadLines(item).map((line) => line.index);
-  const ticked = new Set(listed.filter((index) => !unticked.has(index)));
-  const someLines = selectable && ticked.size < listed.length;
-  // Any item about a page the caller may see can be taught from.
-  const teachable =
-    item.document_id !== null && item.document?.previewable === true;
-  const needsChoice = candidates.length > 1 && chosen === null;
-  // A brokerage statement held back by its figures: its rows are not in the
-  // ledger yet, so there is nothing to confirm; it may be imported as read.
-  const reason = item.reason ?? payloadString(item, "reason");
-  const heldStatement =
-    item.kind === "low_confidence_field" &&
-    (reason === "investment_reconciliation_failed" ||
-      reason === "investment_low_confidence" ||
-      reason === "investment_lines_held" ||
-      reason === "investment_figures_differ");
-  const asRead = canImportAsRead(item);
-  const editableAccounts = (accounts.data ?? []).filter(
-    (account) => account.can_edit && !account.is_closed,
-  );
-
-  const controls = (
-    <>
-      {item.kind === "possible_duplicate" ? (
-        <DuplicateBody item={item} chosen={chosen} onChoose={setChosen} />
-      ) : null}
-      {item.kind === "unknown_account" ? (
-        <>
-          {actionable ? (
-            <>
-              <Field label="Account for this file">
-                <Select
-                  placeholder="Choose an account"
-                  options={editableAccounts.map((account) => ({
-                    value: account.id,
-                    label: accountLabel(account),
-                  }))}
-                  value={accountId}
-                  onChange={(event) => {
-                    setAccountId(event.target.value);
-                  }}
-                />
-              </Field>
-              <Checkbox
-                label="Remember this account for the next file"
-                checked={remember}
-                onChange={(event) => {
-                  setRemember(event.target.checked);
-                }}
-              />
-            </>
-          ) : null}
-        </>
-      ) : null}
-      {item.kind === "receipt_match" ? (
-        <>
-          <ReceiptBody item={item} chosen={chosen} onChoose={setChosen} />
-          <ReceiptPreview item={item} />
-        </>
-      ) : null}
-      {item.kind === "low_confidence_field" &&
-      item.reason === "investment_opening_basis_unknown" ? (
-        <CostBasisTools item={item} actionable={actionable} />
-      ) : null}
-      {item.kind === "low_confidence_field" &&
-      (item.reason === "reconciliation_failed" ||
-        item.reason === "reconciliation_unavailable") ? (
-        <BalanceTools item={item} actionable={actionable} />
-      ) : null}
-      {item.kind === "low_confidence_field" && !heldStatement ? (
-        <LowConfidenceTools item={item} actionable={actionable} />
-      ) : null}
-      {heldStatement ? (
-        selectable && actionable ? (
-          <HeldLines
-            item={item}
-            selected={ticked}
-            onSelect={(index, chosen) => {
-              setUnticked((before) => {
-                const next = new Set(before);
-                if (chosen) {
-                  next.delete(index);
-                } else {
-                  next.add(index);
-                }
-                return next;
-              });
-            }}
-          />
-        ) : (
-          <HeldLines item={item} />
-        )
-      ) : null}
-      {heldStatement && selectable && actionable ? (
-        <p className="ledger-muted">
-          Untick a line to leave it out: only the ticked lines are imported,
-          and PerFin does not ask about the others again.
-        </p>
-      ) : null}
-      {asRead && actionable ? (
-        <p className="ledger-muted">
-          {hasSuggestedKinds(item)
-            ? "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin has learned”; nothing else of the statement is."
-            : reason === "investment_lines_held"
-            ? "“Import as read” imports the lines listed above as printed; the rest of the statement is already imported."
-            : reason === "investment_reconciliation_failed"
-              ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
-              : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
-        </p>
-      ) : null}
-      {item.kind === "new_institution" ? (
-        <NewInstitutionTools item={item} actionable={actionable} />
-      ) : null}
-      {item.kind === "unknown_owner" ? (
-        <UnknownOwnerTools item={item} actionable={actionable} />
-      ) : null}
-      {error === null ? null : (
-        <p role="alert" className="ledger-error">
-          {error}
-        </p>
-      )}
-      {actionable ? (
-        <div className="ledger-actions">
-          {item.kind === "possible_duplicate" ? (
-            <>
-              <Button
-                variant="primary"
-                disabled={needsChoice}
-                loading={resolve.isPending}
-                onClick={() => {
-                  resolve.mutate(duplicateResolution(item, "confirm", chosen));
-                }}
-              >
-                {isStatementOverlap(item)
-                  ? "Same statement — skip"
-                  : payloadString(item, "transaction_id") === null
-                    ? "Reject this upload"
-                    : "It is a duplicate"}
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() => {
-                  resolve.mutate(duplicateResolution(item, "reject", null));
-                }}
-              >
-                {isStatementOverlap(item) ? "Import anyway" : "Not a duplicate"}
-              </Button>
-            </>
-          ) : null}
-          {item.kind === "receipt_match" ? (
-            <>
-              <Button
-                variant="primary"
-                disabled={chosen === null}
-                loading={resolve.isPending}
-                onClick={() => {
-                  resolve.mutate(receiptResolution(chosen));
-                }}
-              >
-                Attach receipt
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() => {
-                  resolve.mutate(receiptResolution(null));
-                }}
-              >
-                No transaction
-              </Button>
-            </>
-          ) : null}
-          {item.kind === "unknown_account" && item.document_id !== null ? (
-            <Button
-              onClick={() => {
-                setFixing(false);
-                setSettingUp(true);
-              }}
-            >
-              Set up accounts from this file
-            </Button>
-          ) : null}
-          {item.kind === "unknown_account" ? (
-            <Button
-              variant="primary"
-              disabled={accountId === ""}
-              loading={resolve.isPending}
-              onClick={() => {
-                resolve.mutate(accountResolution(accountId, remember));
-              }}
-            >
-              Import into this account
-            </Button>
-          ) : null}
-          {asRead ? (
-            <Button
-              variant="primary"
-              loading={resolve.isPending}
-              disabled={dismiss.isPending || (selectable && ticked.size === 0)}
-              onClick={() => {
-                resolve.mutate(
-                  someLines
-                    ? importAsReadResolution([...ticked].sort((a, b) => a - b))
-                    : importAsReadResolution(),
-                );
-              }}
-            >
-              {someLines
-                ? `Import ${String(ticked.size)} of ${String(listed.length)} lines`
-                : "Import as read"}
-            </Button>
-          ) : null}
-          {teachable ? (
-            <Button
-              onClick={() => {
-                setFixing(false);
-                setTeaching(true);
-              }}
-            >
-              Teach PerFin
-            </Button>
-          ) : null}
-          {(item.next_step === "column_mapping" ||
-            (reason === "investment_low_confidence" && !asRead)) &&
-          item.document_id !== null ? (
-            <Link
-              to="/documents/$documentId/mapping"
-              params={{ documentId: item.document_id }}
-              className="btn btn--primary btn--md"
-            >
-              Map columns
-            </Link>
-          ) : null}
-          {item.kind === "unparsed" ? (
-            <Button
-              loading={resolve.isPending}
-              onClick={() => {
-                resolve.mutate(reprocessResolution());
-              }}
-            >
-              Process again
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            loading={dismiss.isPending}
-            disabled={resolve.isPending}
-            onClick={() => {
-              dismiss.mutate();
-            }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      ) : null}
-    </>
-  );
-
-  return (
-    <Card
-      title={explanation.title}
-      actions={
-        open ? (
-          <Button
-            size="sm"
-            onClick={() => {
-              setFixing(true);
-            }}
-          >
-            {actionable ? "Fix…" : "Details"}
-          </Button>
-        ) : (
-          <Badge tone={item.state === "resolved" ? "success" : "neutral"}>
-            {item.state === "resolved" ? "Resolved" : "Dismissed"}
-          </Badge>
-        )
-      }
-    >
-      <article className="review-item" aria-label={explanation.title}>
-        <DocumentLine item={item} />
-        <ExplanationBlock explanation={explanation} full={false} />
-        {fixing ? null : (
-          <>
-            <DocumentPeek item={item} />
-            {controls}
-          </>
-        )}
-      </article>
-      {teaching && item.document_id !== null ? (
-        <TeachDialog
-          documentId={item.document_id}
-          item={item}
-          readings={currentReadings(item.document, item)}
-          onClose={() => {
-            setTeaching(false);
-          }}
-        />
-      ) : null}
-      {settingUp && item.document_id !== null ? (
-        <DocumentAccountsDialog
-          documentId={item.document_id}
-          onClose={() => {
-            setSettingUp(false);
-          }}
-        />
-      ) : null}
-      {fixing ? (
-        <Dialog
-          open={fixing}
-          onClose={() => {
-            setFixing(false);
-          }}
-          title={explanation.title}
-          size="lg"
-        >
-          <div className="review-fix">
-            {item.document?.previewable === true &&
-            item.document_id !== null ? (
-              <div className="review-fix__document">
-                <PageViewer documentId={item.document_id} />
-              </div>
-            ) : null}
-            <div className="review-fix__steps ledger-stack">
-              <DocumentLine item={item} />
-              <ExplanationBlock explanation={explanation} full />
-              {controls}
-            </div>
-          </div>
-        </Dialog>
-      ) : null}
-    </Card>
-  );
+  return next.size === seen.size ? seen : next;
 }
 
 export function ReviewPage() {
+  const search: Record<string, unknown> = useSearch({ strict: false });
+  const given: unknown = new Map(Object.entries(search)).get("document");
+  const documentId = typeof given === "string" && given !== "" ? given : null;
   const [filter, setFilter] = useState<ReviewFilter>("open");
-  const query = useQuery({
-    queryKey: reviewKeys.list(filter),
-    queryFn: () => listReviewItems(filter),
+  const cards = useQuery({
+    queryKey: reviewKeys.cards(),
+    queryFn: () => listReviewCards(),
+    enabled: filter === "open" || filter === "all",
   });
+  const items = useQuery({
+    queryKey: reviewKeys.list(filter, documentId),
+    queryFn: () => listReviewItems(filter, documentId),
+    enabled: filter !== "open",
+  });
+  // A card whose last waiting item was answered leaves the list when it
+  // reloads. The page remembers the documents that waited, so the card can
+  // stay and say where the rows went until the page is left.
+  const [seen, setSeen] = useState<ReadonlyMap<string, Waited>>(new Map());
+  const [from, setFrom] = useState<ReviewCards | undefined>(undefined);
+  if (cards.data !== from) {
+    setFrom(cards.data);
+    if (cards.data !== undefined) {
+      setSeen(withWaiting(seen, cards.data));
+    }
+  }
+
+  const wanted = (id: string): boolean => documentId === null || documentId === id;
+  const showCards = filter === "open" || filter === "all";
+  const shown: ReactNode[] = [];
+  if (showCards && cards.data !== undefined) {
+    const listed = new Set<string>();
+    for (const card of cards.data.cards) {
+      listed.add(card.document.id);
+      if (!wanted(card.document.id)) {
+        continue;
+      }
+      shown.push(
+        <div key={card.action_item_id} className="review-entry">
+          {card.open === 0 && seen.has(card.document.id) ? (
+            <SettledLine document={card.document} />
+          ) : null}
+          <DocumentCard card={card} />
+        </div>,
+      );
+    }
+    const settled = [...seen.values()]
+      .filter((entry) => !listed.has(entry.document.id) && wanted(entry.document.id))
+      .sort((a, b) => a.place - b.place);
+    for (const entry of settled) {
+      shown.splice(
+        Math.min(entry.place, shown.length),
+        0,
+        <SettledCard key={`settled-${entry.document.id}`} document={entry.document} />,
+      );
+    }
+    if (documentId === null) {
+      for (const item of cards.data.loose) {
+        shown.push(<LooseCard key={item.id} item={item} />);
+      }
+    }
+  }
+  if (filter !== "open" && items.data !== undefined) {
+    for (const item of items.data) {
+      if (item.state !== "open") {
+        shown.push(<ClosedItem key={item.id} item={item} />);
+      }
+    }
+  }
+  const pending =
+    (showCards && cards.isPending) || (filter !== "open" && items.isPending);
+  const failed = showCards && cards.isError ? cards.error : items.error;
+
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -780,13 +155,21 @@ export function ReviewPage() {
           />
         </Field>
       </div>
-      {query.isPending ? <Spinner label="Loading review items" /> : null}
-      {query.isError ? (
-        <p role="alert" className="ledger-error">
-          {errorMessage(query.error)}
+      {documentId === null ? null : (
+        <p className="review-scope">
+          Showing one file.{" "}
+          <Link to="/review" className="link-action">
+            Show every file
+          </Link>
         </p>
-      ) : null}
-      {query.isSuccess && query.data.length === 0 ? (
+      )}
+      {pending ? <Spinner label="Loading review items" /> : null}
+      {failed === null ? null : (
+        <p role="alert" className="ledger-error">
+          {errorMessage(failed)}
+        </p>
+      )}
+      {!pending && failed === null && shown.length === 0 ? (
         <Card>
           <EmptyState
             title="Nothing to review"
@@ -794,9 +177,7 @@ export function ReviewPage() {
           />
         </Card>
       ) : null}
-      {query.data?.map((item) => (
-        <ReviewItemCard key={item.id} item={item} />
-      ))}
+      {shown}
     </section>
   );
 }

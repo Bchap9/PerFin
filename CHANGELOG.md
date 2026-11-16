@@ -8,7 +8,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 The current release candidate is `v1.0.0-rc.8`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012`. On 2026-11-12: SPDX;
+`0013` on `main` (`0012` in rc.8). On 2026-11-12, for rc.8: SPDX;
 backend ruff, ruff format, mypy --strict (704 source files), bandit, OpenAPI
 drift and 8405 pytest tests with `-n 6` (the Helm chart tests aside, which
 need `helm`), of which the OCR tests (20) need Tesseract and could not run
@@ -85,6 +85,74 @@ What remains (details in docs/ROADMAP.md):
   statement: boxes 3 to 6 are stored for the tax year; boxes 1, 2, 7 and
   8 identify the beneficiary and are never read, and the form has no
   issuer name.
+- **A statement is checked against the ledger in one view** (INGESTION.md
+  "Review queue", "The reconcile view"; `GET
+  /documents/{id}/reconciliation`). "The statement does not add up" used
+  to offer two balance fields and a list of rows with no sum. The
+  reconcile view puts the page beside the opening balance, the sum of the
+  rows as they are in PerFin now, the closing balance and the difference,
+  which follows every change. Balances are typed as the statement prints
+  them (`1,204.18`, a currency symbol, and for a card the amount owed as a
+  positive figure). A row can be edited, have its sign flipped, be
+  removed, added or put back, and PerFin names the likely causes: a row
+  equal to the difference, a row read with the wrong sign, a pair read
+  twice, a fee or interest line of that size, an opening balance that is
+  not the previous statement's closing, rows outside the period, a missing
+  amount. It has three exits: "Confirm and record the balance" once it
+  balances, "Accept as read" (the rows are confirmed, no balance is
+  recorded) and "Finish later".
+- **One card per document in Review** (`GET /review/cards`). A file with
+  five findings was five entries in the queue. It is now one card with a
+  section per finding and the one thing to do next: choose the account,
+  say whether a positive amount is money in or out, map the columns,
+  check the statement, check rows, decide duplicates, attach a receipt,
+  choose the owner, teach the layout, process again, or only "OK" for a
+  notice. Buttons that did nothing are gone. After the last answer the
+  card says where the rows went.
+- **What a file imported, and the file a row came from.** The document
+  page has "Imported from this file": per statement the account, the
+  period, its rows, what still waits and how it was checked (`statements`
+  and `skipped_lines` in `GET /documents/{id}/imported`). The uploads list
+  links every file to its document and its rows. Transactions take
+  `?document=<id>` (a "From one file" chip), and a transaction's dialog
+  links back to its source document.
+- **A deleted imported row stays deleted** (INGESTION.md "Rows a person
+  deleted"; table `import_tombstone`, migration `0013`). Deleting a row a
+  statement produced used to last until the document was processed again
+  or the same month arrived as another file. PerFin now remembers the
+  deleted row (its hash, date and amount, never its payee) and leaves it
+  out of every later import; of two identical purchases on one day, the
+  deleted one neither returns nor is offered as a duplicate of the other.
+  The same row arriving under another spelling waits in Review as "A row
+  you deleted?", answered with "Remove it again" (deleted, and this
+  spelling is remembered too) or "Keep it". The reconcile view lists a statement's removed rows and can
+  put one back. Deleting a document with its data forgets nothing, so the
+  file can be uploaded again whole.
+- **Teach PerFin shows what it will read before anything is saved**
+  (INGESTION.md "Teaching PerFin a layout"). The dialog previews the first
+  rows, whether they meet the balances and how many waiting files of the
+  layout would be read again; "Apply" needs a preview first. A table with
+  one amount column takes a direction (as printed, money in, money out, a
+  card's charges), a layout holds up to four transaction tables and one
+  holdings table, a table can continue on pages that do not repeat its
+  header, rows dated `Jan 15` take their year from the period, and the
+  account is chosen in the dialog. Teaching a table on a statement that
+  was already imported now imports it again instead of only warning.
+- **How far a statement was checked is recorded**
+  (`statement_record.verification`, migration `0013`): `reconciled`,
+  `accepted` or `unverified`, shown per statement on the document page.
+- API: `GET /documents/{id}/reconciliation` with `POST
+  .../reconciliation/confirm`, `/accept`, `/restore` and
+  `/remove-earlier`; `GET /review/cards`; `GET /transactions?document=`;
+  `source_document_id` on `POST /transactions`; the resolutions
+  `answer_sign` (`positive_is`), `rows` for several near duplicates and
+  `line_fixes` for held brokerage lines; `direction`, `continues` and
+  `preview` on `POST /documents/{id}/teach`; `unchecked` on `GET
+  /documents`, `previewable` on `GET /documents/{id}` (API.md). New
+  problem types: `409 statement-balanced`, `404 tombstone-not-found`,
+  `422 invalid-amount`. New audit actions: `statement.reconcile`,
+  `statement.accept`, `tombstone.restore`, `import.replace`. The MCP
+  tools and the AI read API are unchanged.
 - **Options in brokerage activity exports.** A symbol cell that names an
   option (`ROOT MM/DD/YYYY STRIKE C|P`, or the OCC form) is read as that
   option, priced per contract. An `Expired` or `Assigned` row closes what
@@ -93,6 +161,98 @@ What remains (details in docs/ROADMAP.md):
 
 ### Changed
 
+- **A statement that prints nothing to check no longer waits in Review**
+  (INGESTION.md "Commit", "A clean read"; SECURITY.md C12). Until now
+  every PDF or image statement without an opening balance, a closing
+  balance or a running balance waited whole, every row pending, with
+  "Nothing to check against". Many statements simply print none, and
+  there was nothing a person could do about such a file but confirm it.
+  A statement that reads cleanly and that nothing contradicts is now
+  imported as posted and marked **"Not checked against a balance"** on
+  the uploads list and the document page. "Cleanly" is strict: no
+  balance read at all (one balance without the other is a doubt), a
+  period the statement prints, every row read without another doubt, no line or row skipped, no row more than
+  ten days outside the period, no total on the page that disagrees with
+  the rows, and an account of the kind the statement was read as. One
+  doubt anywhere and the whole statement waits as before; a statement
+  whose own figures contradict each other always waits. No balance is
+  recorded from an unchecked statement. To check one later, open the
+  document, choose "Check against the statement", type the opening and
+  closing balance from the paper and confirm; a row that should not be
+  there can be deleted and stays deleted. The same holds for a brokerage
+  statement that reads cleanly and prints no totals to check. What this
+  gives up is stated in docs/security/CONTROLS.md (C12): a crafted
+  statement with no balances and nothing that contradicts it is posted
+  without a question, marked as unchecked.
+- **"Process again" replaces a document's rows instead of adding to
+  them** (INGESTION.md "A document read again"). Reading a document again
+  (process again, a re-run after an answer, a taught table) used to leave
+  the rows of the earlier reading beside the new ones. The rows nobody
+  touched that the new reading no longer holds are now removed; a row a
+  person edited, confirmed, categorised, linked as a transfer, attached
+  a document to, or recorded a goal contribution or a loan payment from
+  is kept and listed in one finding ("Rows from an earlier
+  reading"), which the reconcile view removes in one step. Rows of other
+  documents, rows on other accounts and rows added by hand are never
+  touched. Rows imported by an earlier release that a rule changed during
+  their import count as touched and are kept. A reading that says it may
+  be incomplete (truncated, or no balance vouches for it and a line was
+  skipped or its figures contradict each other) removes nothing: the row
+  it no longer holds may be the line it could not read. A statement a
+  person moves to another account takes its untouched rows along: the
+  rows it left on the first account are removed when every one of them
+  is a line now imported on the other account. Limit: rows on an account
+  the new reading has no statement for at all are left alone, without a
+  finding. The run summary counts `replaced_rows`, `kept_rows` and
+  `tombstoned_rows`; the audit action is `import.replace`.
+- **The same file uploaded twice is skipped** (INGESTION.md "Receive"). A
+  byte-identical upload used to wait in Review as a possible duplicate
+  with a question. It is now set aside with a notice naming the earlier
+  document; "Import it anyway" or "Process again" on the copy reads it. A
+  held drop-folder file is asked about as before.
+- **One finding per cause.** A row that waits only because its statement
+  did not add up is named by the statement's finding alone and no longer
+  listed a second time as a low-confidence row. Two or more rows of a
+  statement that may already be in PerFin are one question with a list
+  (`near_matches`), each row decided in the same step, instead of one
+  question per row. "Some lines were not read" is raised only while a
+  statement of the document does not add up: balances that agree vouch
+  for the rows that were read, and the count stays on the document page.
+- **Only the card of a multi-account export waits for its sign**
+  (INGESTION.md "Review queue", "Money in or money out?"). An export of
+  several accounts whose sign nothing proves used to wait whole. The
+  checking and savings accounts are now imported and only the card's rows
+  wait, with one question answered on the card ("Money in" / "Money
+  out") instead of in the mapping editor. For a whole layout the answer is
+  saved with the mapping and asked once; for one account of one file it
+  is remembered for that account. No row already imported is ever
+  flipped.
+- **A statement without account digits goes to the one account at its
+  institution** (INGESTION.md "Match and deduplicate", "Account"). When a
+  document's one statement prints no digits and the household has exactly
+  one open checking or savings account (for a card statement: one credit
+  card) at that institution, the statement is imported there instead of
+  asking. Several fitting accounts, or a sole account of another kind,
+  are still asked about, and printed digits that match nothing never fall
+  back. The Accounts dialog of the document names the same account.
+- **Ten days of grace around a statement period.** A row dated up to ten
+  days before the period starts or after it ends no longer puts its
+  statement in doubt (a purchase of the last days before a cycle is
+  printed on the next statement). Further out the row and its statement
+  wait as before. A line outside the period that names a balance or a
+  statement ("Prior statement balance", "Carried over", "Amount owed from
+  last cycle") gets no grace: it is a balance carried over, not a
+  purchase, and on a statement with no balances it would otherwise have
+  been posted as a deposit. A taught layout follows the same rule.
+- **Review: controls that did nothing are removed.** The balance fields
+  on a "does not add up" item (the reconcile view replaces them), "Create
+  a rule from this" (the endpoint `GET /review/{id}/rule-draft` stays),
+  "Process again" where reading again changes nothing, the row tools on
+  items that list no rows, and "Confirm as read" once no row waits. The
+  uploads list no longer offers "Map columns"; the document's card does.
+- **Security control C12 holds contradictions, not every unchecked
+  statement** (SECURITY.md, docs/security/CONTROLS.md), for the reason
+  given in the first entry of this section.
 - **A file's sign is proven or the file waits** (INGESTION.md "The sign is
   proven or the file waits"). A table whose signed amounts are read as
   "positive is money in" on trust is no longer imported on its own when
@@ -237,9 +397,9 @@ What remains (details in docs/ROADMAP.md):
   `tax_forms/2`, `payslip_basic/2`, `loan_statement_generic/2`,
   `brokerage_activity_table/2`, `brokerage_positions_table/2`,
   `brokerage_statement_generic/9`, `placeholder_brokerage/7`,
-  `fidelity_investments_statement/8`, `layout_template/4` (a taught
-  layout), `statement_generic/9`, `card_statement_generic/9`, the
-  institution parsers `/7` and the OFX extractor `ofx/3`. Two causes
+  `fidelity_investments_statement/8`, `layout_template/6` (a taught
+  layout), `statement_generic/10`, `card_statement_generic/10`, the
+  institution parsers `/8` and the OFX extractor `ofx/3`. Two causes
   reach further than the entries that name them. The amount reader all
   PDF and image parsers share now also reads a `DB` marker, a
   currency symbol or sign printed apart from its figure and thousands
@@ -253,6 +413,45 @@ What remains (details in docs/ROADMAP.md):
 
 ### Fixed
 
+- **An answer about a statement survives the document being read
+  again.** A statement placed on an account by hand lost its account when
+  one of its balances was corrected or a newer parser read it, and was
+  asked about again. A statement accepted as read, or balanced by hand,
+  was asked about again by the next re-run, also one started by answering
+  another statement of the same file. The placement is now remembered by
+  what identifies the statement (its account digits, name and currency,
+  not its figures), and an acceptance or a balance holds until a later
+  reading changes a row of that account, which asks again.
+- **A statement with one balance, no printed period or a doubled row
+  is not imported unasked** (INGESTION.md "A clean read"). A page with an
+  ending balance and no beginning one, no period line and a row printed
+  over another (`05/10/13 07/10/12 Overdraft fee -35.00`) counted as a
+  statement with nothing to check and was posted. A clean read now needs
+  that no opening or closing balance was read at all, and that the period
+  was printed rather than taken from the rows' own dates. A table row
+  that prints a second date where its table prints one (no posting date
+  heading, and not a second date on every row within ten days of the
+  first), or a figure no column takes beside its amount, is a doubt on
+  that row. Such statements wait in Review with "Nothing to check
+  against", as before 1d. The statement parsers stay at the versions
+  this release already moved them to.
+- **A balance does not outlive its statement's check.** A PDF statement
+  that reconciled recorded its closing balance; when it was read again
+  and no longer added up, or a removed row was put back or rows of an
+  earlier reading were removed so that it no longer balanced, its record
+  went back to "not checked" while the balance stayed on the account.
+  That balance is now taken back, as "Accept as read" already did. A
+  balance from another file or typed by hand is never touched; OFX, QIF
+  and CSV files, which state their own balance, and a brokerage statement
+  whose printed account value holds, keep theirs.
+- **Card balances are entered as printed.** Correcting the balances of a
+  card statement needed the figures negated by hand, and `1,204.18` was
+  refused. The reconcile view takes them as the statement prints them.
+- **A header row above nothing but a total line is "nothing to
+  import"**, not a table that needs a column mapping.
+- **Confirming or accepting a second copy of a statement** that imported
+  nothing no longer moves the account's balance to the copy; it is
+  refused.
 - **Text files the sniffer turned away or called plain text**
   (INGESTION.md "Receive"). A CSV whose quoted cells hold the delimiter
   (`"1,234.56"`) or run over several lines, and one whose long

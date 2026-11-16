@@ -29,12 +29,14 @@ from __future__ import annotations
 
 import itertools
 import uuid
+from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Final
 
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, func, select, tuple_, update
+from sqlalchemy import ColumnElement, and_, exists, func, select, tuple_, update
 from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
 
@@ -51,6 +53,7 @@ from app.core.logging import get_logger
 from app.core.settings import Settings
 from app.db.models import Setting, SettingScope
 from app.db.queue import enqueue
+from app.domain.accounts.models import Account
 from app.domain.accounts.visibility import (
     can_edit_account,
     get_visible_account,
@@ -82,18 +85,29 @@ from app.domain.documents.schemas import (
     DocumentPage,
     DocumentReceivedOut,
     DocumentReprocessOut,
+    ImportedStatement,
     IngestDocumentPayload,
     SnippetPart,
+    Verification,
 )
+from app.domain.imports.models import StatementRecord
 from app.domain.transactions import service as transactions_service
 from app.ingestion.intake.sniff import FileType
 from app.ingestion.intake.upload import StoredUpload, record_stored, store_stream
+from app.ingestion.sandbox.protocol import DOCUMENT_STATEMENT_FORMATS
 
 log = get_logger(__name__)
 
 #: Household setting (``setting`` row, scope ``household``): ``true`` lets
 #: viewers download originals (SECURITY.md I1: off by default).
 VIEWER_DOWNLOAD_SETTING: Final = "documents.viewer_download"
+
+#: Sniffed types whose pages ``GET /documents/{id}/preview`` can show.
+PREVIEW_MIMES: Final = ("application/pdf", "image/")
+
+#: A statement imported and not checked against a balance carries the marker
+#: (``ImportedStatement.unchecked``) only when it came from one of these.
+_UNCHECKED_FORMATS: Final = tuple(sorted(DOCUMENT_STATEMENT_FORMATS))
 
 #: Deepest container nesting followed when deleting a document with its data
 #: (the intake expands one level, ``app.ingestion.children``; this is a guard).
@@ -226,6 +240,42 @@ def get_editable_document(
 # ---------------------------------------------------------------------------
 
 
+def is_previewable(document: Document, area: BlobArea | None, pages: bool) -> bool:
+    """Whether ``GET /documents/{id}/preview`` would show the caller a page.
+
+    ``area`` is where the document's blob is stored (``None``: no blob);
+    ``pages`` whether the caller may download originals (:func:`may_download`,
+    I1). Never a quarantined file, and only a PDF or an image has pages.
+    """
+    return (
+        pages
+        and area is not None
+        and area is not BlobArea.QUARANTINE
+        and document.mime_detected.startswith(PREVIEW_MIMES)
+    )
+
+
+def is_unchecked(outcome: str, verification: str, source_format: str) -> bool:
+    """Imported from a PDF or an image and not checked against a balance."""
+    return (
+        outcome == "imported"
+        and verification == "unverified"
+        and source_format in DOCUMENT_STATEMENT_FORMATS
+    )
+
+
+def _unchecked_exists(principal: Principal) -> ColumnElement[bool]:
+    """SQL form of :func:`is_unchecked` over a document's records the caller can see."""
+    return exists().where(
+        StatementRecord.household_id == Document.household_id,
+        StatementRecord.document_id == Document.id,
+        StatementRecord.outcome == "imported",
+        StatementRecord.verification == "unverified",
+        StatementRecord.source_format.in_(_UNCHECKED_FORMATS),
+        visible_account_filter(principal, StatementRecord.account_id),
+    )
+
+
 def list_documents(
     db: Session,
     principal: Principal,
@@ -244,9 +294,14 @@ def list_documents(
     (``websearch_to_tsquery``), best match first (keyset on score and id),
     each with its rank and a snippet. A caller who may not download (I1)
     searches the original filename only and gets no snippet.
+
+    ``unchecked`` marks a document with a statement that was imported without
+    a balance to check it against, on an account the caller can see (one
+    ``EXISTS`` in the same query).
     """
     household_id = _household(principal)
-    query = select(Document).where(service.visible_document_filter(principal))
+    unchecked = _unchecked_exists(principal).label("unchecked")
+    query = select(Document, unchecked).where(service.visible_document_filter(principal))
     if account_id is not None:
         get_visible_account(db, principal, account_id)
         query = query.where(Document.account_id == account_id)
@@ -261,12 +316,15 @@ def list_documents(
         after = search.decode_cursor(cursor, ranked=False)[1] if cursor else None
         if after is not None:
             query = query.where(Document.id < after)
-        rows = list(db.execute(query.order_by(Document.id.desc()).limit(limit + 1)).scalars())
+        rows = db.execute(query.order_by(Document.id.desc()).limit(limit + 1)).all()
         more = len(rows) > limit
         rows = rows[:limit]
         return DocumentPage(
-            items=[DocumentListItem.model_validate(row) for row in rows],
-            next_cursor=search.encode_cursor(None, rows[-1].id) if more and rows else None,
+            items=[
+                DocumentListItem.model_validate(row).model_copy(update={"unchecked": bool(marked)})
+                for row, marked in rows
+            ],
+            next_cursor=search.encode_cursor(None, rows[-1][0].id) if more and rows else None,
         )
     # I1: without the download right, q never touches the extracted text
     # (it would be a yes/no oracle over documents the caller may not open).
@@ -288,7 +346,7 @@ def list_documents(
         snippets = {
             row_id: [SnippetPart(**part) for part in parts]
             for row_id, parts in search.snippets(
-                db, household_id, [row.id for row, _ in found], q
+                db, household_id, [row.id for row, _, _ in found], q
             ).items()
         }
     items = [
@@ -296,19 +354,23 @@ def list_documents(
             update={
                 "rank": points / 1_000_000,
                 "snippet": snippets.get(row.id, []) if snippets is not None else None,
+                "unchecked": bool(marked),
             }
         )
-        for row, points in found
+        for row, marked, points in found
     ]
     last = found[-1] if found else None
     return DocumentPage(
         items=items,
-        next_cursor=search.encode_cursor(last[1], last[0].id) if more and last else None,
+        next_cursor=search.encode_cursor(last[2], last[0].id) if more and last else None,
     )
 
 
 def get_document(db: Session, principal: Principal, document_id: uuid.UUID) -> DocumentDetailOut:
-    """Metadata, links and open review items of one visible document."""
+    """Metadata, links and open review items of one visible document.
+
+    ``previewable``: :func:`is_previewable` (the rule the review queue uses).
+    """
     household_id = _household(principal)
     document = service.get_visible_document(db, principal, document_id)
     links = db.execute(
@@ -327,14 +389,16 @@ def get_document(db: Session, principal: Principal, document_id: uuid.UUID) -> D
     ).scalar_one()
     blob = repo.get_blob(db, household_id, document.blob_id)
     quarantined = blob is None or blob.area is BlobArea.QUARANTINE
+    pages = may_download(db, principal)
     base = DocumentOut.model_validate(document).model_dump()
     return DocumentDetailOut(
         **base,
         links=[DocumentLinkOut.model_validate(link) for link in links],
         open_review_items=int(open_items),
         quarantined=quarantined,
-        downloadable=not quarantined and may_download(db, principal),
+        downloadable=not quarantined and pages,
         can_edit=can_edit_document(db, principal, document),
+        previewable=is_previewable(document, blob.area if blob is not None else None, pages),
     )
 
 
@@ -815,7 +879,11 @@ def _delete_imported(
 
 
 def imported(db: Session, principal: Principal, document_id: uuid.UUID) -> DocumentImportedOut:
-    """``GET /documents/{id}/imported``: the rows ``DELETE ?with_data=true`` would remove."""
+    """``GET /documents/{id}/imported``: the rows ``DELETE ?with_data=true`` would remove.
+
+    ``statements``: what the document itself imported (:func:`_statements`);
+    ``skipped_lines``: the lines its stored reading counted but did not read.
+    """
     from app.domain.accounts.models import BalanceSnapshot
     from app.domain.investments.models import InvestmentTxn
     from app.domain.loans.models import Loan, LoanPayment
@@ -860,4 +928,109 @@ def imported(db: Session, principal: Principal, document_id: uuid.UUID) -> Docum
             BalanceSnapshot, BalanceSnapshot.source_document_id, BalanceSnapshot.account_id
         ),
         child_documents=len(ids) - 1,
+        statements=_statements(db, principal, document),
+        skipped_lines=_skipped_lines(document),
     )
+
+
+def _skipped_lines(document: Document) -> int:
+    """``parse.skipped_lines`` of the stored reading (0 when absent or not a count)."""
+    parse = (document.extraction or {}).get("parse")
+    count = parse.get("skipped_lines") if isinstance(parse, dict) else None
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
+
+
+def _statements(db: Session, principal: Principal, document: Document) -> list[ImportedStatement]:
+    """The document's statement records on accounts the caller can see.
+
+    Ordered by account name, then period start. ``transactions`` and
+    ``pending`` count the rows with this ``source_document_id`` on the
+    record's account: ledger rows for a bank record, brokerage rows (which
+    have no review state: ``pending`` is 0) for an investment record. When
+    the document left several records of one kind on an account, each counts
+    the rows dated inside its period; a single record counts them all.
+    Three queries whatever the number of records.
+    """
+    from app.domain.investments.models import InvestmentTxn
+    from app.domain.transactions.models import ReviewState, Transaction
+
+    household_id = document.household_id
+    records = db.execute(
+        select(StatementRecord, Account.name)
+        .join(
+            Account,
+            and_(
+                Account.household_id == StatementRecord.household_id,
+                Account.id == StatementRecord.account_id,
+            ),
+        )
+        .where(
+            StatementRecord.household_id == household_id,
+            StatementRecord.document_id == document.id,
+            visible_account_filter(principal, StatementRecord.account_id),
+        )
+        .order_by(Account.name, StatementRecord.period_start, StatementRecord.id)
+    ).all()
+    if not records:
+        return []
+    account_ids = {record.account_id for record, _ in records}
+    #: (kind, account) -> [(day, rows, rows waiting for review)]
+    days: defaultdict[tuple[str, uuid.UUID], list[tuple[date, int, int]]] = defaultdict(list)
+    pending = func.count().filter(Transaction.review_state == ReviewState.PENDING)
+    for account_id, day, rows, waiting in db.execute(
+        select(Transaction.account_id, Transaction.posted_date, func.count(), pending)
+        .where(
+            Transaction.household_id == household_id,
+            Transaction.source_document_id == document.id,
+            Transaction.account_id.in_(account_ids),
+        )
+        .group_by(Transaction.account_id, Transaction.posted_date)
+    ):
+        days["bank", account_id].append((day, rows, waiting))
+    for account_id, day, rows in db.execute(
+        select(InvestmentTxn.account_id, InvestmentTxn.trade_date, func.count())
+        .where(
+            InvestmentTxn.household_id == household_id,
+            InvestmentTxn.source_document_id == document.id,
+            InvestmentTxn.account_id.in_(account_ids),
+        )
+        .group_by(InvestmentTxn.account_id, InvestmentTxn.trade_date)
+    ):
+        days["investment", account_id].append((day, rows, 0))
+    shared: defaultdict[tuple[str, uuid.UUID], int] = defaultdict(int)
+    for record, _ in records:
+        shared[record.kind, record.account_id] += 1
+    out: list[ImportedStatement] = []
+    for record, account_name in records:
+        key = (record.kind, record.account_id)
+        alone = shared[key] == 1
+        counted = [
+            (rows, waiting)
+            for day, rows, waiting in days[key]
+            if alone or record.period_start <= day <= record.period_end
+        ]
+        out.append(
+            ImportedStatement(
+                account_id=record.account_id,
+                account_name=account_name,
+                kind="investment" if record.kind == "investment" else "bank",
+                period_start=record.period_start,
+                period_end=record.period_end,
+                outcome=record.outcome,
+                verification=_verification(record.verification),
+                source_format=record.source_format,
+                unchecked=is_unchecked(record.outcome, record.verification, record.source_format),
+                transactions=sum(rows for rows, _ in counted),
+                pending=sum(waiting for _, waiting in counted),
+            )
+        )
+    return out
+
+
+def _verification(value: str) -> Verification:
+    """The stored value as the API's literal (the table's check allows only these)."""
+    if value == "reconciled":
+        return "reconciled"
+    if value == "accepted":
+        return "accepted"
+    return "unverified"

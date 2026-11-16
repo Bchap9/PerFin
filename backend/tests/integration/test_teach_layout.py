@@ -9,6 +9,10 @@ template -> a second statement of the same layout imports on its own with
 no review item. The layout is ``tests/fixtures/synth_taught_layout.py`` (an
 invented institution, invented figures).
 
+A preview (``preview: true``) answers what the labels would read (the rows,
+whether they add up, how many waiting files of the layout would be read
+again) and writes nothing at all.
+
 Also: the stored template holds labels and column roles but no figure or
 account digit of the document, balances entered for a statement that does
 not add up are reconciled again, and a selection's free text is a note,
@@ -30,11 +34,12 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from app.auth.models import HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
 from app.core.errors import ProblemError
 from app.core.settings import Settings
-from app.db.models import AuditLog
+from app.db.models import AuditLog, Job
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, BalanceSnapshot, Institution
 from app.domain.documents.blobstore import LocalFSBlobStore
@@ -129,11 +134,14 @@ class Env:
             )
         )
 
-    def teach(self, document_id: uuid.UUID, body: dict[str, Any]) -> TeachOut:
+    def teach(
+        self, document_id: uuid.UUID, body: dict[str, Any], *, principal: Principal | None = None
+    ) -> TeachOut:
+        caller = principal or self.principal()
         with self.factories.transaction() as db:
-            apply_rls_context(db, self.principal())
+            apply_rls_context(db, caller)
             return teach_service.teach(
-                db, self.principal(), document_id, TeachRequest.model_validate(body), request=None
+                db, caller, document_id, TeachRequest.model_validate(body), request=None
             )
 
 
@@ -312,7 +320,7 @@ def test_a_taught_layout_reads_the_next_statement_with_no_review(env: Env) -> No
     env.run(INGEST_JOB_TYPE)
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_items(document_id)
-    assert document.parser_version == "layout_template/4"
+    assert document.parser_version == "layout_template/6"
     assert (document.period_start, document.period_end) == (first.start, first.end)
     assert _rows(env, account, document_id) == _expected(first)
 
@@ -647,3 +655,433 @@ def test_another_layout_of_the_institution_is_not_replaced_silently(env: Env) ->
         select(ParserFingerprint).order_by(ParserFingerprint.version)
     )
     assert [(v.version, v.template is None) for v in versions] == [(1, False), (2, True)]
+
+
+# ---------------------------------------------------------------------------
+# A preview of what the labels read, before anything is saved
+# ---------------------------------------------------------------------------
+
+#: The spans of the three columns both tables of the split sheet share.
+_SPLIT_COLUMNS: list[dict[str, Any]] = [
+    {"x0": 40.0, "x1": 140.0, "role": "date"},
+    {"x0": 140.0, "x1": 390.0, "role": "payee"},
+    {"x0": 390.0, "x1": 470.0, "role": "amount"},
+]
+
+
+def _split_labels(
+    document: Document,
+    spec: synth.SplitStatement,
+    directions: tuple[str, str] | None = ("money_in", "money_out"),
+) -> dict[str, Any]:
+    """The split sheet's facts and its two tables (``directions`` None: as the page prints)."""
+    words = _words(document)
+    account = next(w for w in words if w.text.endswith(spec.last4))
+    period = _line(words, spec.start.strftime("%d"))
+    headers = [w for w in words if w.text == "Booked"]
+    ends = [next(w for w in words if w.text == first) for first in ("Received", "Sent")]
+    assert len(headers) == 2
+    tables: list[dict[str, Any]] = []
+    for index, (header, end) in enumerate(zip(headers, ends, strict=True)):
+        table: dict[str, Any] = {
+            "kind": "transactions",
+            "page": 1,
+            # From the header line down to just above the line of the total.
+            "bbox": [40.0, header.bbox[1] - 2, 580.0, end.bbox[1] - 3],
+            "columns": _SPLIT_COLUMNS,
+        }
+        if directions is not None:
+            table["direction"] = directions[index]
+        tables.append(table)
+    return {
+        "labels": [
+            {"field": "account_number", "page": 1, "bbox": _box([account])},
+            {"field": "period_start", "page": 1, "bbox": period},
+            {"field": "period_end", "page": 1, "bbox": period},
+            {
+                "field": "opening_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.opening)),
+            },
+            {
+                "field": "closing_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.closing)),
+            },
+        ],
+        "tables": tables,
+    }
+
+
+def _count(env: Env, model: Any) -> int:
+    return len(env.query(select(model.id)))
+
+
+def _snapshot(env: Env, document_id: uuid.UUID) -> dict[str, Any]:
+    """Everything a preview must leave as it was."""
+    document = env.document(document_id)
+    return {
+        "extraction": document.extraction,
+        "account_id": document.account_id,
+        "institution_id": document.institution_id,
+        "period": (document.period_start, document.period_end),
+        "kind": document.kind,
+        "status": document.status,
+        "updated_at": document.updated_at,
+        "fingerprints": _count(env, ParserFingerprint),
+        "institutions": _count(env, Institution),
+        "items": sorted((str(i.id), str(i.state)) for i in env.query(select(ReviewItem))),
+        "jobs": _count(env, Job),
+        "audits": _count(env, AuditLog),
+        "rows": _count(env, Transaction),
+    }
+
+
+def test_preview_returns_rows_and_changes_nothing(env: Env) -> None:
+    spec = synth.split_statement()
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    document = env.document(document_id)
+    items = env.open_items(document_id)
+    before = _snapshot(env, document_id)
+
+    out = env.teach(
+        document_id,
+        {
+            **_split_labels(document, spec),
+            # Everything an apply would write with: a new institution, a
+            # layout to remember, a review item to close.
+            "institution_name": synth.INSTITUTION,
+            "remember": True,
+            **({"item_id": str(items[0].id)} if items else {}),
+            "preview": True,
+        },
+    )
+    preview = out.preview
+    assert preview is not None
+    assert preview.row_count == len(spec.rows)
+    assert [(r.posted_date, Decimal(r.amount), r.payee, r.table, r.page) for r in preview.rows] == [
+        (r.day, r.amount, r.narrative, 0 if r in spec.received else 1, 1) for r in spec.rows
+    ]
+    # The second table is money out: only then do the rows meet the balances.
+    assert preview.reconciliation == "ok"
+    assert Decimal(preview.difference or "0") == 0
+    assert preview.similar_waiting == 0
+    assert preview.account_id is None
+    assert [t.rows for t in out.tables] == [len(spec.received), len(spec.sent)]
+    read = {f.field: f.value for f in out.fields}
+    assert read["account_number"] == spec.last4
+    assert (read["period_start"], read["period_end"]) == (
+        spec.start.isoformat(),
+        spec.end.isoformat(),
+    )
+    # Nothing was applied, kept, queued, closed or recorded.
+    assert out.applied == []
+    assert out.rerun is None
+    assert out.job_id is None
+    assert out.fingerprint_id is None
+    assert out.reprocessed == []
+    assert _snapshot(env, document_id) == before
+
+
+def test_preview_then_apply_reads_the_same_rows(env: Env) -> None:
+    spec = synth.split_statement()
+    account = env.ledger.account(env.household_id, number_last4=spec.last4, currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    body = {**_split_labels(env.document(document_id), spec), "account_id": str(account.id)}
+
+    preview = env.teach(document_id, {**body, "preview": True}).preview
+    assert preview is not None
+    assert preview.reconciliation == "ok"
+    seen = [(r.posted_date, Decimal(r.amount), r.payee) for r in preview.rows]
+    assert len(seen) == preview.row_count == len(spec.rows)
+
+    applied = env.teach(document_id, body)
+    assert applied.preview is None
+    assert "statements" in applied.applied
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    taught = [
+        s for s in stored.statements if s.parser is not None and s.parser.name == "layout_template"
+    ]
+    assert len(taught) == 1
+    assert [(t.posted, t.amount, t.payee) for t in taught[0].transactions] == seen
+    assert applied.rerun == "import"
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (d, a.quantize(Decimal("0.000001")), p or "") for d, a, p in seen
+    )
+
+
+def test_preview_counts_the_waiting_documents_of_the_layout(env: Env) -> None:
+    first = synth.statement_one()
+    document_id = env.ingest(synth.pdf(first))
+    second = synth.statement_two()
+    waiting = [
+        env.ingest(synth.pdf(second), name="ledger-june.pdf"),
+        # The same layout once more (other bytes: an identical file is skipped).
+        env.ingest(synth.pdf(second, rows_per_page=9), name="ledger-june-reprint.pdf"),
+    ]
+    for other in waiting:
+        assert env.document(other).status is DocumentStatus.NEEDS_REVIEW
+    # A waiting file of another institution's layout is not counted.
+    other_layout = env.ingest(
+        pdf_synth.sample_national_pdf(pdf_synth.sample_national_statement(seed=43)),
+        name="another-layout.pdf",
+    )
+    assert env.document(other_layout).status is DocumentStatus.NEEDS_REVIEW
+    document = env.document(document_id)
+    before = _snapshot(env, document_id)
+    body = {**_labels(document, first), "remember": True, "preview": True}
+
+    preview = env.teach(document_id, body).preview
+    assert preview is not None
+    assert preview.similar_waiting == 2
+    assert preview.row_count == len(first.rows)
+
+    # Without the institution there is no layout to recognise them by.
+    unnamed = {**body, "remember": False}
+    unnamed["labels"] = [x for x in body["labels"] if x["field"] != "institution"]
+    preview = env.teach(document_id, unnamed).preview
+    assert preview is not None
+    assert preview.similar_waiting == 0
+    # Asked not to read the others again: none would be.
+    preview = env.teach(document_id, {**body, "reprocess_similar": False}).preview
+    assert preview is not None
+    assert preview.similar_waiting == 0
+
+    assert _snapshot(env, document_id) == before
+    for other in waiting:
+        assert env.document(other).status is DocumentStatus.NEEDS_REVIEW
+
+
+def test_preview_hides_payee_text_from_a_viewer_without_downloads(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = synth.split_statement()
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    body = {**_split_labels(env.document(document_id), spec), "preview": True}
+    before = _snapshot(env, document_id)
+
+    # A viewer may not teach, and a preview is no way around that.
+    onlooker = env.factories.user(role=None)
+    env.factories.member(env.household_id, onlooker.user.id, HouseholdRole.VIEWER)
+    viewer = Principal(
+        user=onlooker.user,
+        household_id=env.household_id,
+        role=HouseholdRole.VIEWER,
+        auth_method="session",
+    )
+    with pytest.raises(ProblemError) as caught:
+        env.teach(document_id, body, principal=viewer)
+    # (An unattached file of another member is not even visible to a viewer.)
+    assert caught.value.status in (403, 404)
+
+    # Whoever may not download the file is shown dates and amounts, never its text.
+    monkeypatch.setattr(teach_service, "may_download", lambda db, principal: False)
+    preview = env.teach(document_id, body).preview
+    assert preview is not None
+    assert preview.row_count == len(spec.rows)
+    assert [r.payee for r in preview.rows] == [None] * len(spec.rows)
+    assert [Decimal(r.amount) for r in preview.rows] == [r.amount for r in spec.rows]
+    assert _snapshot(env, document_id) == before
+
+
+def test_wrong_direction_shows_in_the_preview(env: Env) -> None:
+    spec = synth.split_statement()
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    document = env.document(document_id)
+    sent = sum((abs(r.amount) for r in spec.sent), Decimal(0))
+
+    # Both tables as printed: no figure carries a sign, so every row is money in.
+    preview = env.teach(
+        document_id, {**_split_labels(document, spec, None), "preview": True}
+    ).preview
+    assert preview is not None
+    assert preview.row_count == len(spec.rows)
+    assert all(Decimal(r.amount) > 0 for r in preview.rows)
+    assert preview.reconciliation == "mismatch"
+    assert preview.difference is not None
+    assert abs(Decimal(preview.difference)) == 2 * sent
+
+    # Without balances there is nothing to check the rows against.
+    tables_only = {"tables": _split_labels(document, spec)["tables"], "preview": True}
+    preview = env.teach(document_id, tables_only).preview
+    assert preview is not None
+    assert preview.row_count == len(spec.rows)
+    assert preview.reconciliation == "unavailable"
+    assert preview.difference is None
+
+
+def test_preview_refuses_a_fifth_transactions_table(env: Env) -> None:
+    spec = synth.split_statement()
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    table = _split_labels(env.document(document_id), spec)["tables"][0]
+    before = _snapshot(env, document_id)
+    with pytest.raises(ProblemError) as caught:
+        env.teach(document_id, {"tables": [table] * 5, "preview": True})
+    assert caught.value.slug == "invalid-table"
+    assert _snapshot(env, document_id) == before
+
+
+def test_teach_takes_the_account_from_the_request(env: Env) -> None:
+    spec = synth.split_statement()
+    # No account carries the sheet's digits: only the request says where it goes.
+    account = env.ledger.account(env.household_id, number_last4="7706", currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    document = env.document(document_id)
+    assert document.account_id is None
+    labels = _split_labels(document, spec)
+
+    # A preview names the account the rows would go to and sets nothing.
+    preview = env.teach(document_id, {**labels, "preview": True}).preview
+    assert preview is not None
+    assert preview.account_id is None
+    preview = env.teach(
+        document_id, {**labels, "account_id": str(account.id), "preview": True}
+    ).preview
+    assert preview is not None
+    assert preview.account_id == account.id
+    assert env.document(document_id).account_id is None
+    with pytest.raises(ProblemError) as caught:
+        env.teach(document_id, {**labels, "account_id": str(uuid.uuid4()), "preview": True})
+    assert caught.value.status == 404
+
+    out = env.teach(document_id, {**labels, "account_id": str(account.id)})
+    assert "account_id" in out.applied
+    assert env.document(document_id).account_id == account.id
+    assert out.rerun == "import"
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
+    )
+
+
+# ---------------------------------------------------------------------------
+# Review of import 1d: the order tables are drawn in, a card's balances, remember
+# ---------------------------------------------------------------------------
+
+
+def test_tables_drawn_in_reverse_order_read_the_same_rows(env: Env) -> None:
+    spec = synth.split_statement()
+    account = env.ledger.account(env.household_id, number_last4="7706", currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    received, sent = _split_labels(env.document(document_id), spec)["tables"]
+    # The person draws the lower table (money sent) first and labels no
+    # balance: nothing but the order tells the two tables apart.
+    body = {"tables": [sent, received], "account_id": str(account.id)}
+
+    out = env.teach(document_id, {**body, "preview": True})
+    preview = out.preview
+    assert preview is not None
+    assert preview.reconciliation == "unavailable"
+    # The rows as the page prints them; ``table`` is the request's index.
+    assert [(r.posted_date, Decimal(r.amount), r.payee, r.table) for r in preview.rows] == [
+        (r.day, r.amount, r.narrative, 1 if r in spec.received else 0) for r in spec.rows
+    ]
+    assert [t.rows for t in out.tables] == [len(spec.sent), len(spec.received)]
+
+    applied = env.teach(document_id, body)
+    assert applied.rerun == "import"
+    assert [t.rows for t in applied.tables] == [len(spec.sent), len(spec.received)]
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
+    )
+
+
+def _card_labels(document: Document, spec: synth.CardStatement) -> dict[str, Any]:
+    words = _words(document)
+    header = next(w for w in words if w.text == "Booked")
+    end = next(w for w in words if w.text == "End")
+    return {
+        "labels": [
+            {
+                "field": "opening_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.owed_before)),
+            },
+            {
+                "field": "closing_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.owed_now)),
+            },
+        ],
+        "tables": [
+            {
+                "kind": "transactions",
+                "page": 1,
+                "bbox": [40.0, header.bbox[1] - 2, 580.0, end.bbox[1] - 3],
+                "columns": _SPLIT_COLUMNS,
+                "direction": "card",
+            }
+        ],
+    }
+
+
+def test_balances_labelled_later_for_a_card_are_amounts_owed(env: Env) -> None:
+    spec = synth.card_statement()
+    account = env.ledger.account(
+        env.household_id, number_last4=spec.last4, currency="USD", type="credit_card"
+    )
+    document_id = env.ingest(synth.card_positive_charges_statement(), name="card-sheet.pdf")
+    labels = _card_labels(env.document(document_id), spec)
+
+    # First the table alone: the charges are spending, nothing to check them against.
+    first = env.teach(document_id, {"tables": labels["tables"], "account_id": str(account.id)})
+    assert first.rerun == "import"
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
+    )
+
+    # Then the balances, selected as the sheet prints them (owed: positive).
+    second = env.teach(document_id, {"labels": labels["labels"]})
+    assert second.applied == ["opening_balance", "closing_balance"]
+    assert "does_not_reconcile" not in second.warnings
+    stored = ExtractResult.model_validate(env.document(document_id).extraction).statements[-1]
+    assert stored.opening_balance is not None
+    assert stored.ledger_balance is not None
+    assert stored.opening_balance.amount == -spec.owed_before
+    assert stored.ledger_balance.amount == -spec.owed_now
+    assert stored.reconciliation is not None
+    assert stored.reconciliation.status == "ok"
+
+
+def test_preview_then_remembered_apply_reads_the_same_rows(env: Env) -> None:
+    spec = synth.split_statement()
+    account = env.ledger.account(env.household_id, number_last4=spec.last4, currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    body = {
+        **_split_labels(env.document(document_id), spec),
+        "institution_name": synth.INSTITUTION,
+        "remember": True,
+    }
+
+    preview = env.teach(document_id, {**body, "preview": True}).preview
+    assert preview is not None
+    assert preview.reconciliation == "ok"
+    seen = [(r.posted_date, Decimal(r.amount), r.payee) for r in preview.rows]
+    assert len(seen) == preview.row_count == len(spec.rows)
+
+    applied = env.teach(document_id, body)
+    assert applied.rerun == "pipeline"
+    env.run(INGEST_JOB_TYPE)
+    # Read again through the pipeline with the stored template: the same
+    # rows, checked against the same balances, as the preview said.
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    taught = [
+        s for s in stored.statements if s.parser is not None and s.parser.name == "layout_template"
+    ]
+    assert len(taught) == 1
+    assert [(t.posted, t.amount, t.payee) for t in taught[0].transactions] == seen
+    assert taught[0].reconciliation is not None
+    assert taught[0].reconciliation.status == "ok"
+    assert _rows(env, account, document_id) == sorted(
+        (d, a.quantize(Decimal("0.000001")), p or "") for d, a, p in seen
+    )
+    assert env.open_items(document_id) == []
+    template = parse_template(env.query(select(ParserFingerprint))[0].template)
+    assert template is not None
+    assert [(t.direction, t.end) for t in template.tables] == [
+        ("money_in", "Received in all"),
+        ("money_out", "Sent in all"),
+    ]

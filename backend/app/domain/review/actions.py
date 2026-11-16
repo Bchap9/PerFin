@@ -15,6 +15,15 @@ resolution needs (member or above who may change the item's document,
   resolved that way needs the statement to add up now
   (:func:`accept_statement`: pending rows confirmed, closing balance kept
   as a statement snapshot; ``409 statement-does-not-reconcile`` otherwise).
+* :func:`correct_lines` (used by a ``low_confidence_field`` resolution with
+  ``line_fixes``, :func:`app.domain.review.service._correct_held_lines`):
+  what a held activity line of a stored brokerage statement should read
+  (its date, amount, units or kind), typed in by a person. Only lines the
+  item lists, only while the item still describes the stored statement
+  (``409 review-item-stale``); exactly the doubts about the corrected
+  fields are settled, every other doubt of the line stays. A statement
+  whose figures were changed is reconciled again by the next import, never
+  taken at its earlier verdict.
 * :func:`remember_layout` (``POST /review/{id}/remember-layout``): a
   household ``parser_fingerprint`` for the document's layout
   (:func:`store_layout`, shared with "Teach PerFin", which also stores a
@@ -48,22 +57,25 @@ resolution needs (member or above who may change the item's document,
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any, Final
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
 
 from app.auth.principal import Principal
 from app.core.audit import audit
+from app.core.dates import in_business_range
 from app.core.errors import ProblemError
 from app.core.events import emit
 from app.core.money import to_storage
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import Account, BalanceSource, Institution
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource, Institution
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.documents.manage import can_edit_document, queue_ingestion
 from app.domain.documents.models import (
@@ -75,10 +87,12 @@ from app.domain.documents.models import (
     ReviewItem,
 )
 from app.domain.documents.service import visible_document_filter
+from app.domain.imports.statement_answers import payload_key, statement_key
 from app.domain.review import service
 from app.domain.review.layout import derive_match, stored_result
 from app.domain.review.schemas import (
     Correction,
+    LineFix,
     RememberLayout,
     RememberLayoutOut,
     ReviewItemOut,
@@ -93,7 +107,12 @@ from app.ingestion.classify.service import all_fingerprints
 from app.ingestion.classify.text import DocumentView
 from app.ingestion.parsers.registry import parser_named
 from app.ingestion.parsers.template import merge_templates, parse_template, rebalance
-from app.ingestion.sandbox.protocol import Balance, ExtractResult
+from app.ingestion.sandbox.protocol import (
+    Balance,
+    ExtractResult,
+    InvestmentActivity,
+    InvestmentStatement,
+)
 
 #: Other documents one "remember this layout" sends through the pipeline again.
 SIMILAR_MAX: Final = 50
@@ -279,13 +298,25 @@ def correct_balances(
     opening: Decimal | None,
     closing: Decimal | None,
     statement: int | None = None,
+    as_printed: bool = False,
+    account: Account | None = None,
 ) -> BalanceOutcome:
     """Set a stored statement's opening/closing balance and reconcile it again.
 
     The corrected statement is kept in ``document.extraction`` (a re-import
     reads it); a ``reconciliation_*`` item's figures are brought up to date
     so the queue shows the new difference.
+
+    ``as_printed``: the balances are given the way the statement of
+    ``account`` prints them (a balance owed on a card or a loan is positive
+    on paper) and are stored in ledger terms.
     """
+    if as_printed:
+        if account is None:
+            raise ValueError("a balance as printed needs its account")
+        if account.type in LIABILITY_TYPES:
+            opening = -opening if opening else opening
+            closing = -closing if closing else closing
     result = stored_result(document.extraction)
     if result is None or not result.statements:
         raise ProblemError(
@@ -372,6 +403,141 @@ def accept_statement(
         emit(db, item.household_id, "balance.updated", {"account_id": str(account.id)})
         snapshot = True
     return {"reconciled": True, "confirmed": confirmed, "snapshot": snapshot}
+
+
+# ---------------------------------------------------------------------------
+# Held brokerage lines
+# ---------------------------------------------------------------------------
+
+#: What a :class:`LineFix` can correct: the request's field, the activity
+#: row's field (also the name of the doubt a correction settles).
+LINE_FIELDS: Final = ("trade_date", "amount", "quantity", "type")
+#: Corrections after which the statement's stored reconciliation no longer
+#: describes its rows (a date moves no figure).
+_FIGURE_FIELDS: Final = frozenset({"amount", "quantity", "type"})
+
+
+@dataclass(frozen=True)
+class LinesOutcome:
+    """What :func:`correct_lines` did."""
+
+    #: The stored statement after the corrections.
+    statement: InvestmentStatement
+    #: How many lines changed.
+    changed: int
+    #: The fields corrected on each line (by its index in the statement).
+    fields: dict[int, tuple[str, ...]]
+
+
+def _line_invalid(detail: str) -> ProblemError:
+    return _invalid("invalid-resolution", "Invalid resolution", detail)
+
+
+def _lines_stale() -> ProblemError:
+    return ProblemError(
+        409,
+        "review-item-stale",
+        "Review item is out of date",
+        "The statement was read again since this item was raised; import the document "
+        "again to raise a current one.",
+    )
+
+
+def _same_line(row: InvestmentActivity, entry: dict[str, Any]) -> bool:
+    """The stored row is the one the item's ``entry`` shows (date, kind and amount)."""
+    try:
+        amount = Decimal(str(entry.get("amount")))
+    except ArithmeticError:
+        return False
+    return (
+        entry.get("date") == row.trade_date.isoformat()
+        and entry.get("type") == row.type
+        and amount == row.amount
+    )
+
+
+def correct_lines(
+    db: Session,
+    document: Document,
+    statement: int,
+    fixes: Sequence[LineFix],
+    *,
+    item: ReviewItem,
+) -> LinesOutcome:
+    """Rewrite held activity lines of a stored brokerage statement as a person corrected them.
+
+    ``fixes`` name lines by their ``index`` in ``item``'s payload; each sets
+    one or more of :data:`LINE_FIELDS`. A line the item does not list, a
+    line named twice or a fix that sets nothing is ``422``, as is a value
+    the statement's schema refuses. The item must still describe the stored
+    statement (its ``statement_key``, and each line's date, kind and
+    amount): ``409 review-item-stale`` otherwise, so a correction never
+    lands on another line. A statement that is not stored (read again from
+    a table on every import) is ``409 statement-unavailable``.
+
+    Exactly the corrected field names leave each line's ``low_confidence``.
+    When a figure changed, the stored reconciliation is dropped: the
+    importer checks the corrected rows again. The corrected statement is
+    kept in ``document.extraction`` (a re-import reads it); its statement
+    key changes with it.
+    """
+    result = stored_result(document.extraction)
+    if result is None or not 0 <= statement < len(result.investments):
+        raise ProblemError(
+            409,
+            "statement-unavailable",
+            "No statement to correct",
+            "The document has no stored brokerage statement whose lines could be corrected.",
+        )
+    current = result.investments[statement]
+    payload = item.payload or {}
+    if payload_key(payload) != statement_key(current):
+        raise _lines_stale()
+    listed = {
+        entry["index"]: entry
+        for entry in payload.get("lines") or []
+        if isinstance(entry, dict)
+        and isinstance(entry.get("index"), int)
+        and not isinstance(entry.get("index"), bool)
+    }
+    if len({fix.line for fix in fixes}) != len(fixes):
+        raise _line_invalid("Name each line once.")
+    activity = list(current.activity)
+    corrected: dict[int, tuple[str, ...]] = {}
+    for fix in fixes:
+        entry = listed.get(fix.line)
+        if entry is None:
+            raise _line_invalid("Correct only lines this item lists.")
+        if fix.line >= len(activity) or not _same_line(activity[fix.line], entry):
+            raise _lines_stale()
+        names = tuple(name for name in LINE_FIELDS if getattr(fix, name) is not None)
+        if not names:
+            raise _line_invalid("Give at least one corrected value for each line.")
+        if fix.trade_date is not None and not in_business_range(fix.trade_date):
+            raise _line_invalid("That date is too far in the past.")
+        row = activity[fix.line]
+        values = {
+            **row.model_dump(mode="json"),
+            **fix.model_dump(mode="json", include=set(names)),
+            "low_confidence": [name for name in row.low_confidence if name not in names],
+        }
+        try:
+            activity[fix.line] = InvestmentActivity.model_validate(values)
+        except ValidationError as exc:
+            raise _line_invalid("A corrected value does not fit this kind of line.") from exc
+        corrected[fix.line] = names
+    update: dict[str, Any] = {"activity": activity}
+    if any(_FIGURE_FIELDS.intersection(names) for names in corrected.values()):
+        update["reconciliation"] = None
+    fixed = current.model_copy(update=update)
+    statements = list(result.investments)
+    statements[statement] = fixed
+    document.extraction = result.model_copy(update={"investments": statements}).model_dump(
+        mode="json"
+    )
+    db.flush()
+    changed = sum(1 for index in corrected if activity[index] != current.activity[index])
+    return LinesOutcome(statement=fixed, changed=changed, fields=corrected)
 
 
 # ---------------------------------------------------------------------------

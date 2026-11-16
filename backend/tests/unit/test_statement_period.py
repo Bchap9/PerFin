@@ -30,7 +30,8 @@ from app.ingestion.classify.period import detect_period
 from app.ingestion.classify.service import apply_classification, classify_extraction
 from app.ingestion.classify.text import DocumentView as ClassifyView
 from app.ingestion.extract.pdf import extract_pdf
-from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers import confidence as conf
+from app.ingestion.parsers.base import DocumentView, ParseOutcome
 from app.ingestion.parsers.brokerage import BrokerageStatementParser
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.table_statement import (
@@ -491,3 +492,137 @@ def test_a_one_page_header_band_is_not_a_stated_period() -> None:
     # As far as the classifier believes a one-page band: below "stated".
     assert statement.confidence["period"] == 0.75
     assert not period_stated("pdf", *JULY, statement.confidence)
+
+
+# ---------------------------------------------------------------------------
+# Rows a few days outside the period (import 1d)
+# ---------------------------------------------------------------------------
+
+_PLAIN_HEADER: Cells = [(50, "Date"), (130, "Description"), (400, "Amount")]
+
+
+def _dated_rows(days: list[date], names: dict[date, str] | None = None) -> ParseOutcome:
+    """A July statement with a labelled period, no balance, and one row per day.
+
+    ``names`` gives the description of a day's row (else ``Corner shop N``).
+    """
+    rows: list[Cells] = [
+        [
+            (50, day.strftime("%m/%d/%Y")),
+            (130, (names or {}).get(day, f"Corner shop {index}")),
+            (400, "-12.00"),
+        ]
+        for index, day in enumerate(days)
+    ]
+    page: list[Cells] = [
+        [(50, "RIVERBEND TEST BANK")],
+        [(50, "Statement period: 07/01/2015 - 07/31/2015")],
+        [(50, "Account ending in 4821")],
+        _PLAIN_HEADER,
+        *rows,
+    ]
+    result = _extract(_pdf([page]))
+    return TableStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+
+
+def test_rows_within_the_grace_keep_their_score() -> None:
+    assert conf.PERIOD_GRACE_DAYS == 10
+    inside = date(2015, 7, 14)
+    near = [date(2015, 6, 21), date(2015, 6, 26), inside, date(2015, 8, 5), date(2015, 8, 10)]
+    outcome = _dated_rows(near)
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == JULY
+    assert [t.posted for t in statement.transactions] == near
+    by_day = {t.posted: t for t in statement.transactions}
+    for row in statement.transactions:
+        assert "posted_date" not in row.low_confidence, row.posted
+        assert row.confidence == by_day[inside].confidence, row.posted
+    # The period is the printed one: a row near it does not move it.
+    assert statement.confidence["period"] >= 0.9
+
+
+def test_rows_beyond_the_grace_score_inferred() -> None:
+    inside = date(2015, 7, 14)
+    far = [date(2015, 5, 22), date(2015, 6, 20), inside, date(2015, 8, 11), date(2015, 9, 9)]
+    outcome = _dated_rows(far)
+    (statement,) = outcome.statements
+    doubted = [t.posted for t in statement.transactions if "posted_date" in t.low_confidence]
+    assert doubted == [d for d in far if d != inside]
+    by_day = {t.posted: t for t in statement.transactions}
+    assert all(by_day[d].confidence == conf.INFERRED for d in doubted)
+    assert (by_day[inside].confidence or 0) > conf.INFERRED
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Prior statement balance",
+        "Brought over from June",
+        "Amount owed from last cycle",
+        "Carried over",
+        "Total of last statement",
+        "PREVIOUS AMOUNT DUE",
+    ],
+)
+@pytest.mark.parametrize("day", [date(2015, 6, 30), date(2015, 8, 1)])
+def test_a_line_that_names_a_balance_gets_no_grace(label: str, day: date) -> None:
+    """A balance carried over, dated a day outside the period, is no late purchase."""
+    inside, early = date(2015, 7, 14), date(2015, 6, 29)
+    outcome = _dated_rows(sorted([early, day, inside]), {day: label})
+    (statement,) = outcome.statements
+    by_day = {t.posted: t for t in statement.transactions}
+    # Read as a row at all, its date is doubted as it was before the grace.
+    assert day not in by_day or "posted_date" in by_day[day].low_confidence
+    assert day in by_day or outcome.skipped_lines == 0
+    # The purchase next to it keeps its grace.
+    assert "posted_date" not in by_day[early].low_confidence
+    assert "posted_date" not in by_day[inside].low_confidence
+
+
+def test_a_row_inside_the_period_may_name_a_balance() -> None:
+    """Only the grace is withheld: a row of the period is scored as any other."""
+    inside, named = date(2015, 7, 14), date(2015, 7, 20)
+    outcome = _dated_rows([inside, named], {named: "Balance transfer fee"})
+    (statement,) = outcome.statements
+    by_day = {t.posted: t for t in statement.transactions}
+    assert "posted_date" not in by_day[named].low_confidence
+    assert by_day[named].confidence == by_day[inside].confidence
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("Prior statement balance", True),
+        ("Carried over", True),
+        ("Brought over from February", True),
+        ("Amount owed from last cycle", True),
+        ("Total of last statement", True),
+        ("BALANCE FORWARD", True),
+        ("Fernhollow Bakery", False),
+        ("Priory Lane Garage", False),
+        ("Forwarding Depot 12", False),
+        ("Balancer Cycles", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_which_descriptions_name_a_balance(text: str | None, named: bool) -> None:
+    assert conf.names_a_balance(text) is named
+
+
+@pytest.mark.parametrize(
+    ("day", "outside"),
+    [
+        (date(2015, 6, 20), True),
+        (date(2015, 6, 21), False),
+        (date(2015, 7, 1), False),
+        (date(2015, 7, 31), False),
+        (date(2015, 8, 10), False),
+        (date(2015, 8, 11), True),
+    ],
+)
+def test_the_grace_is_ten_days_on_both_ends(day: date, outside: bool) -> None:
+    assert conf.outside_period(day, JULY) is outside
+    # Without a period nothing is outside it; without grace the edge is the period's.
+    assert conf.outside_period(day, None) is False
+    assert conf.outside_period(day, JULY, grace_days=0) is not (JULY[0] <= day <= JULY[1])

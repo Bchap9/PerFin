@@ -46,7 +46,11 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   fingerprint's learned template, "Teach PerFin",
   ``app.ingestion.parsers.template``, then reads its labelled tables and
   fills the period, account digits and balances; a ``lines_skipped`` item
-  carries the boxes of skipped lines): statements with
+  carries the boxes of skipped lines, and is raised only when a statement
+  of the document does not reconcile (:func:`_all_reconciled`): on one
+  whose balances agree the count is only kept (a brokerage statement
+  counts only when its checks cover the activity, ``_ACTIVITY_CHECKS``),
+  ``confidence["parse"]["skipped_lines"]``): statements with
   per-field confidence and a reconciliation (``app.ingestion.reconcile``)
   go through the structured importer like an OFX statement (rows below
   ``confidence_threshold`` or of a statement that does not reconcile are
@@ -140,6 +144,7 @@ from app.ingestion.sandbox.protocol import (
     WARNINGS_MAX,
     ExtractOptions,
     ExtractResult,
+    InvestmentReconciliation,
     InvestmentStatement,
     LoanStatement,
     ParseInfo,
@@ -593,6 +598,47 @@ def _vocabulary_batches(
     ]
 
 
+#: The brokerage checks that say something about a statement's activity
+#: lines: all of one set must have run. ``positions`` (each holding's
+#: quantity x price is its value) and ``holdings_total`` never look at the
+#: activity section; ``cash`` adds the lines up between the printed cash
+#: balances and ``total_value`` ties that cash to the printed account value.
+#: A plan statement's roll-forward covers every row it prints.
+_ACTIVITY_CHECKS: Final[tuple[frozenset[str], ...]] = (
+    frozenset({"cash", "total_value"}),
+    frozenset({"roll_forward_rows"}),
+)
+
+
+def _vouches_for_lines(check: InvestmentReconciliation | None) -> bool:
+    """A brokerage check that held and that covers the statement's activity."""
+    if check is None or check.status != "ok":
+        return False
+    ran = set(check.checks)
+    return any(needed <= ran for needed in _ACTIVITY_CHECKS)
+
+
+def _all_reconciled(
+    statements: Sequence[Statement], investments: Sequence[InvestmentStatement]
+) -> bool:
+    """Every statement the parsers read was checked and its figures agree.
+
+    At least one statement, and each (bank and brokerage) has a
+    reconciliation with status ``ok``: one that failed, one that could not
+    be checked and a document with no statement (a payslip, a receipt) do
+    not count. A brokerage statement counts only when the checks that held
+    cover its activity (:data:`_ACTIVITY_CHECKS`): one on which only the
+    holdings multiply out says nothing about a line the parser left unread,
+    so such a line is still asked about.
+    """
+    if not statements and not investments:
+        return False
+    banks = all(
+        s.reconciliation is not None and s.reconciliation.status == "ok" for s in statements
+    )
+    return banks and all(_vouches_for_lines(i.reconciliation) for i in investments)
+
+
 def _parse_document(
     db: Session,
     document: Document,
@@ -763,6 +809,7 @@ def _parse_document(
             "low_confidence_rows": sum(
                 1 for s in parsed for t in s.transactions if t.low_confidence
             ),
+            "skipped_lines": info.skipped_lines,
             "payslip": info.payslip.confidence if info.payslip else None,
             "receipt": info.receipt.confidence if info.receipt else None,
             "investments": [i.confidence for i in brokerage],
@@ -771,7 +818,12 @@ def _parse_document(
             ],
         },
     }
-    if info.skipped_lines:
+    if info.skipped_lines and not _all_reconciled(parsed, brokerage):
+        # A statement whose balances agree with its rows lost no row to a
+        # skipped line: the count stays in the stage facts and on the
+        # document (``confidence["parse"]["skipped_lines"]``), nobody is
+        # asked. Checks that never look at the rows (a brokerage statement's
+        # ``positions``) vouch for nothing here (:func:`_all_reconciled`).
         _review(
             db,
             document,

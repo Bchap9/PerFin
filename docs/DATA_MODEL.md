@@ -641,7 +641,10 @@ import_hash_alias (household, account, transaction, import_hash)
 statement_record  (household, account, document, kind: bank|investment,
                    outcome: imported|skipped, period_start, period_end,
                    period_stated, source_format, currency, closing_balance?,
-                   closing_cash?, holdings_value?, total_value?)
+                   closing_cash?, holdings_value?, total_value?,
+                   verification: reconciled|unverified|accepted)
+import_tombstone  (household, account, import_hash, deleted_at, deleted_by?,
+                   posted_date?, amount?)
 dropfolder_route  (household, folder slug, user, account?)
 dropfolder_entry  (household, path_key sha256, rel_path, size, mtime_ns, inode,
                    sha256?, document?, outcome: accepted|rejected|skipped, reason?,
@@ -726,6 +729,53 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   references are household-consistent `CASCADE` keys, so a record goes with
   its document or account. Not exported in a full export (instance import
   history, like `ingest_job`).
+  `verification` (revision 0013; `VARCHAR(16)`, checked, default
+  `unverified`) says how far the statement was checked against its own
+  balances (SECURITY.md C12): `reconciled` (its balances agreed with its
+  rows, at import or later in the reconcile view), `accepted` (a person
+  accepted it without balancing: "Accept as read", "Import as read") or
+  `unverified` (everything else, including CSV, OFX and QIF, which carry
+  nothing to reconcile, and a skipped statement). Only a `reconciled`
+  statement writes a balance snapshot. The API shows it per statement in
+  `GET /documents/{id}/imported` and `GET /documents/{id}/reconciliation`;
+  `unchecked` there (the marker "Not checked against a balance") is true
+  only for an imported, `unverified` record read from a PDF or an image.
+  Revision 0013 backfills the records of earlier imports from what those
+  imports left behind: a bank statement read from a PDF or image whose
+  account has a `statement` balance snapshot from the same document is
+  `reconciled`; an imported brokerage statement read from a PDF or image is
+  `reconciled`; either is `accepted` instead when no such snapshot exists
+  and a resolved review item of the document shows a person's answer for
+  that account ("import as read", or a `reconciliation_failed` /
+  `reconciliation_unavailable` item); everything else stays `unverified`.
+  A re-read that changes a statement's period removes the record of the
+  period it no longer has (`statement_records.drop_stale_records`).
+
+- `import_tombstone` (revision 0013, `app/domain/imports/models.py`,
+  read and written by `app/domain/imports/tombstones.py`) is one imported
+  ledger row a person deleted, so that no later import brings it back
+  (INGESTION.md "Match and deduplicate", "Rows a person deleted").
+  Columns: `account_id`, `import_hash` (`CHAR(64)`, lower-case hex,
+  checked), `deleted_at`, `deleted_by` (the user; `SET NULL` when the user
+  goes), `posted_date` and `amount` (`NUMERIC(20, 6)`), both nullable.
+  Unique per household, account and hash (`uq_import_tombstone_hash`: a
+  second delete of the same hash keeps the first row); the account
+  reference is a household-consistent `CASCADE` key, so the tombstones go
+  with their account. Household-scoped under forced row-level security
+  like every table here. It holds the date and the amount, and never the
+  payee, the memo or any other text of the row, for two reasons: the
+  reconcile view lists a statement's removed rows by them ("Put back"),
+  and an import hash contains the payee text, so the same row arriving
+  from another file under another spelling has another hash and is
+  recognised only by its day and amount. A tombstone is written when a
+  person deletes a single row (`DELETE /transactions/{id}`, the bulk
+  `delete`, "remove the earlier rows" in the reconcile view), for the row's
+  hash and for every `import_hash_alias` that stands for it; never when a
+  document is deleted with its data (the file can be uploaded again
+  whole), when a duplicate is confirmed (its hash moves to the row that is
+  kept) or when a re-read replaces rows nobody touched. A row typed by
+  hand has no hash and leaves none. Denied to AI access
+  (`app/domain/ai/classification.py`) and not exported (PORTABILITY.md).
 
 - `import_mapping` is a saved column mapping for one CSV/TSV layout. `spec`
   is `app.domain.imports.schemas.MappingSpec` (zero-based columns for the

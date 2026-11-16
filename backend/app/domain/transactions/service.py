@@ -31,6 +31,16 @@ with ids, amounts, dates and the names of changed free-text fields; the free
 text itself (payee text, memo, notes) is never copied into the audit trail)
 and emits a ``transaction.*`` event. A deleted transaction's audit row stays.
 
+A person who deletes one imported row (``DELETE /transactions/{id}``, the
+bulk delete) leaves a tombstone for its ``import_hash`` and for every hash
+that stands for it (``import_hash_alias``), so no later import brings the row
+back (``app.domain.imports.tombstones``). A delete made for another change
+leaves none: a document deleted with its rows can be uploaded again whole,
+and a confirmed duplicate's hash lives on with the row that was kept.
+
+A row added for a document (``source_document_id``, a line the reader missed)
+needs a document the caller may change; it has no ``import_hash``.
+
 A new manual transaction goes through the household's rules
 (``app.domain.rules.service.apply_rules_to``) in the same database
 transaction; the category, payee, notes and tags given by hand are protected.
@@ -63,6 +73,8 @@ from app.domain.accounts.visibility import (
     require_visible_accounts,
     visible_account_filter,
 )
+from app.domain.imports import tombstones
+from app.domain.review.models import ImportHashAlias
 from app.domain.transactions import repo, transfers
 from app.domain.transactions.models import (
     Category,
@@ -391,9 +403,15 @@ def _record(
 def create_transaction(
     db: Session, principal: Principal, data: TransactionCreate, *, request: HTTPConnection | None
 ) -> Transaction:
-    """A manual transaction on an account the caller may edit."""
+    """A manual transaction on an account the caller may edit.
+
+    With ``source_document_id`` the row is added for that document, which the
+    caller must be allowed to change: ``404 document-not-found`` when it is
+    hidden, of another household or missing, ``403`` when it is read-only.
+    """
     household_id = _household(principal)
     account = get_visible_account(db, principal, data.account_id, need="edit")
+    source_document_id = _editable_document_id(db, principal, data.source_document_id)
     amount = _amount_in(data.amount.currency, data.amount.amount, account.currency)
     _check_refs(
         db,
@@ -416,6 +434,7 @@ def create_transaction(
         notes=data.notes,
         status=data.status,
         review_state=ReviewState.NONE,
+        source_document_id=source_document_id,
     )
     db.add(row)
     db.flush()
@@ -435,6 +454,18 @@ def create_transaction(
     )
     _apply_rules_to_new(db, principal, row, data, request=request)
     return row
+
+
+def _editable_document_id(
+    db: Session, principal: Principal, document_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """``document_id`` when the caller may change that document (None stays None)."""
+    if document_id is None:
+        return None
+    # Imported here: ``app.domain.documents.manage`` imports this module.
+    from app.domain.documents.manage import get_editable_document
+
+    return get_editable_document(db, principal, document_id).id
 
 
 def _apply_rules_to_new(
@@ -549,16 +580,58 @@ def update_transaction(
     return row
 
 
+def _leave_tombstones(db: Session, principal: Principal, row: Transaction) -> bool:
+    """Remember every import hash of ``row``, which is about to be deleted.
+
+    Its own ``import_hash`` and the hashes that stand for it
+    (``import_hash_alias``: confirmed duplicates of it), read here because the
+    aliases go with the row. True when a tombstone was written; False for a
+    row no import could bring back.
+    """
+    written = tombstones.add_tombstone(db, row, user_id=principal.user_id)
+    aliases = db.execute(
+        select(ImportHashAlias.import_hash)
+        .where(
+            ImportHashAlias.household_id == row.household_id,
+            ImportHashAlias.account_id == row.account_id,
+            ImportHashAlias.transaction_id == row.id,
+        )
+        .order_by(ImportHashAlias.import_hash)
+    ).scalars()
+    for alias in list(aliases):
+        # ``add_tombstone`` reads a ledger row: this one is never added to the session.
+        stand_in = Transaction(
+            household_id=row.household_id,
+            account_id=row.account_id,
+            import_hash=str(alias),
+            posted_date=row.posted_date,
+            amount=row.amount,
+        )
+        written = tombstones.add_tombstone(db, stand_in, user_id=principal.user_id) or written
+    return written
+
+
 def delete_transaction(
-    db: Session, principal: Principal, row: Transaction, *, request: HTTPConnection | None
+    db: Session,
+    principal: Principal,
+    row: Transaction,
+    *,
+    request: HTTPConnection | None,
+    tombstone: bool = False,
 ) -> None:
     """Delete ``row`` (loaded for edit and locked); the audit row keeps its facts.
 
     A transfer leg dissolves its transfer first (the other leg stays, unlinked).
+
+    ``tombstone``: a person deleted this one row, so its import hashes are
+    remembered and no later import brings it back. Left False where the row
+    goes as part of another change (a document deleted with its rows, a
+    confirmed duplicate merged into the row that is kept).
     """
     if row.transfer_group_id is not None:
         transfers.unlink(db, principal, row, request=request)
     before = _facts(row)
+    before["tombstoned"] = tombstone and _leave_tombstones(db, principal, row)
     before["splits"] = len(repo.splits_for(db, row.household_id, [row.id]).get(row.id, []))
     before["tag_ids"] = sorted(repo.tag_ids_for(db, row.household_id, [row.id]).get(row.id, []))
     _record(
@@ -723,7 +796,9 @@ def bulk(
         for tid, row in rows.items():
             if row.transfer_group_id is not None:
                 transfers.unlink(db, principal, row, request=request)
-            _bulk_audit(db, principal, row, data, request, _facts(row))
+            facts = _facts(row)
+            facts["tombstoned"] = _leave_tombstones(db, principal, row)
+            _bulk_audit(db, principal, row, data, request, facts)
             repo.delete_transaction(db, row)
             db.expunge(row)
             changed.append(row)

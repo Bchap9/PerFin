@@ -100,11 +100,14 @@ export function downloadUrl(id: string): string {
   return `/api/v1/documents/${encodeURIComponent(id)}/download`;
 }
 
+/** Read the file again from the start (a job; the status follows by the event stream). */
 export function reprocessDocument(id: string): Promise<unknown> {
   return unwrap(api.POST("/api/v1/documents/{document_id}/reprocess", { params: { path: { document_id: id } } }));
 }
 
 export type DocumentImported = Schemas["DocumentImportedOut"];
+/** One statement a file produced: where it went and how it was checked. */
+export type ImportedStatement = Schemas["ImportedStatement"];
 
 export function getImported(id: string): Promise<DocumentImported> {
   return unwrap(api.GET("/api/v1/documents/{document_id}/imported", { params: { path: { document_id: id } } }));

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from app.domain.imports import service as imports_service
 from app.domain.imports.schemas import (
     DATE_FORMATS,
     ApplyMapping,
@@ -509,3 +510,84 @@ def test_an_alias_hash_matches_its_kept_transaction_exactly() -> None:
 def test_plan_needs_one_hash_per_row() -> None:
     with pytest.raises(ValueError, match="one hash per row"):
         plan([], _rows((D1, "1", None)), [])
+
+
+def _cells(*rows: list[str]) -> Table:
+    return Table(
+        encoding="utf-8",
+        delimiter=",",
+        has_header=True,
+        rows=list(rows),
+        column_count=max(len(row) for row in rows),
+    )
+
+
+HEADER = ["Date", "Description", "Amount"]
+
+
+@pytest.mark.parametrize(
+    "total",
+    [
+        ["Total", "", "0.00"],
+        ["", "TOTALS", "0.00"],
+        ["Ending Balance", "", "1,204.18"],
+        ["Closing balance:", "", "88.10"],
+        ["Balance", "", "88.10"],
+    ],
+)
+def test_header_and_a_lone_total_row_is_header_only(total: list[str]) -> None:
+    assert imports_service.header_only(_cells(HEADER, total)) is True
+    assert imports_service.header_only(_cells(HEADER, ["", "", ""], total, total)) is True
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        # A transaction beside the total.
+        [["2026-05-04", "Corner Bakery", "-4.50"], ["Total", "", "-4.50"]],
+        # A payee whose name starts with the word, on a dated row.
+        [["Totally Fine Shop", "2026-05-04", "-4.50"]],
+        [["Balance transfer fee", "05/04/2026", "-12.00"]],
+        # A dated balance line may be the only thing the file says.
+        [["Balance", "4 May 2026", "88.10"]],
+        # Words that only contain "total".
+        [["Subtotal", "", "0.00"]],
+    ],
+    ids=["row_and_total", "totally", "balance_transfer", "dated_balance", "subtotal"],
+)
+def test_rows_that_are_not_totals_are_not_header_only(rows: list[list[str]]) -> None:
+    assert imports_service.header_only(_cells(HEADER, *rows)) is False
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ["Total Wine Shop", "04/01", "-30.00"],
+        ["Totally Fine Shop", "1.4.", "-5.00"],
+        ["Balance Transfer Fee", "46113", "-5.00"],
+        ["Total Fitness", "01-Apr", "-25.00"],
+        ["Total Fitness", "2026/04", "-25.00"],
+        ["Balance Bikes", "", "-25.00"],
+    ],
+)
+def test_a_payee_that_starts_with_a_total_word_is_a_row_whatever_its_date(row: list[str]) -> None:
+    """A one-row export whose date no reader knows is still offered its columns."""
+    header = ["Description", "Date", "Amount"]
+    assert imports_service.header_only(_cells(header, row)) is False
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Total", "TOTALS:", "Total for period", "Total debits", "Ending balance", "Balance -"],
+)
+def test_total_labels_with_their_usual_tails_are_total_lines(label: str) -> None:
+    assert imports_service.header_only(_cells(HEADER, [label, "", "12.00"])) is True
+
+
+def test_single_row_cases_of_header_only_are_unchanged() -> None:
+    assert imports_service.header_only(_cells(HEADER)) is True
+    assert imports_service.header_only(_cells(["01/05/2026", "Corner Bakery", "-4.50"])) is False
+    assert imports_service.header_only(_cells(["Total", "", "0.00"])) is False
+    # Two rows of which the first is no header (it carries a digit) are a table.
+    first = ["01/05/2026", "Corner Bakery", "-4.50"]
+    assert imports_service.header_only(_cells(first, ["Total", "", "-4.50"])) is False
