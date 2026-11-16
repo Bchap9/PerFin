@@ -807,6 +807,14 @@ a child answering with parser output is `bad_output`.
     (`Deposits | 2 items | 250.00` over `Withdrawals | 3 items |
     120.00`) and names nothing: the table under the box is read by its
     printed signs.
+  - *Vertical rules printed as text.* A cell that is one or more
+    vertical bars and nothing else (`|` between the two halves of a table
+    printed across the page, on the header line, on a line of its own and
+    after a row's amount) is dropped before anything is read
+    (`statement_lines.without_rules`), and a line of bars alone is no
+    line: a bar is no heading, no description and no figure. A dash is
+    kept (it may be a sign, a separator or an empty column), and so is a
+    bar among the words of a cell.
   - *Tables printed across the page.* Under `Number | Date Paid | Amount`
     printed two or three times side by side, every group is read by its
     own columns (`statement_header.across_groups`): a date and an amount
@@ -930,7 +938,8 @@ a child answering with parser output is `bad_output`.
     payee's (`Total Wine and More`), the date-led lines that follow a
     section's total on its page under no title, and
     the same lines with words on them after a header of heading words
-    that ended the table without being one PerFin reads (`Date |
+    that is not one PerFin reads, whether it ended a table or stands
+    outside any (`Date |
     Balance`; figures by day under it have no words and are not counted,
     and neither is a dated balance line of a summary grid printed under
     the table); each group of a table printed across the page that

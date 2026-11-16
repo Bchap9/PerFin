@@ -25,6 +25,11 @@ Testable on hand-built lines without a PDF.
   (``8 item(s) totaling $3,500.00``), the total of the rows above it.
 * :func:`amount_only`: a line that is one amount.
 
+* :func:`without_rules`: the lines without the cells that are a vertical
+  rule and nothing else (``|`` between the two halves of a table printed
+  across the page, or after a row's amount): a rule is no heading, no
+  description and no figure, and a line of rules alone is no line.
+
 One function reads a run of lines: :func:`summary_starts` says at which
 line each account of a statement starts when the accounts are told apart
 only by their summaries (two accounts printed under one masked number).
@@ -83,10 +88,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
-from app.ingestion.parsers.base import ViewLine
+from app.ingestion.parsers.base import Cell, ViewLine
 from app.ingestion.parsers.text import MAX_LINE, Amount, find_amounts, read_amount
 
 #: A line of more words is a sentence, whatever it starts and ends with.
@@ -121,6 +126,8 @@ _LONE_SYMBOL: Final = re.compile(r"[-+\u2212]?[$\u00a3\u20ac]")
 _LONE_SIGNS: Final = frozenset({"-", "+", "\u2212", "\u2013", "\u2014"})
 #: Punctuation around a word of a title's total (``(8``, ``checks)``, ``total:``).
 _WRAPPING: Final = "()[]:,.;"
+#: What a vertical rule is drawn with when it is text.
+_RULE_GLYPHS: Final = frozenset("|\u00a6\u2502\u2503")
 _ITEMS_TOTAL: Final = re.compile(
     r"\d{1,6} item(?:s|\(s\))? total{1,2}ing (?P<amount>\S.{0,40})", re.IGNORECASE
 )
@@ -136,6 +143,26 @@ class LedRow:
     description: tuple[str, ...]
     #: The figure as printed: its sign and marker, no direction inferred.
     amount: Amount
+
+
+def _rule(cell: Cell) -> bool:
+    """``cell`` prints vertical bars and nothing else."""
+    text = cell.text.replace(" ", "")
+    return bool(text) and all(ch in _RULE_GLYPHS for ch in text)
+
+
+def without_rules(lines: Sequence[ViewLine]) -> list[ViewLine]:
+    """``lines`` without their cells that are a vertical rule alone; a line
+    of nothing else is left out. A line without such a cell is returned as
+    it is."""
+    out: list[ViewLine] = []
+    for line in lines:
+        kept = tuple(cell for cell in line.cells if not _rule(cell))
+        if len(kept) == len(line.cells):
+            out.append(line)
+        elif kept:
+            out.append(replace(line, cells=kept, text=" ".join(cell.text for cell in kept)))
+    return out
 
 
 def _date_words(words: Sequence[str], date_shaped: Callable[[str], bool]) -> int:

@@ -161,8 +161,9 @@ are read the same way:
    far below the row above) is counted as skipped. So is, under the
    warning ``rows_without_header:<n>``, each date-led line ending in an
    amount that also has **words**, on the page of a line of heading words
-   that ended the table without being a header we read (``Date |
-   Balance``), up to the next title, block title or header: such a line
+   that is no header we read (``Date | Balance``), whether it ended a
+   table of ours or stands outside any, up to the next title, block title
+   or header: such a line
    may have been a row's wrapped text, and the lines after it rows.
    Figures by day under it have no words and are not counted, and neither
    is a dated balance line (``01/31 | Ending Balance | 405.50``: a summary
@@ -532,6 +533,7 @@ from app.ingestion.parsers.statement_lines import (
     led_row,
     summary_starts,
     titled_total,
+    without_rules,
 )
 from app.ingestion.parsers.text import (
     FULL_STYLES,
@@ -1330,9 +1332,11 @@ class TableStatementParser(DocumentParser):
         return header_like(line, self.headers)
 
     def prepare(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
-        """``lines`` as the reader wants them: stacked headers made one line
+        """``lines`` as the reader wants them: without the cells that are a
+        vertical rule (:func:`~app.ingestion.parsers.statement_lines.without_rules`)
+        and with stacked headers made one line
         (:func:`~app.ingestion.parsers.statement_header.stack_headers`)."""
-        return stack_headers(lines, self.headers)
+        return stack_headers(without_rules(lines), self.headers)
 
     def has_table(self, view: DocumentView) -> bool:
         return self.lines_have_table(self.prepare(view.lines))
@@ -2437,7 +2441,11 @@ class TableStatementParser(DocumentParser):
                     close_headerless()
                     unread = None
                 elif self._header_like(line):
+                    # The header of a table we do not read, met outside a
+                    # table: what stands under it on the page may be rows,
+                    # as after one that ended a table of ours.
                     close_headerless()
+                    unread = line.page
                 elif headerless is not None:
                     led = self._led(line)
                     total = None if led is not None else self._section_total(line, norm)

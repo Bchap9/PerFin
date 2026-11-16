@@ -373,8 +373,8 @@ What remains (details in docs/ROADMAP.md):
   a figure between dated rows, rows above the first account of a member
   statement, dated lines under a section title that has no header row
   and whose total is not theirs (`rows_without_header:<n>`), lines of a
-  date, words and a figure after a header of heading words that ended
-  the table, the entries of a table printed across the page that do not
+  date, words and a figure after a header of heading words that is not
+  read, the entries of a table printed across the page that do not
   read (`table_across_unread:<n>`) and the undated lines with a figure
   of a table that reads no row at all are counted and raise the
   `lines_skipped` item, so the document waits instead of ending
@@ -432,6 +432,14 @@ What remains (details in docs/ROADMAP.md):
   over a page break too. A section whose total disagrees is counted,
   not read, and the statement waits. A statement that prints no header
   row anywhere is recognised as a statement.
+- **A vertical bar printed between the halves of a table is no cell.**
+  A statement set line-printer style prints `|` between two tables side
+  by side, also after a row that stands alone. The header was then no
+  header and the row beside the bar was neither imported nor counted.
+  Such cells are dropped before the page is read; the same bars had made
+  rows out of a grid of daily balances. Lines of a date, words and a
+  figure under a header PerFin does not read are now counted outside a
+  table as well.
 - **Tables printed across the page are read whole.** Every group of
   `Number | Date Paid | Amount` printed two or three times side by side
   is read by its own columns; only a group that does not read is
