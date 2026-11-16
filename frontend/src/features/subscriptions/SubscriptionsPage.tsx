@@ -124,6 +124,15 @@ function SeriesName({ row }: { row: Subscription }) {
   );
 }
 
+/** The series' charges in the transactions list (`?subscription=`), open to every role. */
+function TransactionsLink({ row }: { row: Subscription }) {
+  return (
+    <Link to="/transactions" search={{ subscription: row.id }} className="subs-tx-link" aria-label={`Transactions of ${row.name}`}>
+      Transactions
+    </Link>
+  );
+}
+
 function dateText(iso: string | null): string {
   return iso === null ? "Not known" : (formatDate(iso) ?? iso);
 }
@@ -366,7 +375,8 @@ export function ActiveTable({
             {sorted.map((row) => (
               <tr key={row.id}>
                 <th scope="row" className="subs-col-name">
-                  <SeriesName row={row} /> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>
+                  <SeriesName row={row} /> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>{" "}
+                  <TransactionsLink row={row} />
                 </th>
                 <td data-label="Merchant" className="subs-col-rest">
                   {row.merchant ?? ""}

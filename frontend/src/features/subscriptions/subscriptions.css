@@ -42,6 +42,15 @@ a.subs-name {
   color: inherit;
 }
 
+/* The series' charges in Transactions, under its name in the Active table. */
+.subs-tx-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
 .subs-look {
   display: flex;
   flex-wrap: wrap;

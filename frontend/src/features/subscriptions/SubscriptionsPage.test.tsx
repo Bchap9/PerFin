@@ -437,6 +437,12 @@ describe("subscriptions view", () => {
     expect(within(soon).getByRole("link", { name: "Streamly" })).toHaveAttribute("href", "/plan/subscriptions/s-1");
   });
 
+  it("each active series links to its transactions, for every role", async () => {
+    setup([STREAMLY], { session: { role: "viewer" } });
+    const active = await screen.findByRole("table", { name: "Active" });
+    expect(within(active).getByRole("link", { name: "Transactions of Streamly" })).toHaveAttribute("href", "/transactions?subscription=s-1");
+  });
+
   it("has no axe violations", async () => {
     const { container } = setup([{ ...STREAMLY, open_events: 1 }, MAYBE, CLOUD, GYM, { ...series("s-7", "Old Radio"), status: "ended" }], { events: [MISSED_EVENT] });
     const look = await screen.findByRole("region", { name: "Needs a look" });
