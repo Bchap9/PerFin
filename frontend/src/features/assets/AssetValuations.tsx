@@ -93,14 +93,27 @@ function EditDialog({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   );
 }
 
-function Valuations({ asset, editable, focusValue }: { asset: Asset; editable: boolean; focusValue: number }) {
+function Valuations({
+  asset,
+  editable,
+  focusValue,
+  onValueFocused,
+}: {
+  asset: Asset;
+  editable: boolean;
+  focusValue: number;
+  onValueFocused?: (() => void) | undefined;
+}) {
   const valueInput = useRef<HTMLInputElement>(null);
-  // The hub's "Add valuation" asks for the value field (a new request each time).
+  // The hub's "Add valuation" asks for the value field. The request is used
+  // up once the field has the focus, so coming back to the tab later (with
+  // Back or Forward) does not move the focus again.
   useEffect(() => {
-    if (focusValue > 0) {
-      valueInput.current?.focus();
+    if (focusValue > 0 && valueInput.current !== null) {
+      valueInput.current.focus();
+      onValueFocused?.();
     }
-  }, [focusValue]);
+  }, [focusValue, editable, onValueFocused]);
   const accounts = useAccounts();
   const currency = accounts.data?.find((a) => a.id === asset.account_id)?.currency ?? asset.current_value?.value.currency ?? "USD";
   const query = useQuery({ queryKey: assetKeys.valuations(asset.id), queryFn: () => listValuations(asset.id) });
@@ -192,9 +205,18 @@ function Valuations({ asset, editable, focusValue }: { asset: Asset; editable: b
 /**
  * The asset of a manual asset account, by its id (found by the hub from
  * `GET /assets`). `focusValue` above 0 puts the focus in the value field of
- * "Add a value", once per new number (the hub's "Add valuation").
+ * "Add a value" (the hub's "Add valuation"); `onValueFocused` then tells the
+ * hub to set it back to 0, so the request is used once.
  */
-export function AssetValuations({ assetId, focusValue = 0 }: { assetId: string; focusValue?: number }) {
+export function AssetValuations({
+  assetId,
+  focusValue = 0,
+  onValueFocused,
+}: {
+  assetId: string;
+  focusValue?: number;
+  onValueFocused?: () => void;
+}) {
   const navigate = useNavigate();
   const query = useQuery({ queryKey: assetKeys.one(assetId), queryFn: () => getAsset(assetId), enabled: assetId !== "" });
   const accounts = useAccounts();
@@ -247,7 +269,7 @@ export function AssetValuations({ assetId, focusValue = 0 }: { assetId: string; 
               </dl>
               {asset.description === null ? null : <p className="muted">{asset.description}</p>}
             </Card>
-            <Valuations asset={asset} editable={editable} focusValue={focusValue} />
+            <Valuations asset={asset} editable={editable} focusValue={focusValue} onValueFocused={onValueFocused} />
           </>
         )}
       </QueryState>

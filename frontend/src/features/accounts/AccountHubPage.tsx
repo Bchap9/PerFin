@@ -19,7 +19,7 @@ import "./accounts.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -100,8 +100,10 @@ function Hub({ account }: { account: Account }) {
   const toast = useToast();
   const [opened, setOpened] = useState<Opened>(null);
   const [requested, setTab] = useTabParam(HUB_TAB_IDS, defaultTab);
-  // Bumped by "Add valuation" so the Valuations tab focuses its value field.
+  // Bumped by "Add valuation" so the Valuations tab focuses its value field;
+  // set back to 0 once the field has the focus (a one-shot request).
   const [valueRequest, setValueRequest] = useState(0);
+  const valueFocused = useCallback(() => { setValueRequest(0); }, []);
   const writable = canWrite && account.can_edit;
   const name = accountLabel(account);
 
@@ -194,7 +196,7 @@ function Hub({ account }: { account: Account }) {
             action={writable ? { label: "Add asset details", onClick: () => { setOpened("asset"); } } : undefined}
           />
         ) : (
-          <AssetValuations assetId={asset.id} focusValue={valueRequest} />
+          <AssetValuations assetId={asset.id} focusValue={valueRequest} onValueFocused={valueFocused} />
         );
     }
   };

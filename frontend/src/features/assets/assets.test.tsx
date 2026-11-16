@@ -120,6 +120,33 @@ describe("assets", () => {
     expect(await screen.findByRole("dialog", { name: "Add transaction" })).toBeInTheDocument();
   });
 
+  it("Add valuation focuses the value field once, not again when history returns to Valuations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    const { router } = renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    const form = await screen.findByRole("form", { name: "Add a value" });
+    await vi.waitFor(() => { expect(within(form).getByLabelText(/^Value/)).toHaveFocus(); });
+    // Leave Valuations without the tab control (a pushed entry), then come back with Back.
+    router.history.push(HUB);
+    expect(await screen.findByRole("tab", { name: "Overview", selected: true })).toBeInTheDocument();
+    router.history.back();
+    const again = await screen.findByRole("form", { name: "Add a value" });
+    expect(screen.getByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
+    // Give a stray effect the chance to run before checking.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(within(again).getByLabelText(/^Value/)).not.toHaveFocus();
+  });
+
   it("Add valuation on an asset account without details asks for them with a first value", async () => {
     mockApi({
       ...ownerSession(),
