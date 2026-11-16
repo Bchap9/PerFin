@@ -31,7 +31,7 @@ import {
 } from "../features/auth/testing";
 import { tx } from "../features/transactions/fixtures";
 import { expectNoAxeViolations } from "../test/axe";
-import { NEW_ROUTES, SECTIONS } from "./routeMap";
+import { NEW_ROUTES, SECTIONS, SETTINGS_GROUPS } from "./routeMap";
 import { THEME_STORAGE_KEY } from "./theme";
 
 const ROOT = join(__dirname, "..", "..", "..");
@@ -345,6 +345,24 @@ describe.each(NEW_ROUTES.map((route) => [route]))("%s", (route) => {
     expect(document.getElementById(main.getAttribute("aria-labelledby") ?? "")).toBe(h1.at(0));
   });
 });
+
+// A Settings link says what the page it opens is called: the side list's
+// label is the page's title, word for word.
+describe.each(SETTINGS_GROUPS.flatMap((group) => group.pages.map((page) => [page.label, page.to])))(
+  "Settings: %s",
+  (label, to) => {
+    it("opens a page titled with the side list's label", async () => {
+      await openRoute(to);
+      // The side list has headings of its own; the page sits beside it.
+      const page = document.querySelector<HTMLElement>(".settings-shell__page");
+      expect(page).not.toBeNull();
+      const titles = within(page ?? document.body)
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent);
+      expect(titles.at(0)).toBe(label);
+    });
+  },
+);
 
 /** The first item of a generated list body replaced by `patch`, keeping the body's shape. */
 function patchFirst(body: unknown, patch: Record<string, unknown>): unknown {

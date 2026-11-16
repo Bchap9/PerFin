@@ -950,7 +950,7 @@ function isHeldStatement(item: ReviewItem): boolean {
 
 function asReadNote(item: ReviewItem): string {
   if (hasSuggestedKinds(item)) {
-    return "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin has learned”; nothing else of the statement is.";
+    return "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin learned”; nothing else of the statement is.";
   }
   const reason = itemReason(item);
   if (reason === "investment_lines_held") {

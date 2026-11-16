@@ -224,7 +224,7 @@ export function ImportSection({ pollMs = 1000 }: { pollMs?: number }) {
 
 export function DataPage() {
   return (
-    <SettingsPage title="Data export and import">
+    <SettingsPage title="Export and import">
       <ExportSection />
       <ImportSection />
     </SettingsPage>

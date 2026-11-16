@@ -281,7 +281,7 @@ describe("LearnedPage", () => {
     ).toBeInTheDocument();
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
     expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-    expect(screen.getByRole("heading", { level: 2, name: "What PerFin has learned" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "What PerFin learned" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "rules" })).toHaveAttribute("href", "/settings/rules");
     await screen.findByRole("table", { name: "Learned statement wording" });
     const documentLinks = screen

@@ -14,7 +14,7 @@ import { SettingsNav, useIsInstanceAdmin, visibleSettingsGroups } from "./Settin
 export const SETTINGS_INTRO =
   "Rules and categories are made where you work, in Transactions and the Inbox. They are kept here to edit or remove.";
 
-/** Said on top of the rules list and of "What PerFin has learned" (plan, Task 19). */
+/** Said on top of the rules list and of "What PerFin learned" (plan, Task 19). */
 export const RULES_INTRO =
   "Rules are made where you work: in a transaction's panel or from an Inbox card. Here you can change their order, edit or undo them.";
 

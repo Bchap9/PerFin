@@ -647,7 +647,7 @@ export function LearnedPage() {
   // The server lets owners and admins start a refresh; forgetting an entry is a member's.
   const canRefresh = canManageMembers(session?.household?.role);
   return (
-    <SettingsPage title="What PerFin has learned">
+    <SettingsPage title="What PerFin learned">
       <p>{RULES_INTRO}</p>
       <div className="ledger-stack">
       <Card title="How files are recognised">

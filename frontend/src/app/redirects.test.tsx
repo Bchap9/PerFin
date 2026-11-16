@@ -29,7 +29,7 @@ const HEADINGS = new Map<string, RegExp>([
   ["/inbox/documents", /^Document library$/],
   ["/inbox/documents/$documentId", /^Document$/],
   ["/inbox/documents/$documentId/mapping", /^Map columns$/],
-  ["/settings/learned", /^What PerFin has learned$/],
+  ["/settings/learned", /^What PerFin learned$/],
   ["/accounts/investments", /^Investments$/],
   ["/accounts?group=loans", /^Loans$/],
   ["/accounts?group=property", /^Property and other$/],
