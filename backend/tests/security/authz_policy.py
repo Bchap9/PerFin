@@ -776,6 +776,7 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         # --- review queue (Phase 2): items of visible documents -------------
         f"GET {API}/review": scoped("review:read", role=V),
         f"GET {API}/review/cards": scoped("review:read", role=V),
+        f"GET {API}/inbox/summary": scoped("review:read", role=V),
         f"GET {API}/review/{{item_id}}": scoped("review:read", role=V, params=ITEM),
         f"POST {API}/review/{{item_id}}/resolve": scoped("review:write", role=M, params=ITEM),
         f"POST {API}/review/{{item_id}}/dismiss": scoped("review:write", role=M, params=ITEM),

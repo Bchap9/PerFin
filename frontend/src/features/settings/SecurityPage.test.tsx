@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 
 const webauthn = vi.hoisted(() => ({ startRegistration: vi.fn(), startAuthentication: vi.fn() }));
@@ -352,5 +353,16 @@ describe("security settings", () => {
     expect(within(form).getByText("Choose 1 to 90 days.")).toBeInTheDocument();
     expect(within(form).getByText("Choose at least one scope.")).toBeInTheDocument();
     expect(api.callsTo("POST", "/api/v1/auth/tokens")).toHaveLength(0);
+  });
+});
+
+describe("security page accessibility", () => {
+  it("has no axe violations", async () => {
+    securityApi();
+    const { container } = renderApp("/settings/security");
+    await screen.findByRole("form", { name: "Create a personal access token" });
+    await screen.findByText("Blue key");
+    await screen.findByText("Home Assistant");
+    await expectNoAxeViolations(container);
   });
 });

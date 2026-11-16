@@ -11,14 +11,14 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
+import { PageHeader } from "../../components/PageHeader";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { Table } from "../../components/Table";
 import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
 import { useCanWrite } from "../accounts/api";
-import { STATUS_LABELS } from "../imports/api";
-import { statusTone } from "../imports/UploadPage";
+import { investmentReading, STATUS_LABELS, statusTone } from "../imports/api";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import {
   docKeys,
@@ -77,11 +77,13 @@ export function DocumentsPage() {
   const canWrite = useCanWrite();
   const [deleting, setDeleting] = useState<DocumentRow | null>(null);
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">Document library</h1>
-        <Link to="/documents">Upload files</Link>
-      </div>
+    <div className="ledger-stack">
+      <PageHeader
+        title="Document library"
+        description="Every file PerFin has received, with the words it read."
+        breadcrumbs={[{ to: "/inbox", label: "Inbox" }, { label: "Documents" }]}
+        actions={<Link to="/inbox" hash="inbox-add-documents">Upload files</Link>}
+      />
       <form
         className="ledger-filters"
         role="search"
@@ -152,7 +154,7 @@ export function DocumentsPage() {
         ) : null}
         {query.isSuccess ? (
           <Table<DocumentRow>
-            caption="Documents"
+            caption="Files in the library"
             captionHidden
             rows={rows}
             rowKey={(row) => row.id}
@@ -164,7 +166,7 @@ export function DocumentsPage() {
                 rowHeader: true,
                 cell: (row) => (
                   <span>
-                    <Link to="/documents/$documentId" params={{ documentId: row.id }}>
+                    <Link to="/inbox/documents/$documentId" params={{ documentId: row.id }}>
                       {row.original_filename ?? "Unnamed file"}
                     </Link>
                     {row.snippet !== undefined && row.snippet !== null && row.snippet.length > 0 ? (
@@ -176,7 +178,23 @@ export function DocumentsPage() {
                   </span>
                 ),
               },
-              { id: "kind", header: "Kind", cell: (row) => KIND_LABELS[row.kind] },
+              {
+                id: "kind",
+                header: "Kind",
+                cell: (row) => {
+                  // A brokerage export says how it was read, whatever its status.
+                  const reading = investmentReading(row);
+                  return reading === null ? (
+                    KIND_LABELS[row.kind]
+                  ) : (
+                    <span>
+                      {KIND_LABELS[row.kind]}
+                      <br />
+                      <span className="ledger-muted">{reading}</span>
+                    </span>
+                  );
+                },
+              },
               { id: "source", header: "Source", cell: (row) => SOURCE_LABELS[row.source] },
               {
                 id: "status",
@@ -228,6 +246,6 @@ export function DocumentsPage() {
           }}
         />
       )}
-    </section>
+    </div>
   );
 }

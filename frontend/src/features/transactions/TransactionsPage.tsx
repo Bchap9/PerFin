@@ -1,33 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * Transactions: one list of every account. Every filter lives in the address
+ * (`filters.ts`) and is written back with `replace` as it changes, so the
+ * rail link, which carries no search, clears them. When anything narrows the
+ * list a total row says what the rows shown add up to.
+ *
+ * A row opens with its first cell's button (Table `rowLink`); Up and Down
+ * move between those buttons, one of which is in the tab order at a time.
+ * Opening a row puts `?tx=<id>` in the address (pushed, so Back closes the
+ * drawer); `?always=<id>` opens the drawer for that row with "Always use…"
+ * ticked. Closing takes both out and gives focus back to the row.
+ */
 import "../accounts/ledger.css";
 import "./transactions.css";
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
-import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
-import { Card } from "../../components/Card";
+import { CategoryPicker } from "../../components/CategoryPicker";
 import { Checkbox } from "../../components/Checkbox";
+import { Chip } from "../../components/Chip";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { MoneyText } from "../../components/MoneyText";
+import { PageHeader } from "../../components/PageHeader";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { Table, type TableColumn } from "../../components/Table";
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, isIsoDate } from "../../lib/dates";
+import { formatMoney } from "../../lib/money";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { AlwaysCategoriseDialog, RuleSavedNotice, type SavedRule } from "./AlwaysCategoriseDialog";
+import { AlwaysCategoriseDialog } from "./AlwaysCategoriseDialog";
+import { RuleSavedNotice, type SavedRule } from "./AlwaysSection";
 import {
   autoPairTransfers,
   canTeach,
-  EMPTY_FILTERS,
-  getTransaction,
   invalidateLedger,
-  listTransactions,
   merchantName,
   txKeys,
   useCategories,
@@ -37,18 +49,18 @@ import {
   useTags,
   type ReviewState,
   type Transaction,
-  type TransactionFilters,
 } from "./api";
 import { autoPairSummary } from "./autoPair";
 import { BulkBar } from "./BulkBar";
-import { CategoryCell, NotesCell, PayeeCell, rowLabel, TagsCell } from "./cells";
+import { CategoryCell, displayName, MerchantCell, NoteDialog, rowLabel } from "./cells";
 import { DeleteTransactionDialog } from "./DeleteTransactionDialog";
+import { fromSearch, hasFilters, listFiltered, NO_FILTERS, totals, withFilters, type ListFilters } from "./filters";
 import { useEditTransaction } from "./optimistic";
 import { isSuggestion } from "./provenance";
 import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
-import { dismissTeach, teachDismissed, TeachPrompt, type TeachOffer } from "./TeachPrompt";
 import { TransactionDialog } from "./TransactionDialog";
+import { TransactionDrawer } from "./TransactionDrawer";
 import { TransferDialog } from "./TransferDialog";
 
 const REVIEW_STATES: readonly { value: ReviewState; label: string }[] = [
@@ -57,42 +69,56 @@ const REVIEW_STATES: readonly { value: ReviewState; label: string }[] = [
   { value: "confirmed", label: "Confirmed" },
 ];
 
-function isReviewState(value: string): value is ReviewState | "" {
-  return value === "" || REVIEW_STATES.some((state) => state.value === value);
+function reviewState(value: string): ReviewState | "" {
+  return REVIEW_STATES.find((state) => state.value === value)?.value ?? "";
 }
 
-function initialFilters(search: Record<string, unknown>): TransactionFilters {
-  // A link from a report, an account page or a document narrows the list:
-  // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
-  // `document` (the file the rows were imported from) and `subscription` (the
-  // series the charges belong to), named like the filters of GET
-  // /transactions. `suggested=true` shows only the rows with a suggestion.
-  // (`always` is not a filter: see `linkedTransactionId`.)
-  const given = new Map(Object.entries(search));
-  const text = (key: string): string => {
-    const value = given.get(key);
-    return typeof value === "string" ? value : "";
-  };
-  const day = (key: string): string => (isIsoDate(text(key)) ? text(key) : "");
-  return {
-    ...EMPTY_FILTERS,
-    account: text("account"),
-    category: text("category"),
-    dateFrom: day("date_from"),
-    dateTo: day("date_to"),
-    document: text("document"),
-    subscription: text("subscription"),
-    suggested: given.get("suggested") === true || text("suggested") === "true",
-  };
-}
-
-/**
- * `?always=<transaction id>`: "Make it a rule" on the learned page links here
- * to open "Always categorise <merchant> as..." for that transaction.
- */
-function linkedTransactionId(search: Record<string, unknown>): string | null {
-  const value = new Map(Object.entries(search)).get("always");
+/** A transaction id from the address: `tx` (the open drawer) or `always` (the drawer with "Always use…" ticked). */
+function idParam(search: Record<string, unknown>, key: "tx" | "always"): string | null {
+  const value = new Map(Object.entries(search)).get(key);
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** The search without the drawer's keys: what is left when it closes. */
+function withoutDrawer(search: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(search).filter(([name]) => name !== "tx" && name !== "always"));
+}
+
+const ROW_LINK = "button.table__row-link";
+
+/** "Open Corner Market, Nov 1, 2026, -$42.10": the name of a row's link button. */
+function openLabel(row: Transaction, name: string): string {
+  const date = formatDate(row.posted_date) ?? row.posted_date;
+  const amount = formatMoney(row.amount.amount, row.amount.currency) ?? row.amount.amount;
+  return `Open ${name}, ${date}, ${amount}`;
+}
+
+/** The sentence under the filters: what the rows shown add up to. */
+function TotalLine({ rows }: { rows: readonly Transaction[] }) {
+  const sum = totals(rows);
+  if (sum.count === 0) {
+    return null;
+  }
+  const money = (amount: string, currency: string): string => formatMoney(amount, currency) ?? amount;
+  const counted = sum.count - sum.transfers;
+  return (
+    <div className="tx-totals">
+      {sum.currency !== null ? (
+        <p className="tx-totals__sum">
+          {`In ${money(sum.in, sum.currency)} · Out ${money(sum.out, sum.currency)} · Net ${money(sum.net, sum.currency)}, of the ${String(sum.count)} shown`}
+        </p>
+      ) : counted > 0 ? (
+        <p className="tx-totals__sum">{`The ${String(sum.count)} shown are in more than one currency, so they are not added up.`}</p>
+      ) : null}
+      {sum.transfers === 0 ? null : (
+        <p className="tx-totals__note">
+          {sum.transfers === 1
+            ? "1 transfer between your accounts is left out of in and out."
+            : `${String(sum.transfers)} transfers between your accounts are left out of in and out.`}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function TransactionsPage() {
@@ -105,31 +131,34 @@ export function TransactionsPage() {
   const categories = useCategories();
   const payees = usePayees();
   const tags = useTags();
-  const [draft, setDraft] = useState<TransactionFilters>(() => initialFilters(search));
-  const [filters, setFilters] = useState<TransactionFilters>(draft);
+  // The address is the only place the filters live.
+  const filters = fromSearch(search);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [splitting, setSplitting] = useState<Transaction | null>(null);
   const [transferring, setTransferring] = useState<Transaction | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
+  const [noting, setNoting] = useState<Transaction | null>(null);
   const [deleting, setDeleting] = useState<Transaction | null>(null);
-  // "Always categorise <merchant> as...": the dialog, the offer after a
-  // correction in the grid (one at a time) and the rule that was just saved.
-  const [always, setAlways] = useState<TeachOffer | { transaction: Transaction; categoryId?: undefined } | null>(null);
-  const [offer, setOffer] = useState<TeachOffer | null>(null);
+  // The search text is typed here and written to the address on Enter; a new
+  // `q` in the address (a link, Clear, the rail) replaces what was typed.
+  const [typed, setTyped] = useState(filters.q);
+  const [typedFor, setTypedFor] = useState(filters.q);
+  if (typedFor !== filters.q) {
+    setTypedFor(filters.q);
+    setTyped(filters.q);
+  }
+  // The filters behind "More filters": open when the address sets one, and
+  // counted on the summary while it is closed, so none is hidden silently.
+  const hidden = [filters.dateFrom, filters.dateTo, filters.payee, filters.tag, filters.reviewState].filter((value) => value !== "").length;
+  const [moreOpen, setMoreOpen] = useState(hidden > 0);
+  // "Always categorise <merchant> as..." from the row menu, and the rule that was just saved there.
+  const [always, setAlways] = useState<Transaction | null>(null);
   const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
-  // A link that names a transaction opens the dialog for it until it is
-  // closed: the row is asked for by id because it need not be on the first
-  // page of the grid. Closing also takes `always` out of the address, so a
-  // reload or the back button does not open it again.
-  const linkedId = canWrite ? linkedTransactionId(search) : null;
-  const [linkClosed, setLinkClosed] = useState(false);
-  const linked = useQuery({
-    queryKey: txKeys.one(linkedId ?? ""),
-    queryFn: () => getTransaction(linkedId ?? ""),
-    enabled: linkedId !== null && !linkClosed,
-  });
-  const linkedRow = linkClosed ? undefined : linked.data;
+  // The drawer: the row the address names. `tx` wins over `always`.
+  const txId = idParam(search, "tx");
+  const alwaysId = idParam(search, "always");
+  const drawerId = txId ?? alwaysId;
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -145,7 +174,7 @@ export function TransactionsPage() {
 
   const query = useInfiniteQuery({
     queryKey: txKeys.list(filters),
-    queryFn: ({ pageParam }) => listTransactions(filters, pageParam),
+    queryFn: ({ pageParam }) => listFiltered(filters, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -161,56 +190,92 @@ export function TransactionsPage() {
   const payeeList = payees.data ?? [];
   const tagList = tags.data ?? [];
 
-  const setField = <K extends keyof TransactionFilters>(key: K, value: TransactionFilters[K]): void => {
-    setDraft((current) => ({ ...current, [key]: value }));
+  const setFilters = (next: ListFilters): void => {
+    setSelected(new Set());
+    void navigate({ to: "/transactions", search: (previous: Record<string, unknown>) => withFilters(previous, next), replace: true });
   };
-  const apply = (event: FormEvent): void => {
+  const change = (patch: Partial<ListFilters>): void => {
+    setFilters({ ...filters, ...patch });
+  };
+  const submitSearch = (event: FormEvent): void => {
     event.preventDefault();
-    setSelected(new Set());
-    setFilters(draft);
-  };
-  const reset = (): void => {
-    setDraft(EMPTY_FILTERS);
-    setFilters(EMPTY_FILTERS);
-    setSelected(new Set());
-  };
-  // The file filter has no field in the form: it comes from a link and goes
-  // with its chip, leaving the other filters as they are.
-  const showEveryFile = (): void => {
-    setDraft((current) => ({ ...current, document: "" }));
-    setFilters((current) => ({ ...current, document: "" }));
-    setSelected(new Set());
-  };
-  // Likewise the charges of one subscription ("See in transactions").
-  const showEverySeries = (): void => {
-    setDraft((current) => ({ ...current, subscription: "" }));
-    setFilters((current) => ({ ...current, subscription: "" }));
-    setSelected(new Set());
-  };
-
-  // The two quick filters apply at once and leave the rest of the form as it is.
-  const toggleSuggested = (): void => {
-    const next = !filters.suggested;
-    setDraft((current) => ({ ...current, suggested: next }));
-    setFilters((current) => ({ ...current, suggested: next }));
-    setSelected(new Set());
-  };
-  const toggleUncategorised = (): void => {
-    const next = filters.category === "none" ? "" : "none";
-    setDraft((current) => ({ ...current, category: next }));
-    setFilters((current) => ({ ...current, category: next }));
-    setSelected(new Set());
+    change({ q: typed.trim() });
   };
   const counted = (label: string, count: number | undefined): string => (count === undefined ? label : `${label} (${String(count)})`);
 
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
-  // The link opens the dialog only where the row's own menu would offer it.
-  const alwaysOpen =
-    always ?? (linkedRow !== undefined && canTeach(linkedRow) && editable(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const selectableRows = rows.filter(editable);
   const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selected.has(row.id));
   const canAdd = canWrite && (accounts.data ?? []).some((account) => account.can_edit);
 
+  // Roving focus over the rows' link buttons: one is in the tab order, the arrows move it.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const activeRow = useRef<string | null>(null);
+  useEffect(() => {
+    // The row id on each link button, so the active row survives a refetch or more rows.
+    const buttons: HTMLButtonElement[] = [];
+    gridRef.current?.querySelectorAll<HTMLTableRowElement>("tbody tr").forEach((tr, index) => {
+      const button = tr.querySelector<HTMLButtonElement>(ROW_LINK);
+      const row = rows.at(index);
+      if (button !== null && row !== undefined) {
+        button.setAttribute("data-row", row.id);
+        buttons.push(button);
+      }
+    });
+    const active = buttons.find((button) => button.getAttribute("data-row") === activeRow.current) ?? buttons[0];
+    for (const button of buttons) {
+      button.tabIndex = button === active ? 0 : -1;
+    }
+  });
+  const moveFocus = (to: HTMLButtonElement): void => {
+    const buttons = gridRef.current?.querySelectorAll<HTMLButtonElement>(ROW_LINK) ?? [];
+    for (const button of buttons) {
+      button.tabIndex = button === to ? 0 : -1;
+    }
+    activeRow.current = to.getAttribute("data-row");
+    to.focus();
+  };
+  const onGridKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const target = event.target;
+    if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || !(target instanceof HTMLButtonElement) || !target.matches(ROW_LINK)) {
+      return;
+    }
+    const buttons = Array.from(gridRef.current?.querySelectorAll<HTMLButtonElement>(ROW_LINK) ?? []);
+    const index = buttons.indexOf(target);
+    const next = buttons[event.key === "ArrowDown" ? Math.min(index + 1, buttons.length - 1) : Math.max(index - 1, 0)];
+    event.preventDefault();
+    if (next !== undefined) {
+      moveFocus(next);
+    }
+  };
+  const openRow = (row: Transaction): void => {
+    activeRow.current = row.id;
+    void navigate({ to: "/transactions", search: (previous: Record<string, unknown>) => ({ ...withoutDrawer(previous), tx: row.id }) });
+  };
+  const closeDrawer = (): void => {
+    void navigate({ to: "/transactions", search: (previous: Record<string, unknown>) => withoutDrawer(previous), replace: true });
+  };
+  // When the drawer closes, focus goes back to its row (also when it was opened from a link).
+  const lastDrawer = useRef<string | null>(drawerId);
+  useEffect(() => {
+    const closed = lastDrawer.current;
+    lastDrawer.current = drawerId;
+    if (drawerId !== null || closed === null) {
+      return;
+    }
+    const button = gridRef.current?.querySelector<HTMLButtonElement>(`${ROW_LINK}[data-row="${CSS.escape(closed)}"]`);
+    if (button !== null && button !== undefined) {
+      moveFocus(button);
+    }
+  });
+  /** A deleted row leaves the selection, so no bulk action sends it. */
+  const unselect = (id: string): void => {
+    setSelected((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
   const confirmRow = (row: Transaction): void => {
     edit.mutate(
       { id: row.id, patch: { review_state: "confirmed" } },
@@ -224,6 +289,30 @@ export function TransactionsPage() {
     );
   };
   const actionsFor = (row: Transaction): RowAction[] => [
+    // A category is changed in the drawer.
+    ...(row.splits.length === 0
+      ? [
+          {
+            id: "category",
+            label: "Change category…",
+            onSelect: () => {
+              openRow(row);
+            },
+          },
+        ]
+      : []),
+    // A merchant rule is for members and above, which is everyone who has this menu.
+    ...(canTeach(row)
+      ? [
+          {
+            id: "always",
+            label: `Always categorise ${merchantName(row) ?? "this merchant"} as…`,
+            onSelect: () => {
+              setAlways(row);
+            },
+          },
+        ]
+      : []),
     {
       id: "edit",
       label: "Edit",
@@ -240,23 +329,18 @@ export function TransactionsPage() {
     },
     {
       id: "transfer",
-      label: row.transfer === null ? "Link transfer" : "Unlink transfer",
+      label: row.transfer === null ? "Mark as transfer" : "Unlink transfer",
       onSelect: () => {
         setTransferring(row);
       },
     },
-    // A merchant rule is for members and above, which is everyone who has this menu.
-    ...(canTeach(row)
-      ? [
-          {
-            id: "always",
-            label: `Always categorise ${merchantName(row) ?? "this merchant"} as…`,
-            onSelect: () => {
-              setAlways({ transaction: row });
-            },
-          },
-        ]
-      : []),
+    {
+      id: "note",
+      label: (row.notes ?? "") === "" ? "Add note…" : "Edit note…",
+      onSelect: () => {
+        setNoting(row);
+      },
+    },
     ...(row.review_state === "pending"
       ? [
           {
@@ -278,19 +362,12 @@ export function TransactionsPage() {
     },
   ];
 
-  // A correction on a row that names a merchant may be worth a rule; the
-  // prompt asks the server and stays silent when it is not.
-  const offerRule = (row: Transaction, categoryId: string): void => {
-    if (canTeach(row) && !teachDismissed(row.merchant_key ?? "")) {
-      setOffer({ transaction: row, categoryId });
-    }
-  };
-
   const columns: TableColumn<Transaction>[] = [
     ...(canWrite
       ? [
           {
             id: "select",
+            className: "tx-col-select",
             header: (
               <Checkbox
                 label={<span className="visually-hidden">Select all loaded transactions</span>}
@@ -321,21 +398,12 @@ export function TransactionsPage() {
           },
         ]
       : []),
-    { id: "date", header: "Date", rowHeader: true, className: "tx-nowrap", cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
-    {
-      id: "account",
-      header: "Account",
-      className: "tx-col-account",
-      cell: (row) => accountLabelOf(row.account_id) ?? "",
-    },
-    {
-      id: "payee",
-      header: "Payee",
-      cell: (row) => <PayeeCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} payees={payeeList} />,
-    },
+    { id: "date", header: "Date", rowHeader: true, className: "tx-nowrap tx-col-date", cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
+    { id: "merchant", header: "Merchant", className: "tx-col-merchant", cell: (row) => <MerchantCell row={row} payees={payeeList} tags={tagList} /> },
     {
       id: "category",
       header: "Category",
+      className: "tx-col-category",
       cell: (row) => (
         <CategoryCell
           row={row}
@@ -343,38 +411,16 @@ export function TransactionsPage() {
           label={rowLabel(row, payeeList)}
           categories={categoryList}
           ruleNames={ruleNames}
-          onCategorised={offerRule}
+          categoriesFailed={categories.isError}
         />
       ),
     },
-    {
-      id: "tags",
-      header: "Tags",
-      className: "tx-col-tags",
-      cell: (row) => <TagsCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} tags={tagList} />,
-    },
-    {
-      id: "notes",
-      header: "Notes",
-      className: "tx-col-notes",
-      cell: (row) => <NotesCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} />,
-    },
-    {
-      id: "status",
-      header: "State",
-      cell: (row) => (
-        <span className="ledger-actions">
-          {row.status === "pending" ? <Badge tone="warning">Pending</Badge> : null}
-          {row.review_state === "pending" ? <Badge tone="info">Needs review</Badge> : null}
-          {row.transfer === null ? null : <Badge>Transfer</Badge>}
-        </span>
-      ),
-    },
+    { id: "account", header: "Account", className: "tx-col-account", cell: (row) => accountLabelOf(row.account_id) ?? "" },
     {
       id: "amount",
       header: "Amount",
       align: "end",
-      className: "tx-nowrap",
+      className: "tx-nowrap tx-col-amount",
       cell: (row) => <MoneyText amount={row.amount.amount} currency={row.amount.currency} tone="signed" />,
     },
     ...(canWrite
@@ -391,169 +437,228 @@ export function TransactionsPage() {
   ];
 
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">Transactions</h1>
-        {canAdd ? (
-          <div className="ledger-actions">
-            <Button
-              loading={findTransfers.isPending}
-              title="Link matching money out and money in between your accounts as transfers"
+    <section className="ledger-stack tx-page">
+      <PageHeader
+        title="Transactions"
+        description="Every account in one list. Open a row to see where it came from or change its category."
+        {...(canAdd
+          ? {
+              actions: (
+                <>
+                  <Button
+                    loading={findTransfers.isPending}
+                    title="Link matching money out and money in between your accounts as transfers"
+                    onClick={() => {
+                      findTransfers.mutate();
+                    }}
+                  >
+                    Find transfers
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setAdding(true);
+                    }}
+                  >
+                    Add transaction
+                  </Button>
+                </>
+              ),
+            }
+          : {})}
+      />
+      <div className="tx-bar">
+        <form role="search" aria-label="Transactions" className="tx-search" onSubmit={submitSearch}>
+          <Input
+            type="search"
+            aria-label="Search transactions"
+            placeholder="Search merchant or description"
+            value={typed}
+            maxLength={100}
+            onChange={(event) => {
+              setTyped(event.target.value);
+            }}
+          />
+          <Button type="submit">Search</Button>
+        </form>
+        <div className="tx-filters" role="group" aria-label="Filters">
+          <div className="tx-filters__chips">
+            <Chip
+              pressed={filters.suggested}
               onClick={() => {
-                findTransfers.mutate();
+                change({ suggested: !filters.suggested });
               }}
             >
-              Find transfers
-            </Button>
-            <Button
-              variant="primary"
+              {counted("Suggestions", summary.data?.suggestions)}
+            </Chip>
+            <Chip
+              pressed={filters.category === "none"}
               onClick={() => {
-                setAdding(true);
+                change({ category: filters.category === "none" ? "" : "none" });
               }}
             >
-              Add transaction
-            </Button>
+              {counted("No category", summary.data?.uncategorised)}
+            </Chip>
           </div>
-        ) : null}
-      </div>
-      {canWrite ? null : <p className="ledger-muted">You have read-only access.</p>}
-      <Card title="Filters">
-        <form className="ledger-filters" aria-label="Filter transactions" onSubmit={apply}>
-          <Field label="Account">
+          <Field label="Account" className="tx-filters__field">
             <Select
               placeholder="All accounts"
               options={(accounts.data ?? []).map((account) => ({ value: account.id, label: accountLabel(account) }))}
-              value={draft.account}
+              value={filters.account}
               onChange={(event) => {
-                setField("account", event.target.value);
+                change({ account: event.target.value });
               }}
             />
           </Field>
-          <Field label="From">
-            <Input
-              type="date"
-              value={draft.dateFrom}
-              onChange={(event) => {
-                setField("dateFrom", event.target.value);
-              }}
-            />
-          </Field>
-          <Field label="To">
-            <Input
-              type="date"
-              value={draft.dateTo}
-              onChange={(event) => {
-                setField("dateTo", event.target.value);
-              }}
-            />
-          </Field>
-          <Field label="Category filter">
-            <Select
+          <Field label="Category" className="tx-filters__field">
+            <CategoryPicker
               placeholder="Any category"
-              options={[{ value: "none", label: "Uncategorised" }, ...categoryList.map((category) => ({ value: category.id, label: category.name }))]}
-              value={draft.category}
+              categories={categoryList}
+              value={filters.category === "none" ? "" : filters.category}
               onChange={(event) => {
-                setField("category", event.target.value);
+                change({ category: event.target.value });
               }}
             />
           </Field>
-          <Field label="Payee filter">
-            <Select
-              placeholder="Any payee"
-              options={payeeList.map((payee) => ({ value: payee.id, label: payee.name }))}
-              value={draft.payee}
-              onChange={(event) => {
-                setField("payee", event.target.value);
+          <details
+            className="tx-more"
+            open={moreOpen}
+            onToggle={(event) => {
+              setMoreOpen(event.currentTarget.open);
+            }}
+          >
+            <summary>{moreOpen || hidden === 0 ? "More filters" : `More filters (${String(hidden)})`}</summary>
+            <div className="tx-more__fields">
+              <Field label="From">
+                <Input
+                  type="date"
+                  value={filters.dateFrom}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "" || isIsoDate(value)) {
+                      change({ dateFrom: value });
+                    }
+                  }}
+                />
+              </Field>
+              <Field label="To">
+                <Input
+                  type="date"
+                  value={filters.dateTo}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "" || isIsoDate(value)) {
+                      change({ dateTo: value });
+                    }
+                  }}
+                />
+              </Field>
+              <Field label="Payee">
+                <Select
+                  placeholder="Any payee"
+                  options={payeeList.map((payee) => ({ value: payee.id, label: payee.name }))}
+                  value={filters.payee}
+                  onChange={(event) => {
+                    change({ payee: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field label="Tag">
+                <Select
+                  placeholder="Any tag"
+                  options={tagList.map((tag) => ({ value: tag.id, label: tag.name }))}
+                  value={filters.tag}
+                  onChange={(event) => {
+                    change({ tag: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field label="Review state">
+                <Select
+                  placeholder="Any state"
+                  options={REVIEW_STATES}
+                  value={filters.reviewState}
+                  onChange={(event) => {
+                    change({ reviewState: reviewState(event.target.value) });
+                  }}
+                />
+              </Field>
+            </div>
+          </details>
+          {hasFilters(filters) ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setFilters(NO_FILTERS);
               }}
-            />
-          </Field>
-          <Field label="Tag filter">
-            <Select
-              placeholder="Any tag"
-              options={tagList.map((tag) => ({ value: tag.id, label: tag.name }))}
-              value={draft.tag}
-              onChange={(event) => {
-                setField("tag", event.target.value);
-              }}
-            />
-          </Field>
-          <Field label="Review state">
-            <Select
-              placeholder="Any state"
-              options={REVIEW_STATES}
-              value={draft.reviewState}
-              onChange={(event) => {
-                if (isReviewState(event.target.value)) {
-                  setField("reviewState", event.target.value);
-                }
-              }}
-            />
-          </Field>
-          <Field label="Search">
-            <Input
-              type="search"
-              value={draft.q}
-              maxLength={100}
-              onChange={(event) => {
-                setField("q", event.target.value);
-              }}
-            />
-          </Field>
-          <div className="ledger-actions">
-            <Button type="submit" variant="primary">
-              Apply filters
+            >
+              Clear filters
             </Button>
-            <Button onClick={reset}>Clear</Button>
-          </div>
-        </form>
-      </Card>
-      {filters.document === "" ? null : (
-        <p className="ledger-actions">
-          <Link to="/documents/$documentId" params={{ documentId: filters.document }}>
-            From one file
-          </Link>
-          <Button variant="ghost" size="sm" aria-label="Remove the file filter" onClick={showEveryFile}>
-            Remove
-          </Button>
-        </p>
-      )}
-      {filters.subscription === "" ? null : (
-        <p className="ledger-actions">
-          <Link to="/subscriptions/$id" params={{ id: filters.subscription }}>
-            Charges of one subscription
-          </Link>
-          <Button variant="ghost" size="sm" aria-label="Remove the subscription filter" onClick={showEverySeries}>
-            Remove
-          </Button>
-        </p>
-      )}
-      <div className="tx-quick-filters" role="group" aria-label="Quick filters">
-        <Button size="sm" aria-pressed={filters.suggested} onClick={toggleSuggested}>
-          {counted("Suggestions", summary.data?.suggestions)}
-        </Button>
-        <Button size="sm" aria-pressed={filters.category === "none"} onClick={toggleUncategorised}>
-          {counted("No category", summary.data?.uncategorised)}
-        </Button>
+          ) : null}
+        </div>
       </div>
+      {filters.document === "" && filters.subscription === "" && filters.merchant === "" ? null : (
+        <ul className="tx-narrowed" aria-label="The list is narrowed to">
+          {filters.document === "" ? null : (
+            <li className="tx-narrowed__item">
+              <Link to="/inbox/documents/$documentId" params={{ documentId: filters.document }}>
+                From one file
+              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Remove the file filter"
+                onClick={() => {
+                  change({ document: "" });
+                }}
+              >
+                Remove
+              </Button>
+            </li>
+          )}
+          {filters.subscription === "" ? null : (
+            <li className="tx-narrowed__item">
+              <Link to="/plan/subscriptions/$id" params={{ id: filters.subscription }}>
+                Charges of one subscription
+              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Remove the subscription filter"
+                onClick={() => {
+                  change({ subscription: "" });
+                }}
+              >
+                Remove
+              </Button>
+            </li>
+          )}
+          {filters.merchant === "" ? null : (
+            <li className="tx-narrowed__item">
+              <span>{`Merchant: ${filters.merchant}`}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Remove the merchant filter"
+                onClick={() => {
+                  change({ merchant: "" });
+                }}
+              >
+                Remove
+              </Button>
+            </li>
+          )}
+        </ul>
+      )}
+      {canWrite ? null : <p className="ledger-muted">You have read-only access.</p>}
+      {hasFilters(filters) && query.isSuccess ? <TotalLine rows={rows} /> : null}
       {savedRule === null ? null : (
         <RuleSavedNotice
           key={`${savedRule.result.rule.id}:${savedRule.result.rule.updated_at}`}
           saved={savedRule}
           onDone={() => {
             setSavedRule(null);
-          }}
-        />
-      )}
-      {offer === null ? null : (
-        <TeachPrompt
-          offer={offer}
-          categories={categoryList}
-          onAlways={() => {
-            setAlways(offer);
-          }}
-          onDismiss={() => {
-            dismissTeach(offer.transaction.merchant_key ?? "");
-            setOffer(null);
           }}
         />
       )}
@@ -573,17 +678,26 @@ export function TransactionsPage() {
         </p>
       ) : null}
       {query.isSuccess ? (
-        <Table
-          caption="Transactions"
-          captionHidden
-          maxHeight="none"
-          density="compact"
-          className="tx-grid"
-          columns={columns}
-          rows={rows}
-          rowKey={(row) => row.id}
-          empty="No transactions match."
-        />
+        <div ref={gridRef} className="tx-grid-wrap" onKeyDown={onGridKeyDown}>
+          <Table
+            caption="Transactions"
+            captionHidden
+            maxHeight="none"
+            density="compact"
+            className="tx-grid"
+            columns={columns}
+            rows={rows}
+            rowKey={(row) => row.id}
+            rowLink={(row) => ({
+              // Every row opens its drawer; what may be changed there depends on the account.
+              label: openLabel(row, displayName(row, payeeList) ?? rowLabel(row, payeeList)),
+              onOpen: () => {
+                openRow(row);
+              },
+            })}
+            empty={hasFilters(filters) ? "No transactions match. Clear the filters or try another search." : "No transactions yet."}
+          />
+        </div>
       ) : null}
       {query.hasNextPage ? (
         <div className="ledger-actions">
@@ -621,41 +735,43 @@ export function TransactionsPage() {
           }}
         />
       )}
+      {noting === null ? null : (
+        <NoteDialog
+          row={noting}
+          label={rowLabel(noting, payeeList)}
+          onClose={() => {
+            setNoting(null);
+          }}
+        />
+      )}
       {deleting === null ? null : (
         <DeleteTransactionDialog
           transaction={deleting}
           label={rowLabel(deleting, payeeList)}
           accountName={accountLabelOf(deleting.account_id)}
-          onDeleted={(id) => {
-            setSelected((current) => {
-              const next = new Set(current);
-              next.delete(id);
-              return next;
-            });
-          }}
+          onDeleted={unselect}
           onClose={() => {
             setDeleting(null);
           }}
         />
       )}
-      {alwaysOpen === null ? null : (
+      {always === null ? null : (
         <AlwaysCategoriseDialog
-          transaction={alwaysOpen.transaction}
+          transaction={always}
           categories={categoryList}
-          categoryId={alwaysOpen.categoryId}
           onClose={() => {
             setAlways(null);
-            setLinkClosed(true);
-            if (linkedId !== null) {
-              const rest = Object.fromEntries(Object.entries(search).filter(([name]) => name !== "always"));
-              void navigate({ to: "/transactions", search: rest, replace: true });
-            }
           }}
-          onSaved={(saved) => {
-            setSavedRule(saved);
-            // The merchant has its rule: the offer for it is answered.
-            setOffer((current) => (current?.transaction.merchant_key === alwaysOpen.transaction.merchant_key ? null : current));
-          }}
+          onSaved={setSavedRule}
+        />
+      )}
+      {drawerId === null ? null : (
+        <TransactionDrawer
+          key={drawerId}
+          transactionId={drawerId}
+          alwaysOpen={txId === null || txId === alwaysId}
+          onClose={closeDrawer}
+          onDeleted={unselect}
         />
       )}
       {transferring === null ? null : (

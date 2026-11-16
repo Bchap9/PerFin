@@ -40,6 +40,14 @@ function detail(
   });
 }
 
+/** Delete sits in the account header's menu. */
+async function openDelete(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    await screen.findByRole("button", { name: "Actions for Everyday" }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Delete account" }));
+}
+
 describe("delete account", () => {
   it("deletes only once the name is typed, then returns to the accounts list", async () => {
     const api = detail("owner", {
@@ -47,9 +55,7 @@ describe("delete account", () => {
     });
     const { router } = renderApp("/accounts/a-1");
     const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "Delete account" }),
-    );
+    await openDelete(user);
     const dialog = await screen.findByRole("dialog", {
       name: "Delete Everyday?",
     });
@@ -85,9 +91,7 @@ describe("delete account", () => {
     });
     const { router } = renderApp("/accounts/a-1");
     const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "Delete account" }),
-    );
+    await openDelete(user);
     const dialog = await screen.findByRole("dialog", {
       name: "Delete Everyday?",
     });
@@ -109,9 +113,7 @@ describe("delete account", () => {
     detail("owner");
     renderApp("/accounts/a-1");
     const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "Delete account" }),
-    );
+    await openDelete(user);
     const dialog = await screen.findByRole("dialog", {
       name: "Delete Everyday?",
     });
@@ -134,9 +136,7 @@ describe("delete account", () => {
     );
     renderApp("/accounts/a-1");
     const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "Delete account" }),
-    );
+    await openDelete(user);
     const dialog = await screen.findByRole("dialog", {
       name: "Delete Everyday?",
     });
@@ -149,19 +149,26 @@ describe("delete account", () => {
   it("is offered to owners and admins only", async () => {
     detail("member");
     const { unmount } = renderApp("/accounts/a-1");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Actions for Everyday" }),
+    );
     expect(
-      await screen.findByRole("button", { name: "Close account" }),
+      screen.getByRole("menuitem", { name: "Close account" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Delete account" }),
+      screen.queryByRole("menuitem", { name: "Delete account" }),
     ).not.toBeInTheDocument();
     unmount();
 
     detail("viewer");
     renderApp("/accounts/a-1");
-    await screen.findByRole("heading", { name: "Everyday" });
+    await screen.findByRole("heading", { level: 1, name: "Everyday" });
     expect(
-      screen.queryByRole("button", { name: "Delete account" }),
+      screen.queryByRole("button", { name: "Actions for Everyday" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete account" }),
     ).not.toBeInTheDocument();
   });
 });

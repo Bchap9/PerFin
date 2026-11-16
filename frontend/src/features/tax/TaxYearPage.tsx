@@ -179,7 +179,7 @@ function ChecklistCard({ year, locked, canWrite }: { year: number; locked: boole
           <span className="muted">{row.status === "received" ? "Document not visible to you" : "Not received"}</span>
         ) : (
           <>
-            <Link to="/documents/$documentId" params={{ documentId: row.document_id }}>
+            <Link to="/inbox/documents/$documentId" params={{ documentId: row.document_id }}>
               Open document
             </Link>
             <BoxList forms={formsByDocument.get(row.document_id) ?? []} />
@@ -311,7 +311,10 @@ function SummaryCard({ year }: { year: number }) {
               <p role="note">Some amounts have no exchange rate and are left out of these totals.</p>
             )}
             <p>
-              <Link to="/tax/mapping">Edit schedule hints</Link>. Hints are for your accountant, not tax advice.
+              <Link to="/settings/categories" search={{ tab: "tax" }}>
+                Edit tax hints
+              </Link>
+              . Hints are for your accountant, not tax advice.
             </p>
           </div>
         )}
@@ -366,11 +369,9 @@ export function TaxYearPage() {
   return (
     <PlanningPage
       title={`Tax year ${param}`}
+      breadcrumbs={[{ to: "/reports", label: "Reports" }, { to: "/reports/tax", label: "Tax" }, { label: param }]}
       actions={
         <>
-          <Link to="/tax" className="btn btn--secondary btn--md">
-            All tax years
-          </Link>
           {data === undefined ? null : <YearActions year={data} canWrite={canWrite} isAdmin={isAdmin} />}
           {data !== undefined && isAdmin ? <DeleteTaxYearButton year={data} /> : null}
         </>

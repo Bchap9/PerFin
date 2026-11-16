@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Sign-in, setup and account-security pages (features/auth, setup, settings). */
+/* Sign-in, setup and account-security pages (features/auth, setup, settings).
+   Cards and the settings list use the redesign's panel look: a flat surface,
+   a hairline border, the large radius. */
 
 .auth-page {
   display: flex;
@@ -14,9 +16,15 @@
   width: min(28rem, 100%);
   padding: var(--space-6);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 819px) {
+  .auth-card {
+    padding: var(--space-5) var(--space-4);
+  }
 }
 
 .auth-card--wide {
@@ -25,8 +33,9 @@
 
 .auth-brand {
   margin: 0;
+  font-family: var(--font-display);
   font-weight: 700;
-  color: var(--color-text-muted);
+  color: var(--color-accent);
 }
 
 .auth-title {
@@ -64,10 +73,11 @@
 
 .auth-notice {
   margin: 0;
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--radius-lg);
   background: var(--color-info-soft);
-  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
 }
 
 .auth-muted {
@@ -88,7 +98,8 @@
 
 .auth-subheading {
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
 }
 
 .totp-qr {
@@ -117,7 +128,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  /* Names give way before the header pushes the page sideways on a phone. */
+  /* Names give way before the phone's top bar pushes the page sideways. */
   min-width: 0;
 }
 
@@ -139,8 +150,9 @@
   font-weight: 600;
 }
 
-.account-menu > .btn {
-  flex-shrink: 0;
+.account-menu > .menu {
+  min-width: 0;
+  max-width: 100%;
 }
 
 @media (max-width: 30rem) {
@@ -158,12 +170,13 @@
 .settings-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: 1.25rem;
 }
 
+/* The settings index: one panel per page, two or three across, one on a phone. */
 .settings-links {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
   gap: var(--space-3);
   margin: 0;
   padding: 0;

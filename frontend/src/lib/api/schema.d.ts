@@ -2018,6 +2018,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inbox/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What waits on a person */
+        get: operations["get_summary_api_v1_inbox_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investments/accounts/{account_id}/cost-method": {
         parameters: {
             query?: never;
@@ -7162,6 +7179,31 @@ export interface components {
              * @enum {string}
              */
             verification: "reconciled" | "unverified" | "accepted";
+        };
+        /**
+         * InboxSummary
+         * @description What waits on a person, counted over what the caller may see.
+         *
+         *     ``documents``: documents with an open review item. ``loose``: open review
+         *     items of no document. ``subscriptions``: series that are suggested or
+         *     have an open change, each counted once. ``suggestions`` and
+         *     ``uncategorised``: the categorisation summary's counts. ``cards``: what
+         *     the Inbox shows as cards, ``documents + loose + subscriptions``, plus one
+         *     when there are suggestions; an offer to make a rule is not counted.
+         */
+        InboxSummary: {
+            /** Cards */
+            cards: number;
+            /** Documents */
+            documents: number;
+            /** Loose */
+            loose: number;
+            /** Subscriptions */
+            subscriptions: number;
+            /** Suggestions */
+            suggestions: number;
+            /** Uncategorised */
+            uncategorised: number;
         };
         /** InvestmentTxnCreate */
         InvestmentTxnCreate: {
@@ -20711,6 +20753,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportPreview"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_summary_api_v1_inbox_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxSummary"];
                 };
             };
             /** @description Problem details */

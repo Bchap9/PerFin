@@ -37,7 +37,7 @@ function HouseholdForm({ household, canEdit }: { household: Household; canEdit: 
     }
   };
   return (
-    <Card title="Household" headingLevel={2}>
+    <Card title="Household">
       <form
         className="planning-form"
         noValidate
@@ -75,7 +75,7 @@ export function GeneralPage() {
   const { session } = useAuthSession();
   const query = useHousehold();
   return (
-    <SettingsPage title="Household">
+    <SettingsPage title="Name and currency">
       <QueryState loading={query.isPending && session?.household != null} error={query.error} label="the household">
         {query.data === undefined ? null : <HouseholdForm key={`${query.data.id}:${query.data.name}:${query.data.base_currency}`} household={query.data} canEdit={canManageMembers(session?.household?.role)} />}
       </QueryState>

@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 import { money, ownerSession, referenceHandlers } from "../planning/testing";
 
 const BROKERAGE = "a0000000-0000-4000-8000-0000000000b1";
@@ -78,18 +79,35 @@ describe("investments page", () => {
       "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
       "GET /api/v1/investments/holdings": () => json(holdings),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const table = await screen.findByRole("table", { name: "Holdings" });
     const row = within(table).getByRole("row", { name: /ACME/ });
     expect(within(row).getByText("10.5")).toBeInTheDocument();
     expect(within(row).getByText("+25.00%", { exact: false })).toBeInTheDocument();
     expect(within(row).getByText("+$250.00")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Allocation by asset class" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Technology: 40.0% of the portfolio" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Technology: 40.0% of the portfolio" })).toHaveAttribute("aria-valuenow", "0.4");
 
     await userEvent.setup().click(screen.getByRole("button", { name: /Show lots of ACME/ }));
     const lots = await screen.findByRole("table", { name: "Lots of Acme Corp" });
     expect(within(lots).getByText("Long term")).toBeInTheDocument();
+  });
+
+  it("names the account only while every investment account is shown", async () => {
+    mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json(holdings),
+    });
+    renderApp(`/accounts/investments?account=${BROKERAGE}`);
+    const one = await screen.findByRole("table", { name: "Holdings" });
+    expect(within(one).queryByRole("columnheader", { name: "Account" })).not.toBeInTheDocument();
+    // The name and symbol share one cell, the name on its own line.
+    expect(within(one).getByRole("rowheader", { name: /ACME/ })).toHaveClass("holding-security");
+    await userEvent.setup().selectOptions(screen.getByLabelText("Account"), "");
+    const all = await screen.findByRole("table", { name: "Holdings" });
+    expect(await within(all).findByRole("columnheader", { name: "Account" })).toBeInTheDocument();
   });
 
   it("says what the figures are as of, where each price came from and how it moved", async () => {
@@ -111,7 +129,7 @@ describe("investments page", () => {
           price_feed: { enabled: true, refresh_minutes: 15 },
         }),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const table = await screen.findByRole("table", { name: "Holdings" });
     const row = within(table).getByRole("row", { name: /ACME/ });
     // The account's holdings are those of its last import; the price is newer.
@@ -135,7 +153,7 @@ describe("investments page", () => {
       "GET /api/v1/investments/holdings": () => json({ ...holdings, price_feed: { enabled: true, refresh_minutes: 360 } }),
       "POST /api/v1/investments/prices/refresh": () => json({ queued: true }, 202),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh prices" }));
     await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/investments/prices/refresh")).toHaveLength(1); });
     expect(await screen.findByText("Fetching prices; the figures update when they arrive")).toBeInTheDocument();
@@ -148,7 +166,7 @@ describe("investments page", () => {
       "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
       "GET /api/v1/investments/holdings": () => json(holdings),
     });
-    const first = renderApp("/investments");
+    const first = renderApp("/accounts/investments");
     await screen.findByRole("table", { name: "Holdings" });
     expect(screen.queryByRole("button", { name: "Refresh prices" })).not.toBeInTheDocument();
     // Entered by hand, nothing imported: nothing to say about an import either.
@@ -161,7 +179,7 @@ describe("investments page", () => {
       "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
       "GET /api/v1/investments/holdings": () => json({ ...holdings, price_feed: { enabled: true, refresh_minutes: 360 } }),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     await screen.findByRole("table", { name: "Holdings" });
     expect(screen.queryByRole("button", { name: "Refresh prices" })).not.toBeInTheDocument();
   });
@@ -175,7 +193,7 @@ describe("investments page", () => {
       "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
       "GET /api/v1/investments/holdings": () => json({ ...holdings, holdings: [plan] }),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const table = await screen.findByRole("table", { name: "Holdings" });
     const row = within(table).getByRole("row", { name: /Example Plan Portfolio/ });
     expect(within(row).getByText("Example Plan Portfolio")).toBeInTheDocument();
@@ -197,9 +215,9 @@ describe("investments page", () => {
         }),
       "POST /api/v1/investments/transactions": () => json({ id: "t-1" }, 201),
     });
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("tab", { name: "Transactions" }));
+    await user.click(await screen.findByRole("tab", { name: "Activity" }));
     await user.click(await screen.findByRole("button", { name: "New transaction" }));
     const dialog = await screen.findByRole("dialog");
     await user.selectOptions(within(dialog).getByLabelText(/Security/), SEC);
@@ -213,6 +231,88 @@ describe("investments page", () => {
       quantity: "3",
       price: "10.10",
       amount: { amount: "-30.30", currency: "USD" },
+    });
+  });
+});
+
+describe("investments in the address", () => {
+  const handlers = (): Record<string, Handler> => ({
+    ...ownerSession(),
+    "GET /api/v1/accounts": accounts(),
+    "GET /api/v1/investments/holdings": () => json(holdings),
+    "GET /api/v1/investments/transactions": () => json({ items: [], next_cursor: null }),
+    "GET /api/v1/securities": () => json({ items: [], next_cursor: null }),
+  });
+
+  it("the tab and account are in the address", async () => {
+    const api = mockApi(handlers());
+    const { router } = renderApp(`/accounts/investments?tab=activity&account=${BROKERAGE}`);
+    const user = userEvent.setup();
+    expect(await screen.findByRole("tab", { name: "Activity", selected: true })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Account")).toHaveDisplayValue("Brokerage");
+    await vi.waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/investments/transactions").some((call) => call.search.includes(`account=${BROKERAGE}`))).toBe(true);
+    });
+
+    await user.click(screen.getByRole("tab", { name: "Holdings" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe(`/accounts/investments?account=${BROKERAGE}`); });
+    await user.selectOptions(screen.getByLabelText("Account"), "");
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/accounts/investments"); });
+    await user.click(screen.getByRole("tab", { name: "Prices" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/accounts/investments?tab=prices"); });
+  });
+
+  it("puts the account choice on the row of views, without repeating the section's name", async () => {
+    mockApi(handlers());
+    renderApp("/accounts/investments");
+    const views = await screen.findByRole("tablist", { name: "Investments" });
+    expect(within(views.parentElement ?? document.body).getByLabelText("Account")).toBeInTheDocument();
+    // The Accounts tab already says Investments; the h2 stays for screen readers.
+    expect(screen.getByRole("heading", { level: 2, name: "Investments" })).toHaveClass("visually-hidden");
+  });
+
+  it("has no axe violations", async () => {
+    mockApi(handlers());
+    const { container } = renderApp("/accounts/investments");
+    await screen.findByRole("table", { name: "Holdings" });
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe("an investment account's hub", () => {
+  const brokerage = async (call: Parameters<Handler>[0]) => {
+    const body = (await (await accounts()(call)).json()) as { items: Record<string, unknown>[] };
+    return json(body.items.find((entry) => entry["id"] === BROKERAGE));
+  };
+  const handlers = (): Record<string, Handler> => ({
+    ...ownerSession(),
+    "GET /api/v1/accounts": accounts(),
+    "GET /api/v1/accounts/:id": brokerage,
+    "GET /api/v1/investments/holdings": () => json(holdings),
+    "GET /api/v1/investments/accounts/:id/cost-method": () => json({ account_id: BROKERAGE, method: "fifo" }),
+    "GET /api/v1/investments/transactions": () => json({ items: [], next_cursor: null }),
+    "GET /api/v1/securities": () => json({ items: [], next_cursor: null }),
+  });
+
+  it("a brokerage hub has holdings, activity and performance for that account", async () => {
+    const api = mockApi(handlers());
+    renderApp(`/accounts/${BROKERAGE}?tab=holdings`);
+    expect(await screen.findByRole("heading", { level: 1, name: "Brokerage" })).toBeInTheDocument();
+    const tabs = within(screen.getByRole("tablist", { name: "Brokerage" })).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "Transactions", "Documents", "Holdings", "Activity", "Performance"]);
+    expect(await screen.findByRole("table", { name: "Holdings" })).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/investments/holdings")[0]?.search).toContain(`account=${BROKERAGE}`);
+    const method = await screen.findByRole("list", { name: "Cost basis method by account" });
+    expect(within(method).getAllByRole("listitem")).toHaveLength(1);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Activity" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/investments/transactions").some((call) => call.search.includes(`account=${BROKERAGE}`))).toBe(true);
+    });
+    await user.click(screen.getByRole("tab", { name: "Performance" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/investments/performance").some((call) => call.search.includes(`account=${BROKERAGE}`))).toBe(true);
     });
   });
 });
@@ -246,7 +346,7 @@ function pricesHandlers(extra: Record<string, Handler> = {}): Record<string, Han
 }
 
 async function openPrices(user: ReturnType<typeof userEvent.setup>) {
-  renderApp("/investments");
+  renderApp("/accounts/investments");
   await user.click(await screen.findByRole("tab", { name: "Prices" }));
   await screen.findByRole("combobox", { name: "Security" });
 }
@@ -373,7 +473,7 @@ describe("cost basis method", () => {
         },
       }),
     );
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const user = userEvent.setup();
     const card = await screen.findByRole("region", { name: "Cost basis method" });
     const list = within(card).getByRole("list", { name: "Cost basis method by account" });
@@ -395,7 +495,7 @@ describe("cost basis method", () => {
 
   it("keeps the dialog open with the server's reason when the lots do not fit the method", async () => {
     mockApi(costHandlers({ "PUT /api/v1/investments/accounts/:id/cost-method": () => problem(422, "lot-selection-not-allowed") }));
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const user = userEvent.setup();
     const card = await screen.findByRole("region", { name: "Cost basis method" });
     await user.click(await within(card).findByRole("button", { name: "Change the cost basis method of Brokerage" }));
@@ -412,7 +512,7 @@ describe("cost basis method", () => {
       return json({ items: body.items.map((entry) => ({ ...entry, can_edit: false })), next_cursor: null });
     };
     mockApi(costHandlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }), "GET /api/v1/accounts": readOnly }));
-    renderApp("/investments");
+    renderApp("/accounts/investments");
     const card = await screen.findByRole("region", { name: "Cost basis method" });
     expect(await within(card).findByText("First in, first out (FIFO)")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: /Change the cost basis method/ })).not.toBeInTheDocument();

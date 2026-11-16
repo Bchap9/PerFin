@@ -26,9 +26,12 @@ repository and contains nothing that is not in git.
 1. [Deploying PerFin](DEPLOYMENT.md): one Linux host, Docker Compose, secrets,
    the master key, reverse proxy, drop folder, email intake, the MCP role and
    the hardening checklist.
-2. [Operating PerFin](OPERATIONS.md): logs, health, metrics, jobs and dead
+2. [Finding your way around](USING.md): the six sections and Settings,
+   where each old page went, the Inbox, the transaction drawer, keyboard
+   shortcuts, themes and the phone layout.
+3. [Operating PerFin](OPERATIONS.md): logs, health, metrics, jobs and dead
    letters, and the fixes for the usual failures.
-3. [Upgrading](UPGRADING.md) and [Backup and restore](BACKUP_RESTORE.md).
+4. [Upgrading](UPGRADING.md) and [Backup and restore](BACKUP_RESTORE.md).
 
 ## Trust it
 

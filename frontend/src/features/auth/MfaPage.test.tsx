@@ -66,7 +66,7 @@ describe("second-factor step", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Use security key or passkey" }));
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/budgets");
+      expect(router.state.location.pathname).toBe("/plan/budgets");
     });
     expect(webauthn.startAuthentication).toHaveBeenCalledWith({
       optionsJSON: expect.objectContaining({ challenge: "Y2hhbGxlbmdl" }) as unknown,

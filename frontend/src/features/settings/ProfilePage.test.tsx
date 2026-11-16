@@ -2,6 +2,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, problem, renderApp } from "../auth/testing";
 
 const PREFERENCES = { display_name: "Alice", locale: "en-US", theme: "system", timezone: "UTC" };
@@ -13,7 +14,7 @@ describe("profile and settings overview", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Profile" })).toHaveAttribute("href", "/settings/profile");
     expect(screen.getByRole("link", { name: "Security" })).toHaveAttribute("href", "/settings/security");
-    expect(screen.getByRole("link", { name: "Household members" })).toHaveAttribute("href", "/settings/household");
+    expect(screen.getByRole("link", { name: "Members" })).toHaveAttribute("href", "/settings/household");
   });
 
   it("saves the profile with the CSRF header and applies the theme", async () => {
@@ -57,5 +58,18 @@ describe("profile and settings overview", () => {
     await user.click(screen.getByRole("button", { name: "Save profile" }));
     expect(await screen.findByText("unknown time zone")).toBeInTheDocument();
     expect(screen.getByLabelText(/^Time zone/)).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("profile page accessibility", () => {
+  it("has no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession(),
+      "GET /api/v1/households": () => json([]),
+      "GET /api/v1/settings/user": () => json(PREFERENCES),
+    });
+    const { container } = renderApp("/settings/profile");
+    expect(await screen.findByLabelText(/^Display name/)).toHaveValue("Alice");
+    await expectNoAxeViolations(container);
   });
 });

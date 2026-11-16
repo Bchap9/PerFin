@@ -2,8 +2,9 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
-import { CAT_DINING, CAT_RENT, money, ownerSession, referenceHandlers } from "../planning/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import { CAT_DINING, CAT_FOOD, CAT_RENT, money, ownerSession, referenceHandlers } from "../planning/testing";
 import { barWidth, lineStatus, percentOf, steppedPeriod } from "./report";
 
 const STAMP = "2026-11-01T10:00:00Z";
@@ -108,7 +109,7 @@ describe("budget page", () => {
 
   it("shows budgeted, actual, forecast and remaining per category with a status", async () => {
     const api = budgetApi();
-    renderApp("/budgets/b-1");
+    renderApp("/plan/budgets/b-1");
     const table = await screen.findByRole("region", { name: "Budget report by category" });
     const rows = within(table).getAllByRole("row");
     const dining = rows.find((row) => within(row).queryByText("Dining") !== null);
@@ -132,7 +133,7 @@ describe("budget page", () => {
 
   it("steps to the previous period and can include pending transactions", async () => {
     const api = budgetApi();
-    renderApp("/budgets/b-1");
+    renderApp("/plan/budgets/b-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Previous period" }));
     await vi.waitFor(() => {
@@ -146,7 +147,7 @@ describe("budget page", () => {
 
   it("edits the lines and sends amounts in the budget's currency", async () => {
     const api = budgetApi();
-    renderApp("/budgets/b-1");
+    renderApp("/plan/budgets/b-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Edit budget" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit budget" });
@@ -165,9 +166,115 @@ describe("budget page", () => {
     });
   });
 
+  it("an over-budget line is announced as over", async () => {
+    budgetApi();
+    renderApp("/plan/budgets/b-1");
+    const dining = await screen.findByRole("progressbar", { name: /^Dining:/ });
+    expect(dining).toHaveAccessibleName("Dining: 125 percent of budget, over budget");
+    expect(screen.getByRole("progressbar", { name: /^Rent:/ })).toHaveAccessibleName("Rent: 93 percent of budget");
+    expect(screen.getByRole("progressbar", { name: /^Fun:/ })).toHaveAccessibleName("Fun: 20 percent of budget");
+    // The bar turns to the danger colour too, not only its name.
+    expect(dining).toHaveClass("progress--over");
+    expect(screen.getByRole("progressbar", { name: /^Rent:/ })).not.toHaveClass("progress--over");
+  });
+
+  it("a line links to its transactions for the period", async () => {
+    budgetApi();
+    renderApp("/plan/budgets/b-1");
+    const table = await screen.findByRole("region", { name: "Budget report by category" });
+    const link = within(table).getByRole("link", { name: "Dining" });
+    const href = new URL(link.getAttribute("href") ?? "", "http://localhost");
+    expect(href.pathname).toBe("/transactions");
+    expect(href.searchParams.get("category")).toBe(CAT_DINING);
+    expect(href.searchParams.get("date_from")).toBe("2026-11-01");
+    expect(href.searchParams.get("date_to")).toBe("2026-11-30");
+    // The line carries its category's colour.
+    expect(link.querySelector(".chip")?.className).toMatch(/\bchip--s[1-6]\b/);
+    // Dining has no subcategories, so there is nothing to explain.
+    expect(within(table).queryByText(/subcategories/)).toBeNull();
+  });
+
+  it("a line on a parent category says its link lists that category itself only", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/budgets/:id": () => json({ ...BUDGET, lines: [{ id: "l-1", category_id: CAT_FOOD, amount: money("400.00") }] }),
+      "GET /api/v1/budgets/:id/report": () =>
+        json({ ...REPORT, lines: [line(CAT_FOOD, "Food", { budgeted: "400.00", actual: "320.00", forecast: "380.00" })] }),
+    });
+    renderApp("/plan/budgets/b-1");
+    const table = await screen.findByRole("region", { name: "Budget report by category" });
+    const row = within(table).getByRole("row", { name: /Food/ });
+    // Actual rolls Dining into Food; the transactions list matches Food exactly, so the row says so.
+    expect(await within(row).findByText("The link lists Food itself. Actual also counts its subcategories: Dining.")).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Food" })).toBeInTheDocument();
+  });
+
+  it("a parent line says nothing when each subcategory has a line of its own", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/budgets/:id": () => json(BUDGET),
+      "GET /api/v1/budgets/:id/report": () =>
+        json({
+          ...REPORT,
+          lines: [
+            line(CAT_FOOD, "Food", { budgeted: "100.00", actual: "20.00", forecast: "40.00" }),
+            line(CAT_DINING, "Dining", { budgeted: "200.00", actual: "250.00", forecast: "300.00" }),
+          ],
+        }),
+    });
+    renderApp("/plan/budgets/b-1");
+    const table = await screen.findByRole("region", { name: "Budget report by category" });
+    await within(table).findByRole("link", { name: "Food" });
+    expect(within(table).queryByText(/subcategories/)).toBeNull();
+  });
+
+  it("says the linked lists include transactions awaiting review until the report does too", async () => {
+    budgetApi();
+    renderApp("/plan/budgets/b-1");
+    const user = userEvent.setup();
+    await screen.findByRole("region", { name: "Budget report by category" });
+    const note = "Linked transaction lists also show transactions awaiting review, which Actual leaves out.";
+    expect(screen.getByText(note)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Include transactions awaiting review" }));
+    await vi.waitFor(() => { expect(screen.queryByText(note)).toBeNull(); });
+  });
+
+  it("shows where it sits as Plan / Budgets / its name", async () => {
+    budgetApi();
+    renderApp("/plan/budgets/b-1");
+    const crumbs = await screen.findByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/plan");
+    expect(within(crumbs).getByRole("link", { name: "Budgets" })).toHaveAttribute("href", "/plan/budgets");
+    expect(await within(crumbs).findByText("Household")).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("a viewer sees no edit or delete", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/budgets/:id": () => json(BUDGET),
+      "GET /api/v1/budgets/:id/report": () => json(REPORT),
+    });
+    renderApp("/plan/budgets/b-1");
+    await screen.findByRole("region", { name: "Budget report by category" });
+    expect(screen.queryByRole("button", { name: "Edit budget" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  it("has no axe violations", async () => {
+    budgetApi();
+    const { container } = renderApp("/plan/budgets/b-1");
+    await screen.findByRole("region", { name: "Budget report by category" });
+    await screen.findByText("November 2026");
+    await expectNoAxeViolations(container);
+  });
+
   it("refuses a bad amount before calling the server", async () => {
     const api = budgetApi();
-    renderApp("/budgets/b-1");
+    renderApp("/plan/budgets/b-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Edit budget" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit budget" });
@@ -190,7 +297,7 @@ describe("budget list", () => {
       "GET /api/v1/budgets/:id": () => json(BUDGET),
       "GET /api/v1/budgets/:id/report": () => json(REPORT),
     });
-    renderApp("/budgets");
+    renderApp("/plan/budgets");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New budget" }));
     const dialog = await screen.findByRole("dialog", { name: "New budget" });
@@ -203,5 +310,27 @@ describe("budget list", () => {
     });
     expect(api.callsTo("POST", "/api/v1/budgets")[0]?.body).toMatchObject({ name: "Household", period: "monthly", currency: "USD", rollover: false });
     expect(await screen.findByRole("heading", { level: 1, name: "Household" })).toBeInTheDocument();
+  });
+
+  it("a viewer sees no New budget", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/budgets": () => json({ items: [BUDGET], next_cursor: null }),
+    });
+    renderApp("/plan/budgets");
+    expect(await screen.findByRole("link", { name: "Household" })).toHaveAttribute("href", "/plan/budgets/b-1");
+    expect(screen.queryByRole("button", { name: "New budget" })).toBeNull();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/budgets": () => json({ items: [BUDGET], next_cursor: null }),
+    });
+    const { container } = renderApp("/plan/budgets");
+    await screen.findByRole("link", { name: "Household" });
+    await expectNoAxeViolations(container);
   });
 });

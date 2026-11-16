@@ -37,6 +37,7 @@ from app.auth.models import GrantLevel
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
+from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import Account, AccountType
 from app.domain.loans import service as loans_service
 from app.domain.networth import service as networth_service
@@ -335,6 +336,28 @@ def test_brokerage_statement_anchor_carries_the_market_move(world: World) -> Non
     body = _get(world.owner, f"{NW}/latest")
     entry = next(a for a in body["accounts"] if a["name"] == "Brokerage")
     assert entry["amount"]["amount"] == "1700.00"
+
+
+def test_accounts_value_an_investment_account_as_net_worth_does(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ledger alone says 1000.00 (the deposit); the account is worth its
+    # cash (0.00 after the buy) plus its holdings (10 x 120.00).
+    monkeypatch.setattr(accounts_service, "today", lambda: TODAY)
+    brokerage = world.accounts["brokerage"]
+    listed = {a["name"]: a for a in _get(world.owner, f"{API}/accounts")["items"]}
+    assert listed["Brokerage"]["balance"] == {"amount": "1200.00", "currency": "USD"}
+    assert listed["Checking"]["balance"]["amount"] == "3800.00"
+    single = _get(world.owner, f"{API}/accounts/{brokerage.id}")
+    assert single["balance"]["amount"] == "1200.00"
+    # Left out of net worth, it is still worth what it holds.
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        row = db.get(Account, brokerage.id)
+        assert row is not None
+        row.include_in_net_worth = False
+    single = _get(world.owner, f"{API}/accounts/{brokerage.id}")
+    assert single["balance"]["amount"] == "1200.00"
 
 
 def test_projection(world: World) -> None:

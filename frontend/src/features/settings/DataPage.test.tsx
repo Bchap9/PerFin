@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../auth/testing";
 import { referenceHandlers } from "../planning/testing";
 
@@ -139,5 +140,15 @@ describe("import", () => {
     const calls = api.callsTo("POST", "/api/v1/import");
     expect(calls.at(-1)?.headers.get("x-archive-passphrase")).toBe("s3cret");
     expect(calls.at(-1)?.headers.get("content-type")).toMatch(/^multipart\/form-data/);
+  });
+});
+
+describe("data page accessibility", () => {
+  it("has no axe violations", async () => {
+    dataApi();
+    const { container } = renderApp("/settings/data");
+    await screen.findByLabelText(/^Passphrase/);
+    await screen.findByRole("button", { name: "Start export" });
+    await expectNoAxeViolations(container);
   });
 });

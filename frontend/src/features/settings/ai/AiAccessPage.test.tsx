@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../../test/axe";
 import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../../auth/testing";
 
 const TOKEN = "pfn_airead_SECRETsecretSECRETsecretSECRETsecretSECRETsecret";
@@ -367,5 +368,15 @@ describe("AI banner", () => {
     renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     expect(screen.queryByTestId("ai-banner")).not.toBeInTheDocument();
+  });
+});
+
+describe("AI access page accessibility", () => {
+  it("has no axe violations", async () => {
+    aiApi();
+    const { container } = renderApp("/settings/ai");
+    await screen.findByText("Claude Desktop");
+    await screen.findByRole("button", { name: "New client" });
+    await expectNoAxeViolations(container);
   });
 });

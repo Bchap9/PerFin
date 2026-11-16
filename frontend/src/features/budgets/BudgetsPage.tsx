@@ -13,6 +13,7 @@ import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Table, type TableColumn } from "../../components/Table";
 import { formatDate, todayIsoDate, startOfMonth } from "../../lib/dates";
+import { useCanWrite } from "../accounts/api";
 import { useHouseholdCurrency } from "../planning/currency";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAction } from "../planning/useAction";
@@ -71,7 +72,7 @@ function NewBudgetDialog({ onClose }: { onClose: () => void }) {
     const done = await create.run(body);
     if (done !== undefined) {
       onClose();
-      await navigate({ to: "/budgets/$budgetId", params: { budgetId: done.value.id } });
+      await navigate({ to: "/plan/budgets/$budgetId", params: { budgetId: done.value.id } });
     }
   };
 
@@ -126,6 +127,7 @@ function NewBudgetDialog({ onClose }: { onClose: () => void }) {
 
 export function BudgetsPage() {
   const query = useQuery({ queryKey: budgetKeys.list, queryFn: listBudgets });
+  const canWrite = useCanWrite();
   const [creating, setCreating] = useState(false);
   const columns: TableColumn<Budget>[] = [
     {
@@ -133,7 +135,7 @@ export function BudgetsPage() {
       header: "Budget",
       rowHeader: true,
       cell: (budget) => (
-        <Link to="/budgets/$budgetId" params={{ budgetId: budget.id }}>
+        <Link to="/plan/budgets/$budgetId" params={{ budgetId: budget.id }}>
           {budget.name}
         </Link>
       ),
@@ -152,23 +154,31 @@ export function BudgetsPage() {
     <PlanningPage
       title="Budgets"
       actions={
-        <Button variant="primary" onClick={() => { setCreating(true); }}>
-          New budget
-        </Button>
+        canWrite ? (
+          <Button variant="primary" onClick={() => { setCreating(true); }}>
+            New budget
+          </Button>
+        ) : undefined
       }
     >
       <QueryState loading={query.isPending} error={query.error} label="budgets">
         <Table
-          caption="Budgets"
+          caption="All budgets"
           captionHidden
           columns={columns}
           rows={query.data ?? []}
           rowKey={(budget) => budget.id}
           maxHeight="none"
-          empty={<EmptyState title="No budgets yet" description="Create a budget to plan spending by category." headingLevel={3} />}
+          empty={
+            <EmptyState
+              title="No budgets yet"
+              description={canWrite ? "Create a budget to plan spending by category." : "No one in this household has made a budget yet."}
+              headingLevel={3}
+            />
+          }
         />
       </QueryState>
-      {creating ? <NewBudgetDialog onClose={() => { setCreating(false); }} /> : null}
+      {canWrite && creating ? <NewBudgetDialog onClose={() => { setCreating(false); }} /> : null}
     </PlanningPage>
   );
 }

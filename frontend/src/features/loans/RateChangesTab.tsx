@@ -14,7 +14,8 @@ import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { useAction } from "../planning/useAction";
 import { addRateChange, deleteRateChange, listRateChanges, loanKeys, type Loan, type RateChange } from "./api";
 
-export function RateChangesTab({ loan }: { loan: Loan }) {
+/** The loan's rate changes; `editable` (the hub's: may write and may edit the account) adds the form and Delete. */
+export function RateChangesTab({ loan, editable }: { loan: Loan; editable: boolean }) {
   const query = useQuery({ queryKey: loanKeys.rateChanges(loan.id), queryFn: () => listRateChanges(loan.id) });
   const [effective, setEffective] = useState(todayIsoDate());
   const [rate, setRate] = useState("");
@@ -26,7 +27,9 @@ export function RateChangesTab({ loan }: { loan: Loan }) {
   const columns: TableColumn<RateChange>[] = [
     { id: "date", header: "Effective", rowHeader: true, cell: (c) => formatDate(c.effective_date) ?? c.effective_date },
     { id: "rate", header: "New rate", align: "end", cell: (c) => formatFraction(c.new_rate, 3) },
-    {
+  ];
+  if (editable) {
+    columns.push({
       id: "remove",
       header: <span className="visually-hidden">Delete</span>,
       align: "end",
@@ -35,43 +38,45 @@ export function RateChangesTab({ loan }: { loan: Loan }) {
           Delete
         </Button>
       ),
-    },
-  ];
+    });
+  }
 
   return (
     <div className="planning-stack">
       {loan.rate_type === "fixed" ? <p className="muted">This loan has a fixed rate: its payment stays the same after a rate change.</p> : null}
-      <Card title="Add a rate change" headingLevel={3}>
-        <form
-          className="planning-row"
-          aria-label="Add a rate change"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const fraction = percentToFraction(rate);
-            if (!isIsoDate(effective) || fraction === null) {
-              setProblem("Enter a date and a yearly rate as a percent, e.g. 5.5.");
-              return;
-            }
-            setProblem(null);
-            void add.run({ effective_date: effective, new_rate: fraction }).then((done) => {
-              if (done !== undefined) {
-                setRate("");
+      {editable ? (
+        <Card title="Add a rate change" headingLevel={3}>
+          <form
+            className="planning-row"
+            aria-label="Add a rate change"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const fraction = percentToFraction(rate);
+              if (!isIsoDate(effective) || fraction === null) {
+                setProblem("Enter a date and a yearly rate as a percent, e.g. 5.5.");
+                return;
               }
-            });
-          }}
-        >
-          <Field label="Effective date">
-            <Input type="date" value={effective} onChange={(event) => { setEffective(event.target.value); }} />
-          </Field>
-          <Field label="New yearly rate (%)">
-            <Input inputMode="decimal" value={rate} onChange={(event) => { setRate(event.target.value); }} />
-          </Field>
-          <Button type="submit" variant="primary" loading={add.busy}>
-            Add rate change
-          </Button>
-        </form>
-        <ErrorLine message={problem ?? add.error ?? remove.error} />
-      </Card>
+              setProblem(null);
+              void add.run({ effective_date: effective, new_rate: fraction }).then((done) => {
+                if (done !== undefined) {
+                  setRate("");
+                }
+              });
+            }}
+          >
+            <Field label="Effective date">
+              <Input type="date" value={effective} onChange={(event) => { setEffective(event.target.value); }} />
+            </Field>
+            <Field label="New yearly rate (%)">
+              <Input inputMode="decimal" value={rate} onChange={(event) => { setRate(event.target.value); }} />
+            </Field>
+            <Button type="submit" variant="primary" loading={add.busy}>
+              Add rate change
+            </Button>
+          </form>
+          <ErrorLine message={problem ?? add.error ?? remove.error} />
+        </Card>
+      ) : null}
       <QueryState loading={query.isPending} error={query.error} label="rate changes">
         <Table caption="Rate changes" columns={columns} rows={query.data ?? []} rowKey={(c) => c.id} maxHeight="md" empty="No rate changes recorded." />
       </QueryState>

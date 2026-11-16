@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { todayIsoDate } from "../../lib/dates";
+import { expectNoAxeViolations } from "../../test/axe";
 import { currentHref, json, mockApi, problem, renderApp, type ApiCall, type Handler } from "../auth/testing";
 import { ACCOUNT_CHECKING, CAT_RENT, money, ownerSession, referenceHandlers } from "../planning/testing";
 import { monthOf, presetRange } from "./periods";
@@ -37,6 +38,11 @@ function lastQuery(api: { callsTo: (method: string, path: string) => ApiCall[] }
   return Object.fromEntries(new URLSearchParams(call?.search ?? ""));
 }
 
+/** A view link in the section's tab bar (Spending, Income, Cash flow, Trends). */
+function viewLink(name: string): HTMLElement {
+  return within(screen.getByRole("navigation", { name: "Reports" })).getByRole("link", { name });
+}
+
 async function savedCsv(): Promise<{ text: string; bytes: Uint8Array; filename: string }> {
   await waitFor(() => {
     expect(saved.saveBlob).toHaveBeenCalledTimes(1);
@@ -61,7 +67,7 @@ describe("reports page: spending and income", () => {
     expect(lastQuery(api, SPENDING)).toEqual({ date_from: month.from, date_to: month.to, group_by: "category", depth: "1" });
     expect(api.callsTo("GET", INCOME)).toHaveLength(0);
     expect(api.callsTo("GET", CASHFLOW)).toHaveLength(0);
-    expect(screen.getByRole("tab", { name: "Spending" })).toHaveAttribute("aria-selected", "true");
+    expect(viewLink("Spending")).toHaveAttribute("aria-current", "page");
     expect(screen.getByText(/for all accounts\. Transactions awaiting review are left out\./)).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Include transactions awaiting review" })).not.toBeChecked();
 
@@ -134,10 +140,17 @@ describe("reports page: spending and income", () => {
       expect(href).toContain(part);
     }
 
-    // The same filters carry over to the other tabs.
-    await user.click(screen.getByRole("tab", { name: "Income" }));
+    // The period, account and review box carry over to the other views; the grouping is the view's own.
+    await user.click(viewLink("Income"));
     await waitFor(() => {
-      expect(lastQuery(api, INCOME)).toEqual(lastQuery(api, SPENDING));
+      expect(lastQuery(api, INCOME)).toEqual({
+        date_from: `${String(year - 1)}-01-01`,
+        date_to: `${String(year - 1)}-12-31`,
+        group_by: "category",
+        depth: "1",
+        account: ACCOUNT_CHECKING,
+        include_pending: "true",
+      });
     });
     expect(await screen.findByRole("heading", { level: 2, name: "Income by category" })).toBeInTheDocument();
   });
@@ -201,10 +214,10 @@ describe("reports page: spending and income", () => {
     const link = new URL(within(accounts).getByRole("link", { name: "Checking" }).getAttribute("href") ?? "", "http://localhost");
     expect(Object.fromEntries(link.searchParams)).toEqual({ account: ACCOUNT_CHECKING, date_from: "2026-11-01", date_to: "2026-11-30" });
 
-    await user.click(screen.getByRole("tab", { name: "Income" }));
+    await user.click(viewLink("Income"));
     expect(await screen.findByRole("heading", { name: "No income in this period" })).toBeInTheDocument();
     expect(screen.getByText(/Transactions still waiting in Review are left out unless you include them above\./)).toBeInTheDocument();
-    expect(lastQuery(api, INCOME)).toMatchObject({ group_by: "account" });
+    expect(lastQuery(api, INCOME)).toMatchObject({ group_by: "category" });
   });
 
   it("shows amounts the server could not convert instead of hiding them, and follows the household's review setting", async () => {
@@ -247,7 +260,7 @@ describe("reports page: spending and income", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     // The filters stay usable, and another tab can still load.
     expect(screen.getByLabelText("Period")).toBeEnabled();
-    await userEvent.setup().click(screen.getByRole("tab", { name: "Cash flow" }));
+    await userEvent.setup().click(viewLink("Cash flow"));
     expect(await screen.findByRole("table", { name: /^Cash flow by month/ })).toBeInTheDocument();
     expect(lastQuery(api, CASHFLOW)).toMatchObject({ account: ACCOUNT_CHECKING });
   });
@@ -415,7 +428,7 @@ describe("reports page: csv download", () => {
     expect(cashflow.text).toContain("Total,6466.18,5990.67,475.51,USD\r\n");
 
     saved.saveBlob.mockClear();
-    await user.click(screen.getByRole("tab", { name: "Trends" }));
+    await user.click(viewLink("Trends"));
     await user.click(await screen.findByRole("button", { name: "Download CSV of the comparison by category" }));
     const comparison = await savedCsv();
     expect(comparison.filename).toBe("perfin-spending-trends-2026-11.csv");
@@ -426,5 +439,106 @@ describe("reports page: csv download", () => {
     const series = await savedCsv();
     expect(series.filename).toBe("perfin-spending-by-month-2026-09-to-2026-11.csv");
     expect(series.text).toContain("Month,Spending,Currency\r\n2026-09,1500.00,USD\r\n");
+  });
+});
+
+describe("reports page: the section tab bar", () => {
+  it("the section tab bar switches the view and keeps the period and account", async () => {
+    const api = reportsApi();
+    const { router } = renderApp(`/reports?period=last-year&account=${ACCOUNT_CHECKING}&pending=true`);
+    const user = userEvent.setup();
+    await screen.findByRole("img", { name: "Spending by category, 3 bars" });
+    expect(viewLink("Spending")).toHaveAttribute("aria-current", "page");
+    const year = Number(todayIsoDate().slice(0, 4));
+    const scope = { date_from: `${String(year - 1)}-01-01`, date_to: `${String(year - 1)}-12-31`, account: ACCOUNT_CHECKING, include_pending: "true" };
+
+    await user.click(viewLink("Cash flow"));
+    expect(await screen.findByRole("img", { name: /^Money in, money out and net by month/ })).toBeInTheDocument();
+    expect(viewLink("Cash flow")).toHaveAttribute("aria-current", "page");
+    expect(viewLink("Spending")).not.toHaveAttribute("aria-current");
+    expect(lastQuery(api, CASHFLOW)).toEqual(scope);
+    for (const part of ["tab=cashflow", "period=last-year", `account=${ACCOUNT_CHECKING}`, "pending=true"]) {
+      expect(currentHref(router)).toContain(part);
+    }
+    // The filters on screen follow the address.
+    expect(screen.getByLabelText("Period")).toHaveValue("last-year");
+    expect(screen.getByLabelText("Account")).toHaveValue(ACCOUNT_CHECKING);
+
+    await user.click(viewLink("Spending"));
+    expect(await screen.findByRole("img", { name: "Spending by category, 3 bars" })).toBeInTheDocument();
+    expect(currentHref(router)).not.toContain("tab=");
+    expect(currentHref(router)).toContain("period=last-year");
+  });
+
+  it("there is one tab list, not two", async () => {
+    reportsApi();
+    renderApp("/reports?tab=income");
+    await screen.findByRole("heading", { level: 2, name: "Income by category" });
+    // The section's tab bar is the only way between the views: no second, in-page tab list.
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Reports" })).toHaveLength(1);
+    expect(within(screen.getByRole("navigation", { name: "Reports" })).getAllByRole("link").map((link) => link.textContent)).toEqual(["Spending", "Income", "Cash flow", "Trends", "Net worth", "Tax"]);
+    expect(viewLink("Income")).toHaveAttribute("aria-current", "page");
+    // The section's h1 names the page; the page does not repeat it.
+    expect(screen.getAllByRole("heading", { level: 1 }).map((heading) => heading.textContent)).toEqual(["Reports"]);
+    expect(screen.queryByRole("heading", { level: 2, name: "Reports" })).not.toBeInTheDocument();
+  });
+
+  it("charts carry series classes, not colours", async () => {
+    reportsApi();
+    const { container } = renderApp("/reports?tab=cashflow");
+    await screen.findByRole("img", { name: /^Money in, money out and net by month/ });
+    const charts = Array.from(container.querySelectorAll(".report-chart"));
+    expect(charts.length).toBeGreaterThan(0);
+    for (const chart of charts) {
+      for (const element of Array.from(chart.querySelectorAll("*"))) {
+        expect(element.getAttribute("stroke") ?? "").not.toMatch(/#|var\(/);
+        expect(element.getAttribute("fill") ?? "").not.toMatch(/#|var\(/);
+      }
+    }
+    const bars = Array.from(container.querySelectorAll(".recharts-bar"));
+    expect(bars).toHaveLength(2);
+    expect(bars[0]).toHaveClass("chart-series-1");
+    expect(bars[1]).toHaveClass("chart-series-2");
+    expect(container.querySelector(".recharts-cartesian-grid .chart-grid")).not.toBeNull();
+    expect(container.querySelectorAll(".chart-axis").length).toBeGreaterThanOrEqual(2);
+    // The net line's points take the report's own class, not a colour.
+    expect(container.querySelectorAll("circle.report-net-dot")).toHaveLength(2);
+
+    // The trend chart: the months compared in the series colour, the others in the muted class.
+    await userEvent.setup().click(viewLink("Trends"));
+    await screen.findByRole("img", { name: "Spending month by month, 3 months" });
+    for (const element of Array.from(container.querySelectorAll(".report-chart *"))) {
+      expect(element.getAttribute("stroke") ?? "").not.toMatch(/#|var\(/);
+      expect(element.getAttribute("fill") ?? "").not.toMatch(/#|var\(/);
+    }
+    expect(container.querySelector(".recharts-bar")).toHaveClass("chart-series-1");
+    expect(container.querySelectorAll("path.recharts-rectangle.chart-series-1").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("path.recharts-rectangle.report-bar--muted").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["spending", "/reports", "Spending by category, 3 bars"],
+    ["income", "/reports?tab=income", "Income by category, 2 bars"],
+    ["cash flow", "/reports?tab=cashflow", "Money in, money out and net by month, 2 months"],
+    ["trends", "/reports?tab=trends", "Spending month by month, 3 months"],
+  ])("has no axe violations: %s", async (_view, path, chart) => {
+    reportsApi({
+      [`GET ${INCOME}`]: () =>
+        json(
+          flowReport({
+            flow: "income",
+            items: [
+              { key: "c-pay", name: "Salary", amount: money("3000.00") },
+              { key: "c-int", name: "Interest", amount: money("12.40") },
+            ],
+            total: money("3012.40"),
+          }),
+        ),
+    });
+    const { container } = renderApp(path);
+    await screen.findByRole("img", { name: chart });
+    await expectNoAxeViolations(container);
   });
 });

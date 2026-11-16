@@ -2,13 +2,59 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../auth/testing";
 import { ACCOUNT_CHECKING, ownerSession, referenceHandlers } from "../planning/testing";
 import { levelChoices } from "./AccessPage";
 
 const STAMP = "2026-11-03T10:00:00Z";
 
+const INTRO = "Rules and categories are made where you work, in Transactions and the Inbox. They are kept here to edit or remove.";
+
+describe("the settings index", () => {
+  it("the index groups the pages and states where rules are made", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession(), "GET /api/v1/households": () => json([]) });
+    renderApp("/settings");
+    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByText(INTRO)).toBeInTheDocument();
+    const groups = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+    expect(groups).toEqual(["You", "Household", "Categorisation", "Import", "Data and integrations"]);
+    const household = screen.getByRole("region", { name: "Household" });
+    expect(within(household).getByRole("link", { name: "Name and currency" })).toHaveAttribute("href", "/settings/general");
+    expect(within(household).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/settings/household");
+    const categorisation = screen.getByRole("region", { name: "Categorisation" });
+    expect(within(categorisation).getByRole("link", { name: "Rules" })).toHaveAttribute("href", "/settings/rules");
+    expect(within(categorisation).getByRole("link", { name: "What PerFin learned" })).toHaveAttribute("href", "/settings/learned");
+    // What each page holds is still said under its link.
+    expect(within(household).getByText("The household's name and base currency.")).toBeInTheDocument();
+  });
+
+  it("lists Users under Instance for an instance administrator", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession({ instanceAdmin: true }), "GET /api/v1/households": () => json([]) });
+    renderApp("/settings");
+    const instance = await screen.findByRole("region", { name: "Instance" });
+    expect(within(instance).getByRole("link", { name: "Users" })).toHaveAttribute("href", "/settings/users");
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession({ instanceAdmin: true }), "GET /api/v1/households": () => json([]) });
+    const { container } = renderApp("/settings");
+    await screen.findByRole("region", { name: "Instance" });
+    await expectNoAxeViolations(container);
+  });
+});
+
 describe("household settings", () => {
+  it("is called Name and currency, under Settings", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    renderApp("/settings/general");
+    expect(await screen.findByRole("heading", { level: 2, name: "Name and currency" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 }).map((heading) => heading.textContent)).toEqual(["Settings"]);
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(within(crumbs).getByText("Name and currency")).toHaveAttribute("aria-current", "page");
+  });
+
   it("changes the base currency", async () => {
     const api = mockApi({
       ...ownerSession(),

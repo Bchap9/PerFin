@@ -392,6 +392,48 @@ describe("suggestions in bulk", () => {
     expect(screen.queryByRole("button", { name: "Accept suggestions" })).not.toBeInTheDocument();
   });
 
+  // Stage 2 pinned these on the grid's inline select, which is gone: a category changes in the bulk bar (or the drawer).
+  it("choosing another category for a suggestion is the person's choice", async () => {
+    const suggested = tx("x-2", { payee_id: null, raw_payee: "ACME", category_id: null, suggested_category_id: "c-2", category_source: "dictionary", category_confidence: "0.60" });
+    const api = setup([suggested]);
+    api.on("POST /api/v1/transactions/bulk", () => {
+      api.on("GET /api/v1/transactions", page([{ ...suggested, category_id: "c-1", suggested_category_id: null, category_source: "person", category_confidence: "1.00" }]));
+      return json({ action: "categorise", changed: 1, results: [{ id: "x-2", result: "updated" }] });
+    });
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select ACME"));
+    await user.selectOptions(screen.getByLabelText("Bulk category"), "c-1");
+    await user.click(screen.getByRole("button", { name: "Set category" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/transactions/bulk")[0]?.body).toEqual({ action: "categorise", ids: ["x-2"], category_id: "c-1" });
+    });
+    const row = within(screen.getByRole("row", { name: /ACME/ }));
+    expect(await row.findByText("You chose this")).toBeInTheDocument();
+    expect(row.getByText("Groceries")).toBeInTheDocument();
+    expect(row.queryByText("Dining?")).not.toBeInTheDocument();
+  });
+
+  it("the category list is grouped", async () => {
+    const api = setup();
+    api.on(
+      "GET /api/v1/categories",
+      page([category("c-9", "Food"), category("c-1", "Groceries", { parent_id: "c-9" }), category("c-2", "Dining", { parent_id: "c-9" }), category("c-8", "Gifts")]),
+    );
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select Corner Market"));
+    const select = screen.getByLabelText("Bulk category");
+    await waitFor(() => {
+      expect(within(select).getByRole("group", { name: "Food" })).toBeInTheDocument();
+    });
+    const group = within(select).getByRole("group", { name: "Food" });
+    expect(within(group).getAllByRole("option").map((option) => option.textContent)).toEqual(["Food", "Dining", "Groceries"]);
+    // A top-level category with nothing under it is an option of its own.
+    expect(within(select).getAllByRole("group")).toHaveLength(1);
+    expect(within(select).getByRole("option", { name: "Gifts" })).toHaveValue("c-8");
+  });
+
   it("groups the category list in the bulk bar and in the dialog", async () => {
     const api = setup();
     api.on(
@@ -427,7 +469,7 @@ describe("find transfers", () => {
     renderApp("/transactions");
     const user = userEvent.setup();
     const button = await screen.findByRole("button", { name: "Find transfers" });
-    await screen.findByLabelText("Category of Corner Market");
+    await screen.findByRole("row", { name: /Corner Market/ });
     const listCalls = api.callsTo("GET", "/api/v1/transactions").length;
     await user.click(button);
     expect(await screen.findByText("2 transfers linked")).toBeInTheDocument();
@@ -479,18 +521,25 @@ describe("row actions menu", () => {
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("aria-controls", menu.id);
     // The row names no merchant, so there is no "Always categorise ... as" (AlwaysCategoriseDialog.test.tsx).
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Edit", "Split", "Link transfer", "Delete"]);
-    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toHaveFocus();
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Change category…",
+      "Edit",
+      "Split",
+      "Mark as transfer",
+      "Add note…",
+      "Delete",
+    ]);
+    expect(within(menu).getByRole("menuitem", { name: "Change category…" })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
-    expect(within(menu).getByRole("menuitem", { name: "Split" })).toHaveFocus();
+    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toHaveFocus();
     await user.keyboard("{End}");
     expect(within(menu).getByRole("menuitem", { name: "Delete" })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
-    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toHaveFocus();
+    expect(within(menu).getByRole("menuitem", { name: "Change category…" })).toHaveFocus();
     await user.keyboard("{ArrowUp}");
     expect(within(menu).getByRole("menuitem", { name: "Delete" })).toHaveFocus();
-    await user.keyboard("l");
-    expect(within(menu).getByRole("menuitem", { name: "Link transfer" })).toHaveFocus();
+    await user.keyboard("m");
+    expect(within(menu).getByRole("menuitem", { name: "Mark as transfer" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(button).toHaveFocus();

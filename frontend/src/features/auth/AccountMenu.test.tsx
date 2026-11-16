@@ -60,7 +60,8 @@ describe("account menu", () => {
     });
     const { router } = renderApp("/");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Sign out" }));
+    await user.click(await screen.findByRole("button", { name: "Account: Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/login");
     });
@@ -81,7 +82,8 @@ describe("account menu", () => {
     });
     renderApp("/");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Sign out" }));
+    await user.click(await screen.findByRole("button", { name: "Account: Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
     await waitFor(() => {
       expect(assign).toHaveBeenCalledWith("https://idp.example/end-session?id_token_hint=x");
     });
@@ -95,7 +97,8 @@ describe("account menu", () => {
     });
     const { router } = renderApp("/");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Sign out" }));
+    await user.click(await screen.findByRole("button", { name: "Account: Alice" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
     expect(await screen.findByText("Sign-out failed")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
   });

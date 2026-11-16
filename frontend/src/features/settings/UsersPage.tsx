@@ -514,7 +514,7 @@ function UsersAdmin({ callerId, needsFactor }: { callerId: string; needsFactor: 
             </p>
             <p>
               Next step: add them to a household under{" "}
-              <Link to="/settings/household">Household members</Link>. Choose &ldquo;Someone with a PerFin account&rdquo;, enter
+              <Link to="/settings/household">Members</Link>. Choose &ldquo;Someone with a PerFin account&rdquo;, enter
               the username <strong>{created.username}</strong> and pick their role. An owner or admin of another household does
               the same from that household.
             </p>
@@ -551,7 +551,7 @@ function UsersAdmin({ callerId, needsFactor }: { callerId: string; needsFactor: 
           ) : null}
           <p className="auth-muted">
             Every change here asks for your second factor first. Which household a person belongs to, and their role in it, is
-            set under <Link to="/settings/household">Household members</Link>.
+            set under <Link to="/settings/household">Members</Link>.
           </p>
         </div>
       </Card>
@@ -641,7 +641,7 @@ export function UsersPage() {
         <Card>
           <p>
             Only an administrator of this PerFin instance can manage users. To add someone to your household, an owner or admin
-            uses <Link to="/settings/household">Household members</Link>.
+            uses <Link to="/settings/household">Members</Link>.
           </p>
         </Card>
       </SettingsPage>

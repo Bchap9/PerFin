@@ -1,105 +1,132 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "../auth/auth.css";
+import "./settings.css";
 
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-import { Card } from "../../components/Card";
+import { CardHeadingLevel } from "../../components/Card";
+import { PAGE_TITLE_ID, PageHeader, SectionHeadingContext } from "../../components/PageHeader";
 import { formatDateTime } from "../../lib/dates";
-import { useAuthSession } from "../auth/session";
 import { StepUpProvider } from "../auth/StepUp";
+import { SettingsNav, useIsInstanceAdmin, visibleSettingsGroups } from "./SettingsNav";
 
-/** Every settings page can ask for step-up; the dialog lives here. */
+/** Where rules and categories are made (spec section 1.3), said on the Settings index. */
+export const SETTINGS_INTRO =
+  "Rules and categories are made where you work, in Transactions and the Inbox. They are kept here to edit or remove.";
+
+/** Said on top of the rules list and of "What PerFin learned" (plan, Task 19). */
+export const RULES_INTRO =
+  "Rules are made where you work: in a transaction's panel or from an Inbox card. Here you can change their order, edit or undo them.";
+
+/** The same, to a member or viewer, who cannot reorder or edit rules (`authz_policy`: owner or admin). */
+export const RULES_INTRO_READER =
+  "Rules are made where you work: in a transaction's panel or from an Inbox card. Only an owner or admin can change their order or edit them.";
+
+/** The intro for a role: the plan's words only to one who may act on them. */
+export function rulesIntro(canManageRules: boolean): string {
+  return canManageRules ? RULES_INTRO : RULES_INTRO_READER;
+}
+
+function useIsIndex(): boolean {
+  return useRouterState({ select: (state) => state.location.pathname.replace(/\/+$/, "") === "/settings" });
+}
+
+/**
+ * Settings: the one `h1`, the side list (from 1024 px; the index is the
+ * list itself, so it is not repeated there), then the page, whose
+ * `PageHeader` renders an `h2`. Every settings page can ask for step-up; the
+ * dialog lives here.
+ */
 export function SettingsLayout() {
+  const index = useIsIndex();
   return (
     <StepUpProvider>
-      <Outlet />
+      <header className="section-header settings-header">
+        <h1 id={PAGE_TITLE_ID} className="section-header__title">
+          Settings
+        </h1>
+      </header>
+      <div className={index ? "settings-shell settings-shell--index" : "settings-shell"}>
+        {index ? null : <SettingsNav />}
+        <div className="settings-shell__page">
+          <SectionHeadingContext.Provider value={true}>
+            {/* Every page here titles at h2, so its cards title at h3, under it. */}
+            <CardHeadingLevel.Provider value={3}>
+              <Outlet />
+            </CardHeadingLevel.Provider>
+          </SectionHeadingContext.Provider>
+        </div>
+      </div>
     </StepUpProvider>
   );
 }
 
-/** A settings page: heading, a link back to the settings overview and content. */
+/** A settings page: breadcrumbs back to Settings, its title (an `h2`), and content. */
 export function SettingsPage({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section aria-labelledby="page-title" className="settings-stack">
-      <div className="page-header">
-        <h1 id="page-title">{title}</h1>
-      </div>
-      <p>
-        <Link to="/settings" className="link-action link-action--back">
-          All settings
-        </Link>
-      </p>
+    <div className="settings-stack">
+      <PageHeader title={title} breadcrumbs={[{ to: "/settings", label: "Settings" }, { label: title }]} />
       {children}
-    </section>
+    </div>
   );
 }
 
-interface Section {
-  to: string;
-  title: string;
-  text: string;
-  /** Listed only for an instance administrator (the page itself checks again). */
-  instanceAdmin?: true;
-}
+/** What each page holds, said under its link on the index. */
+const DESCRIPTIONS: ReadonlyMap<string, string> = new Map([
+  ["/settings/profile", "Your name, language, theme and time zone."],
+  ["/settings/security", "Password, second factors, recovery codes, sessions and personal access tokens."],
+  [
+    "/settings/notifications",
+    "Email, webhook, ntfy, Gotify or Matrix alerts for sign-in security, roles, reviews, tax and backups.",
+  ],
+  ["/settings/general", "The household's name and base currency."],
+  ["/settings/household", "Who can see this household's finances, and their roles."],
+  ["/settings/access", "Which accounts each member or viewer can see or edit."],
+  ["/settings/exchange-rates", "The rates net worth and reports use to convert accounts in other currencies."],
+  ["/settings/categories", "Categories, payees, tags and the tax hints each category carries."],
+  ["/settings/rules", "The rules you made, in the order they run: edit, reorder, export or remove them."],
+  ["/settings/learned", "Statement layouts, wording, column mappings and categories PerFin learned from your choices."],
+  ["/settings/intake", "Receipts mailbox, its alias, the drop folder and virus scanning."],
+  ["/settings/data", "Take a copy of everything, or restore one."],
+  ["/settings/ai", "Assistants that may read financial facts, what leaves, and an audit of every call."],
+  [
+    "/settings/users",
+    "Everyone with a sign-in on this PerFin instance: create accounts, disable them, reset second factors.",
+  ],
+]);
 
-const SECTIONS: readonly Section[] = [
-  { to: "/settings/profile", title: "Profile", text: "Your name, language, theme and time zone." },
-  {
-    to: "/settings/security",
-    title: "Security",
-    text: "Password, second factors, recovery codes, sessions and personal access tokens.",
-  },
-  { to: "/settings/household", title: "Household members", text: "Who can see this household's finances, and their roles." },
-  { to: "/settings/general", title: "Household", text: "The household's name and base currency." },
-  {
-    to: "/settings/exchange-rates",
-    title: "Exchange rates",
-    text: "The rates net worth and reports use to convert accounts in other currencies.",
-  },
-  { to: "/settings/access", title: "Account access", text: "Which accounts each member or viewer can see or edit." },
-  { to: "/settings/categories", title: "Categories, payees and tags", text: "Organise how transactions are grouped." },
-  { to: "/settings/intake", title: "Intake", text: "Receipts mailbox, its alias, the drop folder and virus scanning." },
-  {
-    to: "/settings/ai",
-    title: "AI access",
-    text: "Assistants that may read financial facts, what leaves, and an audit of every call.",
-  },
-  { to: "/settings/data", title: "Data export and import", text: "Take a copy of everything, or restore one." },
-  {
-    to: "/settings/notifications",
-    title: "Notifications",
-    text: "Email, webhook, ntfy, Gotify or Matrix alerts for sign-in security, roles, reviews, tax and backups.",
-  },
-  {
-    to: "/settings/users",
-    title: "Users",
-    text: "Everyone with a sign-in on this PerFin instance: create accounts, disable them, reset second factors.",
-    instanceAdmin: true,
-  },
-];
-
+/** The Settings index: the intro, then one panel per group with its pages. On a phone it is the list. */
 export function SettingsIndexPage() {
-  const { session } = useAuthSession();
-  const isInstanceAdmin = session?.user.is_instance_admin === true;
+  const groups = visibleSettingsGroups(useIsInstanceAdmin());
   return (
-    <section aria-labelledby="page-title" className="settings-stack">
-      <div className="page-header">
-        <h1 id="page-title">Settings</h1>
-      </div>
-      <ul className="settings-links">
-        {SECTIONS.filter((section) => section.instanceAdmin !== true || isInstanceAdmin).map((section) => (
-          <li key={section.to}>
-            <Card>
-              <h2 className="card__title">
-                <Link to={section.to}>{section.title}</Link>
-              </h2>
-              <p className="auth-muted">{section.text}</p>
-            </Card>
-          </li>
-        ))}
+    <div className="settings-stack">
+      <p className="settings-intro">{SETTINGS_INTRO}</p>
+      <ul className="settings-groups">
+        {groups.map((group) => {
+          const headingId = `settings-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+          return (
+            <li key={group.label}>
+              <section className="card settings-group" aria-labelledby={headingId}>
+                <h2 id={headingId} className="card__title settings-group__title">
+                  {group.label}
+                </h2>
+                <ul className="settings-group__pages">
+                  {group.pages.map((page) => (
+                    <li key={page.to} className="settings-group__page">
+                      <Link to={page.to} className="settings-group__link">
+                        {page.label}
+                      </Link>
+                      <p className="settings-group__text">{DESCRIPTIONS.get(page.to) ?? ""}</p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </li>
+          );
+        })}
       </ul>
-    </section>
+    </div>
   );
 }
 

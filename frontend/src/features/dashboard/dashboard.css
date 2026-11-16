@@ -1,65 +1,143 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
-/* Widget grid: one column on phones, two on tablets, six on desktops where
-   small spans two, medium three and large all six. */
-.dash-grid {
+/* Home: a fixed page of panels, two side by side from 820px, one column on a phone. */
+.home {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.home-add {
+  text-decoration: none;
+}
+
+.home-add:hover {
+  text-decoration: none;
+}
+
+.home-grid {
   display: grid;
   gap: var(--space-4);
   grid-template-columns: minmax(0, 1fr);
 }
 
-.dash-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
+@media (min-width: 820px) {
+  .home-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.dash-slot > .card {
-  flex: 1;
+.home-panel .card__body {
+  display: grid;
+  gap: var(--space-3);
 }
 
-.dash-slot--editing {
-  padding: var(--space-2);
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius-md);
+.home-stack {
+  display: grid;
+  gap: var(--space-4);
 }
 
-.dash-controls {
+.home-spark {
+  height: 5.5rem;
+}
+
+.home-empty,
+.home-note {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.home-error {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  margin: 0;
+  color: var(--color-danger);
 }
 
-@media (min-width: 40rem) {
-  .dash-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* Rows: a title and a muted line, then what sits at the end (a chip, an amount). */
+.home-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-rows > li + li {
+  border-top: 1px solid var(--color-border);
+}
+
+.home-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: var(--space-2) 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.home-row {
+  margin-inline: calc(var(--space-2) * -1);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-md);
+}
+
+a.home-row:hover {
+  background: var(--color-surface-sunken);
+  text-decoration: none;
+}
+
+a.home-row:hover .home-row__title {
+  text-decoration: underline;
+}
+
+.home-row__main {
+  display: grid;
+  min-width: 0;
+}
+
+.home-row__title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.home-row__sub,
+.home-row__source {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.home-row__amount {
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: end;
+}
+
+.home-row--tx {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.home-row__category {
+  display: grid;
+  justify-items: start;
+  gap: 0.125rem;
+}
+
+@media (max-width: 719px) {
+  .home-row--tx {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .dash-slot--large {
-    grid-column: span 2;
+  .home-row--tx .home-row__category {
+    grid-row: 2;
   }
 }
 
-@media (min-width: 72rem) {
-  .dash-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-
-  .dash-slot--small {
-    grid-column: span 2;
-  }
-
-  .dash-slot--medium {
-    grid-column: span 3;
-  }
-
-  .dash-slot--large {
-    grid-column: span 6;
-  }
-}
-
+/* "Start here", for a household with no accounts. */
 .dash-start {
   display: grid;
   gap: var(--space-2, 0.5rem);

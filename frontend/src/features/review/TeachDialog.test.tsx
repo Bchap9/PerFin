@@ -359,7 +359,7 @@ describe("teach dialog", () => {
         }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
@@ -454,7 +454,7 @@ describe("teach dialog", () => {
             });
       },
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
@@ -494,7 +494,7 @@ describe("teach dialog", () => {
         appliedOut({ reprocessed: ["d-1"], fingerprint_id: "f-3", merged_from: null, kept: [] }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
@@ -523,7 +523,7 @@ describe("teach dialog", () => {
         previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
@@ -546,7 +546,7 @@ describe("teach dialog", () => {
         previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
@@ -599,7 +599,7 @@ describe("teach dialog", () => {
         }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
@@ -634,7 +634,7 @@ describe("teach dialog", () => {
         previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
@@ -689,7 +689,7 @@ describe("teach dialog", () => {
       ),
     });
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));
@@ -718,7 +718,7 @@ describe("teach dialog", () => {
         appliedOut({ tables: [{ kind: "transactions", rows: 2, columns: [] }] }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     await user.type(within(dialog).getByLabelText("Institution"), "Harbourmoss Mutual");
@@ -756,7 +756,7 @@ describe("teach dialog", () => {
         previewOut({ rows: SHOWN_ROWS, row_count: 2, similar_waiting: 3 }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const dialog = await openWithTable(user);
     await user.type(within(dialog).getByLabelText("Institution"), "Harbourmoss Mutual");
@@ -779,7 +779,7 @@ describe("teach dialog", () => {
       { "POST /api/v1/documents/:id/teach": teachHandler(previewOut()) },
       "a-2",
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
@@ -816,7 +816,7 @@ describe("teach dialog", () => {
         appliedOut({ warnings: ["rows_already_imported"] }),
       ),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
@@ -831,7 +831,7 @@ describe("teach dialog", () => {
     });
     await user.click(apply);
     const link = await within(dialog).findByRole("link", { name: "See what PerFin has learned" });
-    expect(link).toHaveAttribute("href", "/documents/learned");
+    expect(link).toHaveAttribute("href", "/settings/learned");
     expect(within(dialog).getByText(/were replaced by this reading/)).toBeInTheDocument();
   });
 
@@ -869,7 +869,7 @@ describe("teach dialog", () => {
     const api = reviewApi(detail, {
       "PATCH /api/v1/investments/transactions/:id": () => json({ id: "it-1" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const price = await screen.findByLabelText("Cost per unit");
     const save = screen.getByRole("button", { name: "Save cost basis" });
@@ -954,7 +954,7 @@ describe("teach dialog", () => {
           },
         }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(await screen.findByText("ledger.pdf")).toBeInTheDocument();
     expect(screen.queryByLabelText("Closing balance")).not.toBeInTheDocument();

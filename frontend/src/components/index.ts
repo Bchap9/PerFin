@@ -1,20 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Design system. Styles live in components.css (imported once by main.tsx).
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
+export { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
-export { Card, type CardProps } from "./Card";
-export { CategoryPicker, type CategoryPickerProps, type PickerCategory } from "./CategoryPicker";
+export { Card, CardHeadingLevel, type CardProps } from "./Card";
+export { CategoryPicker, NEW_CATEGORY_VALUE, type CategoryPickerProps, type PickerCategory } from "./CategoryPicker";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
+export { Chip, type ChipProps, type ChipTone } from "./Chip";
 export { cx } from "./cx";
 export { Dialog, type DialogProps } from "./Dialog";
+export { Drawer, type DrawerProps } from "./Drawer";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Field, useFieldControl, type FieldProps } from "./Field";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export * as icons from "./icons";
 export { Input, type InputProps } from "./Input";
+export { Menu, type MenuItem, type MenuProps } from "./Menu";
 export { MoneyText, type MoneyTextProps } from "./MoneyText";
+export { PageHeader, SectionHeadingContext, type PageHeaderProps } from "./PageHeader";
+export { ProgressBar, type ProgressBarProps } from "./ProgressBar";
+export { QuietNote } from "./QuietNote";
+export { SectionNav, type SectionNavItem, type SectionNavProps } from "./SectionNav";
 export { Select, type SelectOption, type SelectProps } from "./Select";
+export { Sparkline, type SparklineProps } from "./Sparkline";
 export { Spinner, type SpinnerProps } from "./Spinner";
+export { StackBar, type StackBarPart, type StackBarProps } from "./StackBar";
+export { Stat, StatGroup, type StatGroupProps, type StatProps, type StatTone } from "./Stat";
 export { Table, type TableColumn, type TableProps } from "./Table";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";
 export { ToastProvider, useToast, type ToastInput, type ToastTone } from "./Toast";

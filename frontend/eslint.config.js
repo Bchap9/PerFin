@@ -23,6 +23,11 @@ const bannedSyntax = [
     selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
     message: "Direct HTML injection is banned (SECURITY.md F1).",
   },
+  {
+    selector: "JSXAttribute[name.name='style']",
+    message:
+      "The CSP is style-src 'self': no style attribute. Put layout in a .css file, and draw data geometry with SVG attributes.",
+  },
 ];
 
 export default tseslint.config(

@@ -85,6 +85,7 @@ describe("event type mapping", () => {
       ["transactions"],
       ["accounts"],
       ["dashboard"],
+      ["inbox"],
     ]);
     expect(invalidationsFor("job.updated")).toEqual([["jobs"]]);
     expect(invalidationsFor("transaction.created")).toEqual([
@@ -94,6 +95,7 @@ describe("event type mapping", () => {
       ["goals"],
       ["reports"],
       ["dashboard"],
+      ["inbox"],
     ]);
   });
 
@@ -117,9 +119,23 @@ describe("event type mapping", () => {
   });
 
   it("a change to a subscription or a schedule refreshes the subscriptions view", () => {
-    expect(invalidationsFor("subscription.changed")).toEqual([["subscriptions"], ["recurring"]]);
-    expect(invalidationsFor("schedule.updated")).toEqual([["recurring"], ["subscriptions"]]);
+    expect(invalidationsFor("subscription.changed")).toEqual([["subscriptions"], ["recurring"], ["inbox"]]);
+    expect(invalidationsFor("schedule.updated")).toEqual([["recurring"], ["subscriptions"], ["inbox"]]);
     expect(allMappedKeys(DEFAULT_EVENT_MAPPING)).toContainEqual(["subscriptions"]);
+  });
+
+  it("review and subscription events invalidate the inbox count", () => {
+    for (const type of [
+      "review.created",
+      "review.resolved",
+      "subscription.changed",
+      "schedule.updated",
+      "document.updated",
+      "transaction.categorised",
+    ]) {
+      expect({ type, keys: invalidationsFor(type) }).toEqual({ type, keys: expect.arrayContaining([["inbox"]]) as unknown });
+    }
+    expect(invalidationsFor("job.updated")).not.toContainEqual(["inbox"]);
   });
 
   it("maps the Phase 2 ledger event families", () => {
@@ -175,7 +191,7 @@ describe("startEventStream", () => {
     expect(current().url).toBe("/api/v1/events");
     current().open();
     current().emit("document.updated");
-    expect(invalidated).toEqual([["documents"], ["review"], ["transactions"], ["accounts"], ["dashboard"]]);
+    expect(invalidated).toEqual([["documents"], ["review"], ["transactions"], ["accounts"], ["dashboard"], ["inbox"]]);
     invalidated.length = 0;
     current().emit("message", JSON.stringify({ id: "x", type: "job.updated" }));
     expect(invalidated).toEqual([["jobs"]]);

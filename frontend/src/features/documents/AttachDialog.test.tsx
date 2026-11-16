@@ -118,7 +118,7 @@ describe("what a document is attached to", () => {
         links: [link("l-a", "account", ACCOUNT_CHECKING), link("l-b", "transaction", "t-1"), link("l-c", "transaction", "t-gone"), link("l-d", "account", HIDDEN_ACCOUNT)],
       },
     );
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const list = await screen.findByRole("list", { name: "Attached to" });
     const items = within(list).getAllByRole("listitem");
     expect(items).toHaveLength(4);
@@ -135,7 +135,7 @@ describe("what a document is attached to", () => {
 
   it("offers no attaching to someone who may not change the document", async () => {
     const { api } = documentApi({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }) }, { can_edit: false });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     expect(await screen.findByText(/Not attached to anything yet/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Attach to…" })).not.toBeInTheDocument();
     expect(api.calls.some((call) => call.method !== "GET")).toBe(false);
@@ -145,7 +145,7 @@ describe("what a document is attached to", () => {
 describe("attach to", () => {
   it("finds a transaction by text and dates and attaches the document to it", async () => {
     const { api } = documentApi({ "GET /api/v1/transactions/:id": () => json(RENT) }, { period_start: "2026-10-01", period_end: "2026-10-31" });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Attach to…" }));
     const dialog = await screen.findByRole("dialog", { name: "Attach to…" });
@@ -191,7 +191,7 @@ describe("attach to", () => {
 
   it("checks the dates before searching and says when nothing matches", async () => {
     const { api } = documentApi({ "GET /api/v1/transactions": () => json({ items: [], next_cursor: null }) });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Attach to…" }));
     const dialog = await screen.findByRole("dialog", { name: "Attach to…" });
@@ -206,7 +206,7 @@ describe("attach to", () => {
 
   it("shows the server's refusal and sends a retry with the same key", async () => {
     const { api } = documentApi({ "POST /api/v1/documents/:id/link": () => problem(404, "transaction-not-found") });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Attach to…" }));
     const dialog = await screen.findByRole("dialog", { name: "Attach to…" });
@@ -233,7 +233,7 @@ describe("attach to", () => {
       { "GET /api/v1/transactions/:id": () => json(COFFEE) },
       { links: [link("l-b", "transaction", "t-1")] },
     );
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Attach to…" }));
     const dialog = await screen.findByRole("dialog", { name: "Attach to…" });

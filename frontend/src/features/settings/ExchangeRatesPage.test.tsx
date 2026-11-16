@@ -3,6 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { formatDate, todayIsoDate } from "../../lib/dates";
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, noContent, renderApp, type Handler } from "../auth/testing";
 import { ownerSession, referenceHandlers } from "../planning/testing";
 import { buildFilter, buildRate, cleanRate, inverseInWords, listInWords, rateInWords } from "./fx";
@@ -71,7 +72,7 @@ describe("exchange rates page", () => {
     renderApp("/settings");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("link", { name: "Exchange rates" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Exchange rates" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Exchange rates" })).toBeInTheDocument();
     const table = await screen.findByRole("region", { name: "Recorded exchange rates" });
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(2);
@@ -254,5 +255,15 @@ describe("exchange rates page", () => {
     renderApp("/settings/exchange-rates");
     expect(await screen.findByText("No exchange rates yet")).toBeInTheDocument();
     expect(screen.getByText("Add one above for each currency you hold other than your base currency.")).toBeInTheDocument();
+  });
+});
+
+describe("exchange rates page accessibility", () => {
+  it("has no axe violations", async () => {
+    fxApi(ownerSession());
+    const { container } = renderApp("/settings/exchange-rates");
+    await screen.findByRole("region", { name: "Recorded exchange rates" });
+    await screen.findByRole("form", { name: "Add a rate" });
+    await expectNoAxeViolations(container);
   });
 });

@@ -3,7 +3,7 @@
  * Optimistic edits of transactions held in the cached list pages.
  *
  * `useEditTransaction` applies a patch to every cached copy of the row at
- * once, sends the PATCH, and on failure puts the previous cache back and
+ * once (the list pages and the row the drawer reads by id), sends the PATCH, and on failure puts the previous cache back and
  * reports the error (rollback). On settle the lists are refetched so the
  * server's answer (rules, derived fields) wins.
  */
@@ -89,6 +89,8 @@ export function patchPages(data: Cached, id: string, patch: TransactionUpdate): 
 
 export interface EditContext {
   snapshots: [QueryKey, Cached][];
+  /** The row read by id (the drawer's), as it was. */
+  one?: [QueryKey, Transaction];
 }
 
 /** Apply `patch` to every cached list and return what is needed to undo it. */
@@ -101,12 +103,21 @@ function changeEverywhere(queryClient: QueryClient, id: string, change: (row: Tr
   for (const [key, data] of snapshots) {
     queryClient.setQueryData<Cached>(key, mapRow(data, id, change));
   }
-  return { snapshots };
+  const oneKey = txKeys.one(id);
+  const one = queryClient.getQueryData<Transaction>(oneKey);
+  if (one === undefined) {
+    return { snapshots };
+  }
+  queryClient.setQueryData<Transaction>(oneKey, change(one));
+  return { snapshots, one: [oneKey, one] };
 }
 
 export function rollback(queryClient: QueryClient, context: EditContext | undefined): void {
   for (const [key, data] of context?.snapshots ?? []) {
     queryClient.setQueryData<Cached>(key, data);
+  }
+  if (context?.one !== undefined) {
+    queryClient.setQueryData<Transaction>(context.one[0], context.one[1]);
   }
 }
 
@@ -122,6 +133,7 @@ export function useEditTransaction() {
     mutationFn: ({ id, patch }) => updateTransaction(id, patch),
     onMutate: async ({ id, patch }) => {
       await queryClient.cancelQueries({ queryKey: txKeys.lists });
+      await queryClient.cancelQueries({ queryKey: txKeys.one(id) });
       return applyOptimistic(queryClient, id, patch);
     },
     onError: (error, _vars, context) => {
@@ -146,6 +158,7 @@ export function useAcceptSuggestion() {
     mutationFn: (id) => bulkAction({ action: "accept_suggestions", ids: [id] }),
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: txKeys.lists });
+      await queryClient.cancelQueries({ queryKey: txKeys.one(id) });
       return changeEverywhere(queryClient, id, acceptSuggestion);
     },
     onSuccess: (result) => {

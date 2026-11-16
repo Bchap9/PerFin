@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, referenceHandlers } from "../planning/testing";
 
 type Row = Record<string, unknown>;
@@ -112,7 +113,7 @@ function listBody(items: Row[], extra: Row = {}): Row {
   };
 }
 
-function setup(items: Row[], options: { session?: SessionOptions; events?: Row[]; list?: Row; handlers?: Record<string, Handler> } = {}) {
+function setup(items: Row[], options: { path?: string; session?: SessionOptions; events?: Row[]; list?: Row; handlers?: Record<string, Handler> } = {}) {
   const state = { items, events: options.events ?? [] };
   const api = mockApi({
     "GET /api/v1/auth/session": authedSession({ role: "owner", ...options.session }),
@@ -122,8 +123,8 @@ function setup(items: Row[], options: { session?: SessionOptions; events?: Row[]
     ...options.handlers,
   });
   // Through the router: a series' name is a link to it up close.
-  renderApp("/subscriptions");
-  return { api, state, user: userEvent.setup() };
+  const app = renderApp(options.path ?? "/plan/subscriptions");
+  return { api, state, user: userEvent.setup(), ...app };
 }
 
 describe("subscriptions view", () => {
@@ -157,7 +158,7 @@ describe("subscriptions view", () => {
 
   it("bills have their own figures", async () => {
     const { user } = setup([STREAMLY, CLOUD, GYM, WATER]);
-    await user.click(await screen.findByRole("tab", { name: "Bills" }));
+    await user.click(await screen.findByRole("button", { name: "Bills" }));
     const cost = await screen.findByRole("group", { name: "Cost of bills" });
     expect(within(cost).getByText("$61.20")).toBeInTheDocument();
     expect(within(cost).getByText("$734.40")).toBeInTheDocument();
@@ -397,5 +398,67 @@ describe("subscriptions view", () => {
     expect(await screen.findByText("No subscriptions found yet. They appear after a few statements are imported.")).toBeInTheDocument();
     expect(screen.queryByRole("table", { name: "Active" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Needs a look" })).not.toBeInTheDocument();
+  });
+
+  it("the per-month and per-year figures are a description list", async () => {
+    setup([STREAMLY, CLOUD, GYM, WATER]);
+    const cost = await screen.findByRole("group", { name: "Cost of subscriptions" });
+    expect(within(cost).getAllByRole("term").map((term) => term.textContent)).toEqual(["Per month", "Per year"]);
+    // They are the shared Stat figures, not a private list.
+    for (const term of within(cost).getAllByRole("term")) {
+      expect(term).toHaveClass("stat__label");
+    }
+    expect(within(cost).getAllByRole("definition").map((value) => value.textContent)).toEqual(["$58.98", "$707.76"]);
+  });
+
+  it("the toggle between subscriptions and bills is in the address", async () => {
+    const { router, user } = setup([STREAMLY, WATER]);
+    // A compact two-way toggle, not a second strip of tabs under Plan's.
+    const toggle = await screen.findByRole("group", { name: "Subscriptions or bills" });
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(within(toggle).getByRole("button", { name: "Subscriptions" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(toggle).getByRole("button", { name: "Bills" })).toHaveAttribute("aria-pressed", "false");
+    expect(currentHref(router)).toBe("/plan/subscriptions");
+    await user.click(within(toggle).getByRole("button", { name: "Bills" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions?kind=bills"); });
+    expect(await screen.findByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
+    expect(within(toggle).getByRole("button", { name: "Bills" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(toggle).getByRole("button", { name: "Subscriptions" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions"); });
+  });
+
+  it("does not repeat the section tab's name as a visible heading", async () => {
+    setup([STREAMLY]);
+    await screen.findByRole("table", { name: "Active" });
+    // The page keeps its h2 for screen readers; the Plan tab already shows it.
+    expect(screen.getByRole("heading", { level: 2, name: "Subscriptions" })).toHaveClass("visually-hidden");
+  });
+
+  it("opens on the bills when the address asks for them", async () => {
+    setup([STREAMLY, WATER], { path: "/plan/subscriptions?kind=bills" });
+    expect(await screen.findByRole("button", { name: "Bills", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Active" })).getByRole("row", { name: /Harbor Water/ })).toBeInTheDocument();
+  });
+
+  it("a series' name opens it under Plan", async () => {
+    setup([STREAMLY]);
+    const active = await screen.findByRole("table", { name: "Active" });
+    expect(within(active).getByRole("link", { name: "Streamly" })).toHaveAttribute("href", "/plan/subscriptions/s-1");
+    const soon = screen.getByRole("region", { name: "Next 30 days" });
+    expect(within(soon).getByRole("link", { name: "Streamly" })).toHaveAttribute("href", "/plan/subscriptions/s-1");
+  });
+
+  it("each active series links to its transactions, for every role", async () => {
+    setup([STREAMLY], { session: { role: "viewer" } });
+    const active = await screen.findByRole("table", { name: "Active" });
+    expect(within(active).getByRole("link", { name: "Transactions of Streamly" })).toHaveAttribute("href", "/transactions?subscription=s-1");
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = setup([{ ...STREAMLY, open_events: 1 }, MAYBE, CLOUD, GYM, { ...series("s-7", "Old Radio"), status: "ended" }], { events: [MISSED_EVENT] });
+    const look = await screen.findByRole("region", { name: "Needs a look" });
+    await within(look).findByText("Expected on Nov 10, 2026, not seen");
+    await expectNoAxeViolations(container);
   });
 });

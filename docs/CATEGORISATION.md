@@ -83,14 +83,20 @@ Nothing is guessed for the lines of a split.
 
 ### Where to see it
 
-- **Transactions**: the category cell says who decided and, for a guess, how
-  sure. Two quick filters, "Suggestions" and "No category", carry their
-  counts. The payee
-  cell shows the merchant PerFin recognised with the bank's own wording
-  underneath; the bank's wording is never changed or dropped.
-- **Documents, "What PerFin has learned"**: "How transactions got their
-  category" counts your transactions by source, over the accounts you can
-  see, and names the version and size of the merchant list.
+- **Transactions** (`/transactions`): the category cell says who decided
+  and, for a guess, how sure; a suggestion reads as a question
+  ("Groceries?") with Accept. Two quick filters, "Suggestions" and "No
+  category", carry their counts. The payee cell shows the merchant PerFin
+  recognised with the bank's own wording underneath; the bank's wording is
+  never changed or dropped. A row opens the drawer, whose "Bank wrote" and
+  "Category by" lines say the same.
+- **Inbox** (`/inbox`): one card with the merchants that have the most
+  suggestions, each with "Accept N" (your choice for those rows), and a
+  line with the number of transactions that have no category.
+- **Settings, "What PerFin learned"** (`/settings/learned`): "How
+  transactions got their category" counts your transactions by source,
+  over the accounts you can see, and names the version and size of the
+  merchant list.
 
 ## Learned from you
 
@@ -117,8 +123,8 @@ rc.10 it starts from the categories your transactions already had, so years
 of hand work count from the first day. Payments between people, transfers,
 card payments, cash, cheques, fees and interest teach nothing.
 
-**To see and forget it**: Documents, "What PerFin has learned",
-"Categories learned from you". Each entry shows the merchant, the category,
+**To see and forget it**: Settings, "What PerFin learned"
+(`/settings/learned`), "Categories learned from you". Each entry shows the merchant, the category,
 and how many of your decisions agree. **Forget** removes the entry (members
 and above). Forgetting changes no transaction: categories already written
 stay, and the next charge from that merchant is guessed without it. When you
@@ -192,7 +198,7 @@ keywords. Merchants outside the United States are not covered in 1.0.
   you, from the file, from a rule, from a payee default, from what PerFin
   learned from you or from before this version is never touched, and
   neither is a split. Owners and admins can ask for the same pass at once
-  with "Check again" on "What PerFin has learned". While a household is
+  with "Check again" on Settings, "What PerFin learned". While a household is
   behind, that card says "Not up to date yet". The pass is audited with
   counts only.
 
@@ -203,11 +209,15 @@ corrections works with any tree.
 
 ## "Always categorise ... as"
 
-From a transaction's menu, for members and above: **Always categorise
-*merchant* as...**. It is also offered in one line after you correct a
-category in the grid, when another transaction would gain from it.
+In the transaction drawer (`/transactions?tx=<id>`), for members and
+above: under the category, an **unticked** box, **Always use *category*
+for *merchant***, shown at the moment you choose a category. The same is in
+a transaction's row menu as **Always categorise *merchant* as...**, and the
+Inbox offers it for a merchant you filed the same way three times ("Make it
+a rule", which opens the drawer with the box ticked;
+`/transactions?always=<id>`). Nothing is saved before Save.
 
-- **Preview first.** Before anything is saved, the dialog shows what the
+- **Preview first.** Before anything is saved, the drawer shows what the
   server counted over your whole ledger, on the accounts you may edit: how
   many of the merchant's transactions have no category, how many carry a
   guess that would change, and how many somebody decided (those never
@@ -222,8 +232,8 @@ category in the grid, when another transaction would gain from it.
   the existing *n* transactions". It changes uncategorised transactions and
   guesses, and never a category you, a file, a payee default, another rule
   or an earlier version decided.
-- **Undo.** A line under the toolbar offers Undo right after saving, and
-  the rules page offers it later. Undo deletes the rule and returns exactly
+- **Undo.** The drawer offers Undo right after saving a new rule, and
+  Settings, Rules (`/settings/rules`) offers it later. Undo deletes the rule and returns exactly
   the transactions that rule categorised to "not decided"; PerFin then
   guesses for them again as it would have. Because every transaction
   records which rule set its category, this is exact at any later time. A
@@ -231,16 +241,18 @@ category in the grid, when another transaction would gain from it.
   admin.
 - It cannot be made from a transaction that names no merchant, that is a
   transfer, a card payment or a payment to a person, or that is split; the
-  dialog says which.
+  drawer says which, in place of the box.
 
 Re-applying your rules ("Apply rules") no longer changes a category you
 chose yourself. It still tags, flags and annotates such a transaction.
 
 ## Subscriptions and bills
 
-The **Subscriptions** page (in the navigation after Calendar) lists what you
-pay for regularly: what it costs per month and per year, what needs a look,
-what is due in the next 30 days, and what ended.
+The **Subscriptions** page (Plan, Subscriptions: `/plan/subscriptions`)
+lists what you pay for regularly: what it costs per month and per year, what
+needs a look, what is due in the next 30 days, and what ended. What needs a
+look is also on the Inbox, one card per series, and Home's "Coming up"
+lists the next charges.
 
 ### What counts
 
@@ -282,7 +294,7 @@ Kept out on purpose:
 - A **subscription** is a fixed price for a service you chose: streaming,
   software, a gym, a news site, a box.
 - Regular money in is **income**; anything else that repeats is "other".
-  Both stay on the Calendar's "Recurring items" tab and are not called
+  Both stay on Plan, Upcoming, "Recurring items" tab and are not called
   subscriptions.
 
 "This is a bill" / "This is a subscription" corrects the kind.
@@ -309,7 +321,7 @@ or ended now read as two merchants, what is found under either name on that
 account is only suggested, without a "New" alert. There is one factual
 exception: a confirmed series whose charges
 really stop is marked ended, and PerFin tells you. Deleting a found series
-from the Calendar now dismisses it instead of deleting it, which is why it
+from Plan, Upcoming now dismisses it instead of deleting it, which is why it
 no longer reappears the next night. A series you typed in by hand is yours
 alone: detection never touches it.
 
@@ -404,7 +416,7 @@ What these figures are **not**:
   tells the kind apart for **82.5%** (33 of 40) instead of 100%, **under the
   90% target**: rent, a car loan, water, sewer, a local gym, a swim school
   and after-school care at merchants no list knows are found, at the right
-  rhythm and amount, but as "other" on the Calendar instead of on the Bills
+  rhythm and amount, but as "other" on Plan, Upcoming instead of on the Bills
   or Subscriptions tab, until one of their transactions is given a category
   or the series is told "This is a bill". The other rows are equal in both
   runs (all 40 found, 38 without asking, no decoy found, one suggested).

@@ -2,6 +2,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../../test/axe";
 import { authedSession, json, mockApi, renderApp } from "../../auth/testing";
 import type { Channel } from "./api";
 import { buildCreate, buildUpdate, describeOutcome, emptyForm, formFrom, KINDS } from "./form";
@@ -137,5 +138,17 @@ describe("notifications settings page", () => {
     renderApp("/settings/notifications");
     expect(await screen.findByText(/Only a household owner or administrator/)).toBeInTheDocument();
     expect(api.callsTo("GET", "/api/v1/settings/notifications/channels")).toHaveLength(0);
+  });
+});
+
+describe("notifications page accessibility", () => {
+  it("has no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "owner" }),
+      "GET /api/v1/settings/notifications/channels": () => json([NTFY]),
+    });
+    const { container } = renderApp("/settings/notifications");
+    await screen.findByRole("heading", { name: "Phone" });
+    await expectNoAxeViolations(container);
   });
 });

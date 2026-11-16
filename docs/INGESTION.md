@@ -2044,8 +2044,9 @@ table; never a PDF's page table) before it looks for a column mapping:
   on its own. An account chosen in the review queue for an investment
   `unknown_account` item takes that item's statement only
   (`apply-mapping` `statement`). A document read this way records
-  `parser_version = brokerage_activity_table/2`, and the upload list offers
-  the review queue rather than the cash-ledger column mapping.
+  `parser_version = brokerage_activity_table/2`; the Inbox's "Imported
+  recently" says "Read as investment activity" beside it, and its card
+  offers the review tools rather than the cash-ledger column mapping.
 
 #### Brokerage positions exports (CSV, TSV, XLSX)
 
@@ -2758,10 +2759,11 @@ same database transaction.
   card. The preview also carries a brokerage
   activity suggestion (its roles are in the response schema), so an
   `activity_unreadable` item leads to the editor too. "Map columns" is
-  offered on the document's review card (`map_columns`); the upload list
-  no longer links it and instead links every file to its document, names
-  the account an imported file went to with a link to its rows, and says
-  "Not checked against a balance" where that applies. A table whose
+  offered on the document's card on the Inbox (`map_columns`); the
+  Inbox's upload rows and "Imported recently" do not link it and instead
+  link every file to its document (or its card while it waits), name the
+  account an imported file went to with a link to its rows, and say "Not
+  checked against a balance" where that applies. A table whose
   header row stands above nothing but total lines (`Total`, `Totals`,
   `Balance`, `Ending balance`, `Closing balance`, no date-shaped cell)
   has no rows either (`header_only`).
@@ -3104,7 +3106,8 @@ cash is the printed account value records that value although its record
 is `unverified` (`_value_holds`, "Brokerage statements"). An imported, `unverified` statement read from
 a PDF or image is shown with the quiet marker **"Not checked against a
 balance"** (`unchecked` in `GET /documents` and
-`GET /documents/{id}/imported`; the uploads list and the document page),
+`GET /documents/{id}/imported`; on the Inbox under "Imported recently"
+and on the document page),
 and the run summary counts them (`unverified_statements`). To check one,
 open the document, choose "Check against the statement" beside it, type
 the opening and closing balance as printed and confirm ("Review queue",
@@ -3191,7 +3194,7 @@ the alternatives considered. Resolutions feed back:
   layout". The review flow does not offer this by itself after an
   institution is corrected.
 - A row the person recognises -> `GET /review/{id}/rule-draft` drafts a
-  rule from a row of a low-confidence item. The review page no longer
+  rule from a row of a low-confidence item. The Inbox no longer
   shows a button for it (rules are made from a transaction); correcting a
   category does not offer one by itself.
 - Confirm a duplicate -> both hashes recorded as equivalent.
@@ -3270,7 +3273,7 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   pre-filled from one of the item's rows (payee text, account and sign;
   the row's category, else payee, else a review flag), validated by the
   rules schema but not saved; it is created through `POST /rules`. The
-  endpoint stays; the review page stopped offering it with the cards
+  endpoint stays; the review screen stopped offering it with the cards
   (below).
 - **PDF table column mapping.** A PDF or image that no parser read and
   that has page tables offers its largest table (same header across pages
@@ -3317,10 +3320,13 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   folder" for an unknown owner, "Show receipt" beside ranked receipt
   suggestions, and "Map columns" with the page above the mapping form for a
   PDF or image table (only one with a dated row: "Nothing to import"
-  above). The document library (`/documents/library`: kind,
-  status, tax year and full-text search with matched words marked) and
-  document detail (`/documents/{id}`, page viewer, download only when the
-  server says `downloadable`) use the same viewer. A low-confidence OCR row
+  above). The document library (Inbox, Documents,
+  `/inbox/documents`: kind, status, tax year and full-text search with
+  matched words marked) and document detail (`/inbox/documents/{id}`,
+  page viewer, download only when the server says `downloadable`; its
+  column mapping at `/inbox/documents/{id}/mapping`) use the same viewer.
+  The document cards themselves are on the Inbox (`/inbox`), one per
+  document, in the Inbox's order (USING.md "Inbox"). A low-confidence OCR row
   was corrected and confirmed and a rule saved through this UI in headless
   Chrome against a live API and worker (Phases 3+4 finalization).
 
@@ -3592,8 +3598,8 @@ the document page.
   next statement of that layout is read by the ordinary parsers again and
   can be taught afresh. The SPA shows both, with the saved column mappings
   (rename, delete) and the statement wording learned from confirmed
-  suggestions ("Models in the pipeline"), on "What PerFin has learned"
-  (`/documents/learned`).
+  suggestions ("Models in the pipeline"), on Settings, "What PerFin
+  learned" (`/settings/learned`).
 - **Notes.** Free text from "Other" is kept on the template, in the review
   item's resolution and in the `document.teach` audit row for the
   household to read, without any word that holds a digit (an account or
@@ -3863,7 +3869,7 @@ stored. The model itself keeps nothing: it is never trained on what it is
 sent and every call stands alone. `GET /imports/wording` (any role) lists
 what was learned and `DELETE /imports/wording/{id}` (member or above)
 forgets a phrase (audit `learned_wording.add` / `learned_wording.delete`,
-ids and counts only); the SPA shows it on "What PerFin has learned". It is
+ids and counts only); the SPA shows it on Settings, "What PerFin learned". It is
 a household setting, so it is not part of a full export.
 
 **Measuring a model.** `perfin ml eval` (`app/ml/evaluate.py`) asks the

@@ -7,23 +7,27 @@
  * kind alone, which leaves the status as it is) or "seen" for a change;
  * detection never undoes any of them.
  *
- * The sections are separate components fed by props, so the next stage can
- * rehouse them without touching the data layer. A series' name opens it up
- * close (`/subscriptions/:id`, `SubscriptionDetail`).
+ * The sections are separate components fed by props. A series' name opens it
+ * up close (`/plan/subscriptions/$id`, `SubscriptionDetail`). The tab between
+ * subscriptions and bills is in the address (`?kind=bills`), and a series
+ * opened from the Bills tab closes back to it.
  */
 import "./subscriptions.css";
 
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useChildMatches } from "@tanstack/react-router";
+import { Link, Outlet, useChildMatches, useSearch } from "@tanstack/react-router";
 import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
+import { Chip } from "../../components/Chip";
 import { MoneyText } from "../../components/MoneyText";
-import { Tabs } from "../../components/Tabs";
+import { Stat, StatGroup } from "../../components/Stat";
 import { addDays, compareIsoDates, formatDate, todayIsoDate } from "../../lib/dates";
 import { compareAmounts, isDecimalString } from "../../lib/money";
+import { TABLE_CARDS_MAX, useMediaQuery } from "../../lib/useMediaQuery";
+import { useTabParam } from "../../lib/urlState";
 import { useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts, type Account } from "../planning/queries";
@@ -42,9 +46,21 @@ import {
   type SubscriptionTotals,
 } from "./api";
 import { cadenceText, eventText, magnitude, statusText, unconfirmedNote } from "./text";
-import { useWide } from "./useWide";
 
 type TabKind = "subscription" | "bill";
+
+/** The page tab in the address: `?kind=bills`, or nothing for subscriptions. */
+const KIND_PARAMS = ["subscriptions", "bills"] as const;
+type KindParam = (typeof KIND_PARAMS)[number];
+
+/** Below the line where the table turns into cards, a series is a page of its own, not a dialog. */
+export const NARROW_QUERY = `(max-width: ${String(TABLE_CARDS_MAX)}px)`;
+
+/** The page's search, so a series opened from the Bills tab closes back to it. */
+export function useKindSearch(): { kind?: "bills" } {
+  const search: Record<string, unknown> = useSearch({ strict: false });
+  return new Map(Object.entries(search)).get("kind") === "bills" ? { kind: "bills" } : {};
+}
 
 const UPCOMING_DAYS = 30;
 
@@ -100,9 +116,19 @@ function Cost({ money }: { money: { amount: string; currency: string } }) {
 
 /** The name of a series, as the way to it up close. */
 function SeriesName({ row }: { row: Subscription }) {
+  const search = useKindSearch();
   return (
-    <Link to="/subscriptions/$id" params={{ id: row.id }} className="subs-name">
+    <Link to="/plan/subscriptions/$id" params={{ id: row.id }} search={search} className="subs-name">
       {row.name}
+    </Link>
+  );
+}
+
+/** The series' charges in the transactions list (`?subscription=`), open to every role. */
+function TransactionsLink({ row }: { row: Subscription }) {
+  return (
+    <Link to="/transactions" search={{ subscription: row.id }} className="subs-tx-link" aria-label={`Transactions of ${row.name}`}>
+      Transactions
     </Link>
   );
 }
@@ -131,20 +157,10 @@ export function CostHeader({
   const words = wordsFor(kind);
   return (
     <div role="group" aria-label={`Cost of ${words.many}`} className="subs-cost">
-      <dl className="subs-figures">
-        <div className="subs-figure">
-          <dt>Per month</dt>
-          <dd>
-            <Cost money={totals.monthly} />
-          </dd>
-        </div>
-        <div className="subs-figure">
-          <dt>Per year</dt>
-          <dd>
-            <Cost money={totals.yearly} />
-          </dd>
-        </div>
-      </dl>
+      <StatGroup>
+        <Stat label="Per month" value={<Cost money={totals.monthly} />} />
+        <Stat label="Per year" value={<Cost money={totals.yearly} />} />
+      </StatGroup>
       <p className="subs-cost__count">{`${String(totals.count)} ${totals.count === 1 ? words.one : words.many}`}</p>
       {totals.unconverted.map((id) => (
         <p key={id} className="muted subs-cost__note">{`Not included: ${nameOf(id) ?? UNLISTED}`}</p>
@@ -187,7 +203,7 @@ export function NeedsLook({
     return null;
   }
   return (
-    <Card title="Needs a look" headingLevel={2}>
+    <Card title="Needs a look" headingLevel={3}>
       <ul className="subs-list">
         {rows.map((row) => {
           const events = eventsFor(row.id);
@@ -237,7 +253,7 @@ export function NeedsLook({
 /** What is expected in the next 30 days: date, name, amount. */
 export function Upcoming({ rows }: { rows: readonly Subscription[] }) {
   return (
-    <Card title="Next 30 days" headingLevel={2}>
+    <Card title="Next 30 days" headingLevel={3}>
       {rows.length === 0 ? (
         <p className="muted">Nothing is expected in the next 30 days.</p>
       ) : (
@@ -325,7 +341,7 @@ export function ActiveTable({
   }, [rows, ascending]);
   const anyActions = rows.some(canDecide);
   return (
-    <Card title="Active" headingLevel={2}>
+    <Card title="Active" headingLevel={3}>
       {rows.length === 0 ? (
         <p className="muted">Nothing active.</p>
       ) : (
@@ -359,7 +375,8 @@ export function ActiveTable({
             {sorted.map((row) => (
               <tr key={row.id}>
                 <th scope="row" className="subs-col-name">
-                  <SeriesName row={row} /> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>
+                  <SeriesName row={row} /> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>{" "}
+                  <TransactionsLink row={row} />
                 </th>
                 <td data-label="Merchant" className="subs-col-rest">
                   {row.merchant ?? ""}
@@ -456,7 +473,8 @@ export function SubscriptionsList() {
   const openEvents = useQuery({ queryKey: subscriptionKeys.openEvents, queryFn: listOpenEvents });
   const accounts = useAccounts();
   const { session } = useAuthSession();
-  const [tab, setTab] = useState<TabKind>("subscription");
+  const [kindParam, setKindParam] = useTabParam<KindParam>(KIND_PARAMS, "subscriptions", "kind");
+  const tab: TabKind = kindParam === "bills" ? "bill" : "subscription";
   const decision = useAction((id: string, body: SubscriptionDecision) => decide(id, body), { invalidate: SUBSCRIPTION_FAMILIES });
   const seen = useAction(markEventsSeen, { invalidate: SUBSCRIPTION_FAMILIES });
   const kindChange = useAction((id: string, kind: TabKind) => updateSchedule(id, { kind }), { invalidate: SUBSCRIPTION_FAMILIES });
@@ -528,22 +546,22 @@ export function SubscriptionsList() {
   };
 
   return (
-    <PlanningPage title="Subscriptions">
+    <PlanningPage title="Subscriptions" titleHidden>
       <QueryState loading={list.isPending} error={list.error} label="subscriptions">
         {data === undefined ? null : (
           <>
+            <div role="group" aria-label="Subscriptions or bills" className="subs-toggle">
+              <Chip pressed={tab === "subscription"} onClick={() => { setKindParam("subscriptions"); }}>
+                Subscriptions
+              </Chip>
+              <Chip pressed={tab === "bill"} onClick={() => { setKindParam("bills"); }}>
+                Bills
+              </Chip>
+            </div>
             <CostHeader kind={tab} totals={tab === "bill" ? data.bills : data.subscriptions} asOf={data.as_of} nameOf={nameOf} />
             <ErrorLine message={decision.error ?? seen.error ?? kindChange.error} />
             <ErrorLine message={openEvents.isError ? "Could not load what changed." : null} />
-            <Tabs
-              label="Subscriptions and bills"
-              selectedId={tab}
-              onSelect={(id) => { setTab(id === "bill" ? "bill" : "subscription"); }}
-              tabs={[
-                { id: "subscription", label: "Subscriptions", content: panel("subscription") },
-                { id: "bill", label: "Bills", content: panel("bill") },
-              ]}
-            />
+            {panel(tab)}
           </>
         )}
       </QueryState>
@@ -556,11 +574,11 @@ export function SubscriptionsList() {
  * a narrow one it takes the place of the list, which comes back with it gone.
  */
 export function SubscriptionsPage() {
-  const wide = useWide();
+  const narrow = useMediaQuery(NARROW_QUERY);
   const detailOpen = useChildMatches().length > 0;
   return (
     <>
-      {detailOpen && !wide ? null : <SubscriptionsList />}
+      {detailOpen && narrow ? null : <SubscriptionsList />}
       <Outlet />
     </>
   );

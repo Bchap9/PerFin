@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { CAT_DINING, CAT_FOOD, CAT_RENT, CATEGORIES, category, ownerSession, referenceHandlers } from "../planning/testing";
 import { categoryLabels, categoryOptions, descendantIds, flattenCategories } from "./tree";
 
@@ -66,15 +67,144 @@ describe("categories page", () => {
     });
     renderApp("/settings/categories");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Add category" }));
-    const dialog = await screen.findByRole("dialog", { name: "Add category" });
+    await user.click(await screen.findByRole("button", { name: "New category" }));
+    const dialog = await screen.findByRole("dialog", { name: "New category" });
     await user.type(within(dialog).getByLabelText(/^Name/), "Coffee");
-    await user.selectOptions(within(dialog).getByLabelText("Parent category"), CAT_FOOD);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.selectOptions(within(dialog).getByLabelText("Inside"), CAT_FOOD);
+    await user.click(within(dialog).getByRole("button", { name: "Create category" }));
     await vi.waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/categories")).toHaveLength(1);
     });
-    expect(api.callsTo("POST", "/api/v1/categories")[0]?.body).toEqual({ name: "Coffee", parent_id: CAT_FOOD, kind: "expense", tax_treatment: null });
+    expect(api.callsTo("POST", "/api/v1/categories")[0]?.body).toEqual({ name: "Coffee", parent_id: CAT_FOOD });
     expect(CAT_RENT).toBeDefined();
+  });
+
+  it("the four tabs are in the address", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    const { router } = renderApp("/settings/categories?tab=payees");
+    const user = userEvent.setup();
+    const tabs = await screen.findByRole("tablist", { name: "Categories, payees, tags and tax hints" });
+    expect(within(tabs).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Categories", "Payees", "Tags", "Tax hints"]);
+    expect(within(tabs).getByRole("tab", { name: "Payees" })).toHaveAttribute("aria-selected", "true");
+    await user.click(within(tabs).getByRole("tab", { name: "Tags" }));
+    await vi.waitFor(() => {
+      expect(new URLSearchParams(router.state.location.searchStr).get("tab")).toBe("tags");
+    });
+    await user.click(within(tabs).getByRole("tab", { name: "Categories" }));
+    await vi.waitFor(() => {
+      expect(new URLSearchParams(router.state.location.searchStr).has("tab")).toBe(false);
+    });
+  });
+
+  it("tax hints are a tab", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/tax-category-map": () =>
+        json({ items: [{ category_id: CAT_RENT, category_name: "Rent", jurisdiction: "US", schedule: "Schedule E", line: "19", tax_treatment: null }] }),
+      "PUT /api/v1/tax-category-map/:id": () =>
+        json({ category_id: CAT_FOOD, category_name: "Food", jurisdiction: "US", schedule: "Schedule C", line: null, tax_treatment: null }),
+    });
+    renderApp("/settings/categories?tab=tax");
+    const user = userEvent.setup();
+    expect(await screen.findByRole("tab", { name: "Tax hints" })).toHaveAttribute("aria-selected", "true");
+    // One page title; the tax hints are a panel of the tab, not a page of their own.
+    expect(screen.getAllByRole("heading", { level: 1 }).map((h) => h.textContent)).toEqual(["Settings"]);
+    expect(screen.getByRole("heading", { level: 2, name: "Categories" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Schedule hints" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Schedule for Rent")).toHaveValue("Schedule E");
+    await user.type(screen.getByLabelText("Schedule for Food"), "Schedule C");
+    await user.click(screen.getByRole("button", { name: "Save hint for Food" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("PUT", `/api/v1/tax-category-map/${CAT_FOOD}`)).toHaveLength(1);
+    });
+  });
+
+  it("a viewer sees no write buttons", async () => {
+    const handlers = (role: "member" | "viewer") => ({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role }),
+      "GET /api/v1/tax-category-map": () => json({ items: [] }),
+    });
+    mockApi(handlers("member"));
+    const member = renderApp("/settings/categories");
+    // A member adds and edits; merging and deleting are an owner's or admin's.
+    expect(await screen.findByRole("button", { name: "Edit Food" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New category" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Merge Food" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Rent" })).not.toBeInTheDocument();
+    member.unmount();
+
+    mockApi(handlers("viewer"));
+    const viewer = renderApp("/settings/categories");
+    expect(await screen.findByRole("rowheader", { name: "Rent" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New category" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Edit|Merge|Delete) / })).not.toBeInTheDocument();
+    viewer.unmount();
+
+    mockApi(handlers("viewer"));
+    renderApp("/settings/categories?tab=tax");
+    expect(await screen.findByRole("rowheader", { name: "Rent" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Save|Remove) hint/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^Schedule for/ })).not.toBeInTheDocument();
+  });
+
+  it("an owner or admin sees merge and delete on categories and tags", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/tax-category-map": () => json({ items: [] }) });
+    let view = renderApp("/settings/categories");
+    expect(await screen.findByRole("button", { name: "Merge Food" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Rent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit Food" })).toBeInTheDocument();
+    view.unmount();
+
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    view = renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByRole("button", { name: "Delete fun" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename fun" })).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it("payees and tags show each role only what the API lets it do", async () => {
+    const as = (role: "member" | "viewer") => ({ ...referenceHandlers(), "GET /api/v1/auth/session": authedSession({ role }) });
+    mockApi(as("member"));
+    let view = renderApp("/settings/categories?tab=payees");
+    expect(await screen.findByRole("button", { name: "Edit Cafe Uno" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add payee" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Merge|Delete) Cafe Uno$/ })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("member"));
+    view = renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByRole("button", { name: "Rename fun" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add tag" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete fun" })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("viewer"));
+    view = renderApp("/settings/categories?tab=payees");
+    expect(await screen.findByRole("rowheader", { name: "Cafe Uno" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Add payee|Edit|Merge|Delete)/ })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("viewer"));
+    renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByText("fun")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Add tag|Rename|Delete)/ })).not.toBeInTheDocument();
+  });
+
+  it("indentation without a style attribute", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    const { container } = renderApp("/settings/categories");
+    const dining = await screen.findByText("Dining", { selector: "span" });
+    expect(dining).toHaveClass("indent-1");
+    expect(screen.getByText("Food", { selector: "span" })).not.toHaveClass("indent-1");
+    expect(container.querySelector("[style]")).toBeNull();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    const { container } = renderApp("/settings/categories");
+    await screen.findByRole("rowheader", { name: "Dining" });
+    await expectNoAxeViolations(container);
   });
 });

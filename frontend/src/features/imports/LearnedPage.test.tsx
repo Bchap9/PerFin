@@ -2,7 +2,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, renderApp } from "../auth/testing";
 import type { CategorisationSummary, LearnedCategory } from "../categories/api";
 import { lookupHandlers, NOW, summary } from "../transactions/fixtures";
 import type { LearnedLayout, LearnedWording, Mapping } from "./api";
@@ -157,7 +158,7 @@ describe("what a learned layout and a mapping say they read", () => {
 describe("LearnedPage", () => {
   it("lists layouts and mappings with what they do", async () => {
     mockApi(handlers());
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const layouts = await screen.findByRole("table", { name: "Learned statement layouts" });
     expect(within(layouts).getByText("Quillfeather Mutual")).toBeInTheDocument();
     expect(within(layouts).getByText("Taught")).toBeInTheDocument();
@@ -175,7 +176,7 @@ describe("LearnedPage", () => {
       ...handlers(),
       "DELETE /api/v1/imports/wording/:id": () => new Response(null, { status: 204 }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const table = await screen.findByRole("table", { name: "Learned statement wording" });
     expect(within(table).getByText('"periodic investment plan"')).toBeInTheDocument();
     expect(within(table).getByText("A line that is a purchase")).toBeInTheDocument();
@@ -196,7 +197,7 @@ describe("LearnedPage", () => {
       ...handlers(),
       "DELETE /api/v1/imports/layouts/:id": () => new Response(null, { status: 204 }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await user.click(await screen.findByRole("button", { name: "Forget the Quillfeather Mutual layout" }));
     const dialog = await screen.findByRole("dialog", { name: "Forget the Quillfeather Mutual layout?" });
     expect(api.callsTo("DELETE", "/api/v1/imports/layouts/:id")).toHaveLength(0);
@@ -218,7 +219,7 @@ describe("LearnedPage", () => {
       "DELETE /api/v1/imports/layouts/:id": () =>
         json({ type: "layout-not-found", title: "Not found", status: 404, detail: "No such learned layout." }, 404),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await user.click(await screen.findByRole("button", { name: "Forget the Sample Card Company layout" }));
     await user.click(screen.getByRole("button", { name: "Forget this layout" }));
     const dialog = screen.getByRole("dialog");
@@ -233,7 +234,7 @@ describe("LearnedPage", () => {
       "PATCH /api/v1/imports/mappings/:id": (call) => json({ ...MAPPING, ...(call.body as object) }),
       "DELETE /api/v1/imports/mappings/:id": () => new Response(null, { status: 204 }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await user.click(await screen.findByRole("button", { name: "Rename Everyday export" }));
     const name = screen.getByRole("textbox", { name: /Name/ });
     await user.clear(name);
@@ -255,9 +256,55 @@ describe("LearnedPage", () => {
     });
   });
 
+  it("Make it a rule opens the drawer link", async () => {
+    const api = mockApi(handlers("member"));
+    const view = renderApp("/settings/learned");
+    const user = userEvent.setup();
+    const table = await screen.findByRole("table", { name: "Categories learned from you" });
+    // Following it lands on the transactions page with that row's drawer asked for; the
+    // "Always use" choice is made there, so nothing is saved by following the link.
+    await user.click(within(table).getByRole("link", { name: "Make Quiet Bean Coffee a rule" }));
+    await waitFor(() => {
+      expect(currentHref(view.router)).toBe("/transactions?always=t-7");
+    });
+    expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(0);
+    expect(api.callsTo("POST", "/api/v1/rules")).toHaveLength(0);
+  });
+
+  it("says where rules are made and links to its documents in the Inbox", async () => {
+    mockApi(handlers());
+    renderApp("/settings/learned");
+    expect(
+      await screen.findByText(
+        "Rules are made where you work: in a transaction's panel or from an Inbox card. Here you can change their order, edit or undo them.",
+      ),
+    ).toBeInTheDocument();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("heading", { level: 2, name: "What PerFin learned" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "rules" })).toHaveAttribute("href", "/settings/rules");
+    await screen.findByRole("table", { name: "Learned statement wording" });
+    const documentLinks = screen
+      .getAllByRole("link")
+      .map((link) => link.getAttribute("href") ?? "")
+      .filter((href) => href.includes("/documents/"));
+    expect(documentLinks.length).toBeGreaterThan(0);
+    for (const href of documentLinks) {
+      expect(href).toMatch(/^\/inbox\/documents\/[^/]+$/);
+    }
+  });
+
+  it("has no axe violations", async () => {
+    mockApi(handlers());
+    const { container } = renderApp("/settings/learned");
+    await screen.findByRole("table", { name: "Categories learned from you" });
+    await screen.findByText("Everyday export");
+    await expectNoAxeViolations(container);
+  });
+
   it("gives a viewer the lists without the buttons", async () => {
     mockApi(handlers("viewer"));
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await screen.findByRole("table", { name: "Learned statement layouts" });
     await screen.findByText("Everyday export");
     await screen.findByText("Quiet Bean Coffee");
@@ -265,6 +312,8 @@ describe("LearnedPage", () => {
     expect(screen.queryByRole("button", { name: /Rename|Delete/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /a rule$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Here you can change their order/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Only an owner or admin can change their order or edit them\.$/)).toBeInTheDocument();
   });
 });
 
@@ -275,7 +324,7 @@ describe("LearnedPage: categories", () => {
       ...handlers("member"),
       "DELETE /api/v1/categorisation/learned/:id": () => new Response(null, { status: 204 }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const table = await screen.findByRole("table", { name: "Categories learned from you" });
     const unanimous = within(table).getByRole("rowheader", { name: "Quiet Bean Coffee" }).closest("tr");
     expect(unanimous).not.toBeNull();
@@ -301,7 +350,7 @@ describe("LearnedPage: categories", () => {
 
   it("offers a rule at three unanimous decisions", async () => {
     mockApi(handlers("member"));
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const table = await screen.findByRole("table", { name: "Categories learned from you" });
     // The link opens "Always categorise..." for a row of that merchant on the transactions page.
     expect(within(table).getByRole("link", { name: "Make Quiet Bean Coffee a rule" })).toHaveAttribute(
@@ -323,10 +372,10 @@ describe("LearnedPage: categories", () => {
           next_cursor: null,
         }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const table = await screen.findByRole("table", { name: "Categories learned from you" });
     expect(within(table).queryByRole("link", { name: /a rule$/ })).not.toBeInTheDocument();
-    expect(within(table).getByRole("link", { name: "The rule for Corner Grocer" })).toHaveAttribute("href", "/rules/r-4");
+    expect(within(table).getByRole("link", { name: "The rule for Corner Grocer" })).toHaveAttribute("href", "/settings/rules/r-4");
   });
 
   it("shows the counts by source and the dictionary version", async () => {
@@ -337,7 +386,7 @@ describe("LearnedPage: categories", () => {
       "GET /api/v1/jobs/:id": () =>
         json({ id: "j-5", type: "categorise.refresh", state: "running", finished: false, attempts: 1, max_attempts: 3, created_at: NOW, updated_at: NOW }),
     });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     const list = await screen.findByRole("list", { name: "Transactions by how their category was decided" });
     expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "You chose: 14 transactions",
@@ -358,14 +407,14 @@ describe("LearnedPage: categories", () => {
 
   it("says nothing about being behind when it is up to date", async () => {
     mockApi({ ...handlers(), "GET /api/v1/categorisation/summary": () => json({ ...COUNTED, up_to_date: true }) });
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await screen.findByText("Merchant list version 3, with 950 merchants.");
     expect(screen.queryByText("Not up to date yet")).not.toBeInTheDocument();
   });
 
   it('a member sees no "Check again"', async () => {
     mockApi(handlers("member"));
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     await screen.findByText("Merchant list version 3, with 950 merchants.");
     expect(await screen.findByRole("button", { name: "Forget what was learned about Quiet Bean Coffee" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
@@ -373,7 +422,7 @@ describe("LearnedPage: categories", () => {
 
   it("names the three ways a category is decided", async () => {
     mockApi(handlers());
-    renderApp("/documents/learned");
+    renderApp("/settings/learned");
     expect(
       await screen.findByText(/what PerFin learned from the categories you chose, and the merchant list that ships with PerFin/),
     ).toBeInTheDocument();

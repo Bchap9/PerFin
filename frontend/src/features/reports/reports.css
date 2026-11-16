@@ -1,28 +1,12 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
 /*
- * Reports. Chart colours are roles defined here once per theme: two series
- * colours that stay apart for colour-blind readers and keep 3:1 against the
- * card surface in both themes, and a grey for the months a trend chart only
- * shows for context. Dark values are their own steps, not a flip.
+ * Reports. Series colours come from the shared chart classes
+ * (app/styles/charts.css, `chart-series-N` from the `--color-series-*`
+ * tokens, each 3:1 on the surface in both themes). Defined here are only the
+ * report's own roles: a grey for the months a trend chart shows for context,
+ * the net line in the text colour, and the zero line.
  */
-.report-page {
-  --report-series-1: #2a78d6;
-  --report-series-2: #eb6834;
-  --report-muted: var(--color-border-strong);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .report-page {
-    --report-series-1: #3987e5;
-    --report-series-2: #d95926;
-  }
-}
-
-:root[data-theme="dark"] .report-page {
-  --report-series-1: #3987e5;
-  --report-series-2: #d95926;
-}
 
 /* ---- Control bar ----------------------------------------------------------- */
 .report-controls {
@@ -72,13 +56,6 @@
   white-space: nowrap;
 }
 
-/* All four tabs fit a phone without sideways scrolling. */
-@media (max-width: 40rem) {
-  .report-page .tabs__tab {
-    padding-inline: var(--space-3);
-  }
-}
-
 /* ---- A view: figures, chart, table ---------------------------------------- */
 .report-view {
   display: flex;
@@ -92,24 +69,7 @@
   opacity: 0.55;
 }
 
-.report-figures {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4) var(--space-6);
-  margin: 0;
-}
-
-.report-figures dt {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.report-figures dd {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-}
-
+/* The headline figures are a StatGroup; a value may carry one line of detail. */
 .report-figures__detail {
   display: block;
   color: var(--color-text-muted);
@@ -169,8 +129,8 @@
 }
 
 /* Table footers when rows turn into cards on narrow screens (components.css
-   lays out body cells only). */
-@media (max-width: 40rem) {
+   lays out body cells only, at the same width). */
+@media (max-width: 719px) {
   .report-table tfoot th,
   .report-table tfoot td {
     display: grid;
@@ -207,17 +167,26 @@
 
 /* Grid and axes step back: solid hairlines one shade off the surface. */
 .report-chart .recharts-cartesian-grid line {
-  stroke: var(--color-border);
   stroke-dasharray: none;
 }
 
-.report-chart .recharts-cartesian-axis-line,
-.report-chart .recharts-reference-line-line {
+.report-zero-line line {
   stroke: var(--color-border-strong);
 }
 
-.report-chart .recharts-cartesian-axis-tick-value {
-  fill: var(--color-text-muted);
+/* Months a trend chart shows only for context step back to grey. */
+.report-bar--muted {
+  fill: var(--color-border-strong);
+}
+
+/* Net is a line in the text colour, its points ringed in the surface colour. */
+.report-net-line .recharts-line-curve {
+  stroke: var(--color-text);
+}
+
+.report-net-dot {
+  fill: var(--color-text);
+  stroke: var(--color-surface);
 }
 
 /* What the pointer is on: a band behind a bar, a hairline through a month. */
@@ -289,15 +258,15 @@
 }
 
 .report-key--series-1 {
-  background: var(--report-series-1);
+  background: var(--color-series-1);
 }
 
 .report-key--series-2 {
-  background: var(--report-series-2);
+  background: var(--color-series-2);
 }
 
 .report-key--muted {
-  background: var(--report-muted);
+  background: var(--color-border-strong);
 }
 
 /* A line series is keyed by a short stroke, not a box. */

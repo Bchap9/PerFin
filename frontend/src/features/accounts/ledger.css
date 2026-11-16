@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Shared styles for the ledger screens: accounts, transactions, imports, review. */
+/* Shared styles for the ledger screens: accounts, transactions, imports, review.
+   Class names are a contract with those pages; the look follows the
+   redesign's panels, rows and tables. Every colour is a token. */
 .ledger-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: 1.25rem;
 }
 
 .ledger-toolbar {
@@ -16,7 +18,7 @@
 .ledger-filters {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   align-items: end;
 }
 
@@ -34,7 +36,8 @@
 
 .ledger-error {
   margin: 0;
-  color: var(--color-danger, #b3261e);
+  color: var(--color-danger);
+  font-weight: 600;
 }
 
 .account-group {
@@ -51,12 +54,20 @@
   list-style: none;
 }
 
+/* Rows with a hairline between them, as the mock-up's lists. */
 .account-list li {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-1) var(--space-3);
+  padding: 0.625rem 0;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+.account-list li:first-child {
+  border-top: 0;
 }
 
 .account-chart {
@@ -111,13 +122,15 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-6);
-  border: 2px dashed var(--color-border);
+  border: 2px dashed var(--color-border-strong);
   border-radius: var(--radius-lg);
+  background: var(--color-surface);
   text-align: center;
 }
 
 .upload-drop--active {
-  border-color: var(--color-accent, currentColor);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .mapping-grid {
@@ -141,11 +154,15 @@
 
 .side-by-side dt {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .side-by-side dd {
-  margin: 0 0 var(--space-2);
+  margin: var(--space-1) 0 var(--space-3);
+  overflow-wrap: anywhere;
 }
 
 .review-item {
@@ -211,6 +228,11 @@
   padding-bottom: var(--space-3);
 }
 
+.document-account:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
 .document-account__head {
   display: flex;
   flex-wrap: wrap;
@@ -247,97 +269,8 @@
   }
 }
 
-/* Room for "Add tags" and "Add note" on one line (a long note still wraps). */
-.tx-col-tags summary {
-  min-width: 5.75rem;
-}
-
-.tx-col-notes .cell-text-button {
-  min-width: 4.5rem;
-}
-
 .tx-col-actions {
   width: 1%;
-}
-
-/* The row's "Actions" menu (RowActions.tsx): an icon button on a wide screen,
-   icon and word where rows are cards. */
-.row-menu {
-  display: inline-flex;
-}
-
-.row-menu__button {
-  padding: 0 var(--space-2);
-}
-
-@media (min-width: 40.0625rem) {
-  .row-menu__button {
-    min-width: 2rem;
-    padding: 0;
-  }
-
-  .row-menu__button .btn__label {
-    display: none;
-  }
-}
-
-.row-menu__button svg {
-  font-size: 1.25rem;
-}
-
-@media (pointer: coarse) {
-  .row-menu__button {
-    min-width: 2.75rem;
-  }
-}
-
-.row-menu__list {
-  position: fixed;
-  /* Above the sticky table header and above toasts (z-index 50): a menu the
-     person just opened is not hidden by a passing notification. */
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  min-width: 11rem;
-  max-width: calc(100vw - 1rem);
-  max-height: calc(100vh - 1rem);
-  overflow-y: auto;
-  padding: var(--space-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-md);
-  text-align: start;
-}
-
-.row-menu__item {
-  display: flex;
-  align-items: center;
-  min-height: 2.25rem;
-  padding: 0 var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.row-menu__item:hover,
-.row-menu__item:focus {
-  background: var(--color-surface-sunken);
-}
-
-.row-menu__item--danger {
-  color: var(--color-danger);
-}
-
-@media (pointer: coarse) {
-  .row-menu__item {
-    min-height: 2.75rem;
-  }
 }
 
 /* ---- Add / edit transaction dialog ---------------------------------------- */
@@ -421,5 +354,6 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-sunken);
+  font-variant-numeric: var(--num);
   overflow-wrap: anywhere;
 }

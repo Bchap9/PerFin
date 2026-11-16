@@ -2,6 +2,12 @@
 /**
  * One budget: the period report (budgeted, carried over, actual, forecast,
  * remaining per category) with period stepping, and an editor for its lines.
+ * Each category links to its transactions for the period shown. The
+ * transactions list matches a category exactly, while Actual also counts
+ * subcategories that have no line of their own, so such a line says which
+ * subcategories its link leaves out. A detail page
+ * under Plan, so it carries the breadcrumbs "Plan / Budgets / <name>". Edit
+ * and delete show only to who may write.
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -9,16 +15,20 @@ import { useState } from "react";
 
 import { Badge, type BadgeTone } from "../../components/Badge";
 import { Button } from "../../components/Button";
+import { Chip } from "../../components/Chip";
 import { Checkbox } from "../../components/Checkbox";
 import { Dialog } from "../../components/Dialog";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { MoneyText } from "../../components/MoneyText";
+import { ProgressBar } from "../../components/ProgressBar";
 import { Select } from "../../components/Select";
 import { Table, type TableColumn } from "../../components/Table";
+import { categoryColourClass, type ColourCategory } from "../../lib/categoryColour";
 import { addMonths, formatDate, formatMonth } from "../../lib/dates";
 import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
+import { useCanWrite } from "../accounts/api";
 import { categoryOptions } from "../categories/tree";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useCategories } from "../planning/queries";
@@ -34,7 +44,7 @@ import {
   type BudgetReport,
   type BudgetReportLine,
 } from "./api";
-import { barWidth, lineStatus, steppedPeriod, type LineStatus } from "./report";
+import { barWidth, lineStatus, percentOf, steppedPeriod, type LineStatus } from "./report";
 
 const STATUS: Record<LineStatus, { tone: BadgeTone; label: string }> = {
   ok: { tone: "success", label: "On track" },
@@ -51,10 +61,67 @@ function periodTitle(report: BudgetReport, budget: Budget): string {
   return `${from} to ${to}`;
 }
 
-export function ReportTable({ report }: { report: BudgetReport }) {
+/** What a line's bar says: how much of the budget is used, and "over budget" once it is. */
+export function lineBarLabel(line: BudgetReportLine): string {
+  const name = line.name ?? "Unknown";
+  const percent = percentOf(line.actual.amount, line.available.amount);
+  const used = percent === null ? "nothing budgeted" : `${String(Math.round(percent))} percent of budget`;
+  return lineStatus(line, line.kind) === "over" ? `${name}: ${used}, over budget` : `${name}: ${used}`;
+}
+
+/** A category as this page needs it: its colour, its place in the tree and its name. */
+type ReportCategory = ColourCategory & { name: string };
+
+/**
+ * The names of the subcategories whose spending the report counts under
+ * `categoryId`: those below it whose nearest budgeted category, walking up,
+ * is `categoryId` (the server's `nearest()`). Empty when it has none.
+ */
+export function rolledInNames(categoryId: string, budgeted: ReadonlySet<string>, categories: readonly ReportCategory[]): string[] {
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  const nearest = (id: string): string | null => {
+    const seen = new Set<string>();
+    let current = byId.get(id);
+    while (current !== undefined && !seen.has(current.id)) {
+      if (budgeted.has(current.id)) {
+        return current.id;
+      }
+      seen.add(current.id);
+      current = current.parent_id === null ? undefined : byId.get(current.parent_id);
+    }
+    return null;
+  };
+  return categories.filter((category) => category.id !== categoryId && nearest(category.id) === categoryId).map((category) => category.name);
+}
+
+export function ReportTable({ report, categories = [] }: { report: BudgetReport; categories?: readonly ReportCategory[] }) {
   const currency = report.currency;
+  const budgeted = new Set(report.lines.map((line) => line.category_id));
   const columns: TableColumn<BudgetReportLine>[] = [
-    { id: "name", header: "Category", rowHeader: true, cell: (line) => line.name ?? "Unknown" },
+    {
+      id: "name",
+      header: "Category",
+      rowHeader: true,
+      cell: (line) => {
+        const name = line.name ?? "Unknown";
+        const rolledIn = rolledInNames(line.category_id, budgeted, categories);
+        return (
+          <>
+            <Link
+              to="/transactions"
+              search={{ category: line.category_id, date_from: report.period.start, date_to: report.period.end }}
+            >
+              <Chip colourClass={categoryColourClass(line.category_id, categories)}>{name}</Chip>
+            </Link>
+            {rolledIn.length === 0 ? null : (
+              <div className="muted">
+                The link lists {name} itself. Actual also counts its subcategories: {rolledIn.join(", ")}.
+              </div>
+            )}
+          </>
+        );
+      },
+    },
     { id: "budgeted", header: "Budgeted", align: "end", cell: (line) => <MoneyText amount={line.budgeted.amount} currency={currency} tone="none" /> },
     { id: "carried", header: "Carried over", align: "end", cell: (line) => <MoneyText amount={line.carried_over.amount} currency={currency} tone="none" /> },
     { id: "actual", header: "Actual", align: "end", cell: (line) => <MoneyText amount={line.actual.amount} currency={currency} tone="none" /> },
@@ -63,15 +130,14 @@ export function ReportTable({ report }: { report: BudgetReport }) {
     {
       id: "progress",
       header: "Used",
-      cell: (line) => {
-        const width = barWidth(line.actual.amount, line.available.amount);
-        const status = lineStatus(line, line.kind);
-        return (
-          <span className="bar" role="img" aria-label={`${String(Math.round(width))} percent used`}>
-            <span className={status === "over" ? "bar__fill bar__fill--over" : "bar__fill"} style={{ width: `${String(width)}%` }} />
-          </span>
-        );
-      },
+      cell: (line) => (
+        <ProgressBar
+          value={barWidth(line.actual.amount, line.available.amount)}
+          max={100}
+          label={lineBarLabel(line)}
+          over={lineStatus(line, line.kind) === "over"}
+        />
+      ),
     },
     {
       id: "status",
@@ -238,6 +304,8 @@ function EditBudgetDialog({ budget, onClose }: { budget: Budget; onClose: () => 
 export function BudgetDetailPage() {
   const budgetId = useRouteParam("budgetId");
   const navigate = useNavigate();
+  const canWrite = useCanWrite();
+  const categories = useCategories();
   const [period, setPeriod] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -257,8 +325,9 @@ export function BudgetDetailPage() {
   return (
     <PlanningPage
       title={budget?.name ?? "Budget"}
+      breadcrumbs={[{ to: "/plan", label: "Plan" }, { to: "/plan/budgets", label: "Budgets" }, { label: budget?.name ?? "Budget" }]}
       actions={
-        budget === undefined ? undefined : (
+        budget === undefined || !canWrite ? undefined : (
           <>
             <Button onClick={() => { setEditing(true); }}>Edit budget</Button>
             <Button variant="danger" onClick={() => { setConfirmDelete(true); }}>Delete</Button>
@@ -266,9 +335,6 @@ export function BudgetDetailPage() {
         )
       }
     >
-      <p>
-        <Link to="/budgets">All budgets</Link>
-      </p>
       <QueryState loading={budgetQuery.isPending} error={budgetQuery.error} label="the budget">
         {budget === undefined ? null : (
           <>
@@ -287,13 +353,16 @@ export function BudgetDetailPage() {
               <Checkbox label="Include transactions awaiting review" checked={pending} onChange={(event) => { setPending(event.target.checked); }} />
             </div>
             <QueryState loading={reportQuery.isPending} error={reportQuery.error} label="the report">
-              {report === undefined ? null : <ReportTable report={report} />}
+              {report === undefined ? null : <ReportTable report={report} categories={categories.data ?? []} />}
             </QueryState>
+            {pending ? null : (
+              <p className="muted">Linked transaction lists also show transactions awaiting review, which Actual leaves out.</p>
+            )}
           </>
         )}
       </QueryState>
-      {budget !== undefined && editing ? <EditBudgetDialog budget={budget} onClose={() => { setEditing(false); }} /> : null}
-      {confirmDelete ? (
+      {budget !== undefined && canWrite && editing ? <EditBudgetDialog budget={budget} onClose={() => { setEditing(false); }} /> : null}
+      {canWrite && confirmDelete ? (
         <Dialog
           open
           onClose={() => { setConfirmDelete(false); }}
@@ -308,7 +377,7 @@ export function BudgetDetailPage() {
                 onClick={() => {
                   void remove.run().then(async (done) => {
                     if (done !== undefined) {
-                      await navigate({ to: "/budgets" });
+                      await navigate({ to: "/plan/budgets" });
                     }
                   });
                 }}

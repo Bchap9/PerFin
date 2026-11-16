@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Categories (hierarchy editor), payees (with merge and aliases) and tags.
- * Writes are household-wide; the server decides who may (member and above).
+ * The Categories, Payees and Tags tabs of Settings, Categories (the page and
+ * its tab bar are `CategoriesSettingsPage`). Writes are household-wide, and
+ * only the buttons the caller's role may use are shown, as the API decides
+ * them: a member adds, edits and renames; merging and deleting are an
+ * owner's or admin's; a viewer sees the lists only.
  */
+import "./categories.css";
+
 import { useMemo, useState } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -13,13 +18,12 @@ import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Table, type TableColumn } from "../../components/Table";
-import { Tabs } from "../../components/Tabs";
-import { SettingsPage } from "../settings/SettingsLayout";
+import { canWriteLedger } from "../accounts/api";
+import { canManageMembers, useAuthSession } from "../auth/session";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { referenceKeys, useCategories, usePayees, useTags, nameLookup, type Category, type Payee, type Tag } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import {
-  createCategory,
   createPayee,
   createTag,
   deleteCategory,
@@ -33,6 +37,7 @@ import {
   type CategoryUpdate,
 } from "./api";
 import { MergeDialog } from "./MergeDialog";
+import { NewCategoryDialog } from "./NewCategoryDialog";
 import { categoryOptions, descendantIds, flattenCategories } from "./tree";
 
 type Kind = Category["kind"];
@@ -54,6 +59,25 @@ const TAX: readonly { value: Tax; label: string }[] = [
 
 const taxonomy = [referenceKeys.categories, referenceKeys.payees, referenceKeys.tags] as const;
 
+/** What the caller's household role lets them change here (`authz_policy.py`). */
+export interface TaxonomyRights {
+  /** Add, edit and rename: member and above. */
+  write: boolean;
+  /** Merge and delete: owner and admin. */
+  manage: boolean;
+}
+
+export function useTaxonomyRights(): TaxonomyRights {
+  const { session } = useAuthSession();
+  const role = session?.household?.role;
+  return { write: canWriteLedger(role), manage: canManageMembers(role) };
+}
+
+/** The tree indent class for a depth; deeper than three keeps the third step. */
+function indentClass(depth: number): string | undefined {
+  return depth <= 0 ? undefined : `indent-${String(Math.min(depth, 3))}`;
+}
+
 function isKind(value: string): value is Kind {
   return KINDS.some((kind) => kind.value === value);
 }
@@ -64,26 +88,27 @@ function taxValue(value: string): Tax | null {
 
 // ---- categories --------------------------------------------------------------
 
+/** Edit a category: name, parent (any depth), kind and tax treatment. A new one is made with `NewCategoryDialog`. */
 function CategoryDialog({
   category,
   categories,
   onClose,
 }: {
-  category: Category | null;
+  category: Category;
   categories: readonly Category[];
   onClose: () => void;
 }) {
-  const [name, setName] = useState(category?.name ?? "");
-  const [parentId, setParentId] = useState(category?.parent_id ?? "");
-  const [kind, setKind] = useState<Kind>(category?.kind ?? "expense");
-  const [tax, setTax] = useState<string>(category?.tax_treatment ?? "");
+  const [name, setName] = useState(category.name);
+  const [parentId, setParentId] = useState(category.parent_id ?? "");
+  const [kind, setKind] = useState<Kind>(category.kind);
+  const [tax, setTax] = useState<string>(category.tax_treatment ?? "");
   const [problem, setProblem] = useState<string | null>(null);
-  const blocked = category === null ? new Set<string>() : descendantIds(categories, category.id);
+  const blocked = descendantIds(categories, category.id);
   const parents = categoryOptions(categories, (candidate) => !blocked.has(candidate.id));
-  const save = useAction(
-    (body: CategoryUpdate) => (category === null ? createCategory({ ...body, name: body.name ?? "" }) : updateCategory(category.id, body)),
-    { invalidate: taxonomy, success: category === null ? "Category added" : "Category saved" },
-  );
+  const save = useAction((body: CategoryUpdate) => updateCategory(category.id, body), {
+    invalidate: taxonomy,
+    success: "Category saved",
+  });
   const submit = async (): Promise<void> => {
     if (name.trim() === "") {
       setProblem("Enter a name.");
@@ -104,7 +129,7 @@ function CategoryDialog({
     <Dialog
       open
       onClose={onClose}
-      title={category === null ? "Add category" : "Edit category"}
+      title="Edit category"
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -203,9 +228,11 @@ function ConfirmDelete({
   );
 }
 
-function CategoriesPanel() {
+export function CategoriesPanel() {
   const query = useCategories();
-  const [editing, setEditing] = useState<Category | "new" | null>(null);
+  const rights = useTaxonomyRights();
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Category | null>(null);
   const [merging, setMerging] = useState<Category | null>(null);
   const [deleting, setDeleting] = useState<Category | null>(null);
   const categories = useMemo(() => query.data ?? [], [query.data]);
@@ -216,7 +243,7 @@ function CategoriesPanel() {
       header: "Category",
       rowHeader: true,
       cell: ({ category, depth }) => (
-        <span style={{ paddingInlineStart: `${String(depth * 1.25)}rem` }}>{category.name}</span>
+        <span className={indentClass(depth)}>{category.name}</span>
       ),
     },
     { id: "kind", header: "Kind", cell: ({ category }) => <Badge>{KINDS.find((k) => k.value === category.kind)?.label ?? category.kind}</Badge> },
@@ -225,7 +252,9 @@ function CategoriesPanel() {
       header: "Tax",
       cell: ({ category }) => TAX.find((t) => t.value === category.tax_treatment)?.label ?? <span className="muted">-</span>,
     },
-    {
+  ];
+  if (rights.write) {
+    columns.push({
       id: "actions",
       header: <span className="visually-hidden">Actions</span>,
       align: "end",
@@ -234,30 +263,34 @@ function CategoriesPanel() {
           <Button size="sm" aria-label={`Edit ${category.name}`} onClick={() => { setEditing(category); }}>
             Edit
           </Button>
-          <Button size="sm" aria-label={`Merge ${category.name}`} onClick={() => { setMerging(category); }}>
-            Merge
-          </Button>
-          {category.system_key === null ? (
+          {rights.manage ? (
+            <Button size="sm" aria-label={`Merge ${category.name}`} onClick={() => { setMerging(category); }}>
+              Merge
+            </Button>
+          ) : null}
+          {rights.manage && category.system_key === null ? (
             <Button size="sm" variant="danger" aria-label={`Delete ${category.name}`} onClick={() => { setDeleting(category); }}>
               Delete
             </Button>
           ) : null}
         </span>
       ),
-    },
-  ];
+    });
+  }
   return (
     <QueryState loading={query.isPending} error={query.error} label="categories">
-      <div className="planning-actions">
-        <Button
-          variant="primary"
-          onClick={() => {
-            setEditing("new");
-          }}
-        >
-          Add category
-        </Button>
-      </div>
+      {rights.write ? (
+        <div className="planning-actions">
+          <Button
+            variant="primary"
+            onClick={() => {
+              setCreating(true);
+            }}
+          >
+            New category
+          </Button>
+        </div>
+      ) : null}
       <Table
         caption="Categories"
         captionHidden
@@ -267,8 +300,15 @@ function CategoriesPanel() {
         maxHeight="none"
         empty={<EmptyState title="No categories yet" headingLevel={3} />}
       />
+      <NewCategoryDialog
+        open={creating}
+        onClose={() => {
+          setCreating(false);
+        }}
+        onCreated={() => undefined}
+      />
       {editing === null ? null : (
-        <CategoryDialog category={editing === "new" ? null : editing} categories={categories} onClose={() => { setEditing(null); }} />
+        <CategoryDialog category={editing} categories={categories} onClose={() => { setEditing(null); }} />
       )}
       {merging === null ? null : (
         <MergeDialog
@@ -353,8 +393,9 @@ function PayeeDialog({ payee, categories, onClose }: { payee: Payee | null; cate
   );
 }
 
-function PayeesPanel() {
+export function PayeesPanel() {
   const query = usePayees();
+  const rights = useTaxonomyRights();
   const categoriesQuery = useCategories();
   const [filter, setFilter] = useState("");
   const [editing, setEditing] = useState<Payee | "new" | null>(null);
@@ -374,28 +415,36 @@ function PayeesPanel() {
       header: "Default category",
       cell: (payee) => (payee.default_category_id === null ? <span className="muted">-</span> : categoryName(payee.default_category_id)),
     },
-    {
+  ];
+  if (rights.write) {
+    columns.push({
       id: "actions",
       header: <span className="visually-hidden">Actions</span>,
       align: "end",
       cell: (payee) => (
         <span className="planning-actions">
           <Button size="sm" aria-label={`Edit ${payee.name}`} onClick={() => { setEditing(payee); }}>Edit</Button>
-          <Button size="sm" aria-label={`Merge ${payee.name}`} onClick={() => { setMerging(payee); }}>Merge</Button>
-          <Button size="sm" variant="danger" aria-label={`Delete ${payee.name}`} onClick={() => { setDeleting(payee); }}>Delete</Button>
+          {rights.manage ? (
+            <>
+              <Button size="sm" aria-label={`Merge ${payee.name}`} onClick={() => { setMerging(payee); }}>Merge</Button>
+              <Button size="sm" variant="danger" aria-label={`Delete ${payee.name}`} onClick={() => { setDeleting(payee); }}>Delete</Button>
+            </>
+          ) : null}
         </span>
       ),
-    },
-  ];
+    });
+  }
   return (
     <QueryState loading={query.isPending} error={query.error} label="payees">
       <div className="planning-row">
         <Field label="Search payees">
           <Input type="search" value={filter} onChange={(event) => { setFilter(event.target.value); }} />
         </Field>
-        <Button variant="primary" onClick={() => { setEditing("new"); }}>
-          Add payee
-        </Button>
+        {rights.write ? (
+          <Button variant="primary" onClick={() => { setEditing("new"); }}>
+            Add payee
+          </Button>
+        ) : null}
       </div>
       <Table
         caption="Payees"
@@ -428,8 +477,9 @@ function PayeesPanel() {
 
 // ---- tags --------------------------------------------------------------------
 
-function TagsPanel() {
+export function TagsPanel() {
   const query = useTags();
+  const rights = useTaxonomyRights();
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState<Tag | null>(null);
   const [newName, setNewName] = useState("");
@@ -438,27 +488,29 @@ function TagsPanel() {
   const rename = useAction((tag: Tag, to: string) => renameTag(tag.id, to), { invalidate: [referenceKeys.tags], success: "Tag renamed" });
   return (
     <QueryState loading={query.isPending} error={query.error} label="tags">
-      <form
-        className="planning-row"
-        aria-label="Add a tag"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (name.trim() !== "") {
-            void add.run(name.trim()).then((done) => {
-              if (done !== undefined) {
-                setName("");
-              }
-            });
-          }
-        }}
-      >
-        <Field label="New tag">
-          <Input value={name} maxLength={50} onChange={(event) => { setName(event.target.value); }} />
-        </Field>
-        <Button type="submit" variant="primary" loading={add.busy}>
-          Add tag
-        </Button>
-      </form>
+      {rights.write ? (
+        <form
+          className="planning-row"
+          aria-label="Add a tag"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim() !== "") {
+              void add.run(name.trim()).then((done) => {
+                if (done !== undefined) {
+                  setName("");
+                }
+              });
+            }
+          }}
+        >
+          <Field label="New tag">
+            <Input value={name} maxLength={50} onChange={(event) => { setName(event.target.value); }} />
+          </Field>
+          <Button type="submit" variant="primary" loading={add.busy}>
+            Add tag
+          </Button>
+        </form>
+      ) : null}
       <ErrorLine message={add.error} />
       {(query.data ?? []).length === 0 ? (
         <EmptyState title="No tags yet" headingLevel={3} />
@@ -467,21 +519,25 @@ function TagsPanel() {
           {(query.data ?? []).map((tag) => (
             <li key={tag.id} className="planning-list__item">
               <Badge tone="info">{tag.name}</Badge>
-              <span className="planning-actions">
-                <Button
-                  size="sm"
-                  aria-label={`Rename ${tag.name}`}
-                  onClick={() => {
-                    setRenaming(tag);
-                    setNewName(tag.name);
-                  }}
-                >
-                  Rename
-                </Button>
-                <Button size="sm" variant="danger" aria-label={`Delete ${tag.name}`} onClick={() => { setDeleting(tag); }}>
-                  Delete
-                </Button>
-              </span>
+              {rights.write ? (
+                <span className="planning-actions">
+                  <Button
+                    size="sm"
+                    aria-label={`Rename ${tag.name}`}
+                    onClick={() => {
+                      setRenaming(tag);
+                      setNewName(tag.name);
+                    }}
+                  >
+                    Rename
+                  </Button>
+                  {rights.manage ? (
+                    <Button size="sm" variant="danger" aria-label={`Delete ${tag.name}`} onClick={() => { setDeleting(tag); }}>
+                      Delete
+                    </Button>
+                  ) : null}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -520,20 +576,5 @@ function TagsPanel() {
         <ConfirmDelete noun="tag" name={deleting.name} remove={() => deleteTag(deleting.id)} onClose={() => { setDeleting(null); }} />
       )}
     </QueryState>
-  );
-}
-
-export function CategoriesPage() {
-  return (
-    <SettingsPage title="Categories, payees and tags">
-      <Tabs
-        label="Organise"
-        tabs={[
-          { id: "categories", label: "Categories", content: <CategoriesPanel /> },
-          { id: "payees", label: "Payees", content: <PayeesPanel /> },
-          { id: "tags", label: "Tags", content: <TagsPanel /> },
-        ]}
-      />
-    </SettingsPage>
   );
 }

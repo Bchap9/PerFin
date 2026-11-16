@@ -3,7 +3,8 @@
  * Balance history line chart (recharts). Amounts stay decimal strings
  * everywhere else; the chart alone needs numbers to place points, so the
  * plotted value is a display-only conversion and every label is formatted
- * from the original string.
+ * from the original string. Colours come from the chart classes
+ * (`app/styles/charts.css`): the attributes only defer to them.
  */
 import {
   CartesianGrid,
@@ -52,8 +53,16 @@ export function BalanceChart({ history }: { history: BalanceHistory }) {
           data={points}
           margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
         >
-          <CartesianGrid strokeDasharray="3 3" />
+          <CartesianGrid
+            className="chart-grid"
+            stroke="currentColor"
+            strokeDasharray="3 3"
+            vertical={false}
+          />
           <XAxis
+            className="chart-axis"
+            stroke="currentColor"
+            tick={{ fill: "currentColor" }}
             dataKey="date"
             tickFormatter={(value: string) =>
               formatDate(value, { style: "short" }) ?? value
@@ -61,6 +70,9 @@ export function BalanceChart({ history }: { history: BalanceHistory }) {
             minTickGap={32}
           />
           <YAxis
+            className="chart-axis"
+            stroke="currentColor"
+            tick={{ fill: "currentColor" }}
             width={80}
             tickFormatter={(value: number) =>
               formatMoney(String(value), currency, { fractionDigits: 0 }) ??
@@ -68,6 +80,7 @@ export function BalanceChart({ history }: { history: BalanceHistory }) {
             }
           />
           <Tooltip
+            wrapperClassName="chart-tooltip"
             labelFormatter={(label) =>
               typeof label === "string" ? (formatDate(label) ?? label) : ""
             }
@@ -80,10 +93,12 @@ export function BalanceChart({ history }: { history: BalanceHistory }) {
             }}
           />
           <Line
+            className="chart-series-1"
             type="monotone"
             dataKey="plot"
             stroke="currentColor"
             dot={false}
+            activeDot={{ className: "chart-series-1 chart-active-dot", stroke: "currentColor" }}
             isAnimationActive={false}
           />
         </LineChart>

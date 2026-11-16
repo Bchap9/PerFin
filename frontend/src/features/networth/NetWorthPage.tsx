@@ -2,6 +2,7 @@
 import "./wealth.css";
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -29,9 +30,28 @@ import {
 import { accountRows, classRows, historyPoints, projectionPoints, type BreakdownRow } from "./chartData";
 import { SeriesChart } from "./SeriesChart";
 
-const breakdownColumns = (caption: string): TableColumn<BreakdownRow>[] => [
-  { id: "label", header: caption, rowHeader: true, cell: (row) => row.label },
-  { id: "amount", header: "Amount", align: "end", cell: (row) => <MoneyText amount={row.amount} currency={row.currency} tone="none" /> },
+const amountColumn: TableColumn<BreakdownRow> = {
+  id: "amount",
+  header: "Amount",
+  align: "end",
+  cell: (row) => <MoneyText amount={row.amount} currency={row.currency} tone="none" />,
+};
+
+const classColumns: TableColumn<BreakdownRow>[] = [{ id: "label", header: "Class", rowHeader: true, cell: (row) => row.label }, amountColumn];
+
+/** An account row opens the account's hub, where its balance, history and documents live. */
+const accountColumns: TableColumn<BreakdownRow>[] = [
+  {
+    id: "label",
+    header: "Account",
+    rowHeader: true,
+    cell: (row) => (
+      <Link to="/accounts/$accountId" params={{ accountId: row.key }}>
+        {row.label}
+      </Link>
+    ),
+  },
+  amountColumn,
 ];
 
 function ScopeNote({ scope }: { scope: "household" | "visible_accounts" }) {
@@ -45,19 +65,21 @@ function ScopeNote({ scope }: { scope: "household" | "visible_accounts" }) {
 function Breakdown({ latest }: { latest: NetWorthLatest }) {
   const assets = classRows(latest.by_class.assets);
   const liabilities = classRows(latest.by_class.liabilities);
+  // The card's heading names the region; the table caption adds the date so the two landmarks differ.
+  const on = formatDate(latest.as_of) ?? latest.as_of;
   return (
     <div className="planning-grid">
       <Card title="Assets by class" headingLevel={3}>
-        <Table caption="Assets by class" captionHidden columns={breakdownColumns("Class")} rows={assets} rowKey={(row) => row.key} maxHeight="none" empty="No assets." />
+        <Table caption={`Assets by class on ${on}`} captionHidden columns={classColumns} rows={assets} rowKey={(row) => row.key} maxHeight="none" empty="No assets." />
       </Card>
       <Card title="Liabilities by class" headingLevel={3}>
-        <Table caption="Liabilities by class" captionHidden columns={breakdownColumns("Class")} rows={liabilities} rowKey={(row) => row.key} maxHeight="none" empty="No liabilities." />
+        <Table caption={`Liabilities by class on ${on}`} captionHidden columns={classColumns} rows={liabilities} rowKey={(row) => row.key} maxHeight="none" empty="No liabilities." />
       </Card>
       <Card title="Assets by account" headingLevel={3}>
-        <Table caption="Assets by account" captionHidden columns={breakdownColumns("Account")} rows={accountRows(latest, "asset")} rowKey={(row) => row.key} maxHeight="md" empty="No assets." />
+        <Table caption={`Assets by account on ${on}`} captionHidden columns={accountColumns} rows={accountRows(latest, "asset")} rowKey={(row) => row.key} maxHeight="md" empty="No assets." />
       </Card>
       <Card title="Liabilities by account" headingLevel={3}>
-        <Table caption="Liabilities by account" captionHidden columns={breakdownColumns("Account")} rows={accountRows(latest, "liability")} rowKey={(row) => row.key} maxHeight="md" empty="No liabilities." />
+        <Table caption={`Liabilities by account on ${on}`} captionHidden columns={accountColumns} rows={accountRows(latest, "liability")} rowKey={(row) => row.key} maxHeight="md" empty="No liabilities." />
       </Card>
     </div>
   );
@@ -87,8 +109,8 @@ function ProjectionCard() {
             <SeriesChart
               points={projectionPoints(data)}
               series={[
-                { key: "trend", label: "Trend", color: "var(--color-accent, #2457d6)" },
-                { key: "savings", label: "From savings", color: "var(--color-success, #067647)" },
+                { key: "trend", label: "Trend" },
+                { key: "savings", label: "From savings" },
               ]}
               currency={data.currency}
               label="Net worth projection"
@@ -190,8 +212,8 @@ export function NetWorthPage() {
               points={historyPoints(hist)}
               series={[
                 { key: "net", label: "Net worth" },
-                { key: "assets", label: "Assets", color: "var(--color-success, #067647)" },
-                { key: "liabilities", label: "Liabilities", color: "var(--color-danger, #b42318)" },
+                { key: "assets", label: "Assets" },
+                { key: "liabilities", label: "Liabilities" },
               ]}
               currency={hist.currency}
               label="Net worth over time"

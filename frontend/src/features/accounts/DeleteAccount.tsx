@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * "Delete account" for owners and admins (the roles `DELETE /accounts/{id}`
- * accepts): a dialog that says what goes with the account, offers closing
+ * accepts), from the account header's menu: a dialog that says what goes with the account, offers closing
  * instead, and deletes only once the account's name has been typed.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -172,42 +172,31 @@ export function DeleteAccountDialog({
   );
 }
 
-/** The button and its dialogs; renders nothing for someone who may not delete. */
-export function DeleteAccountButton({ account }: { account: Account }) {
+/** Whether this person may delete the account: an owner or admin, on an account they can edit. */
+export function useCanDeleteAccount(account: Account): boolean {
   const { session } = useAuthSession();
-  const [step, setStep] = useState<"idle" | "delete" | "close">("idle");
-  if (!canDeleteAccount(session?.household?.role) || !account.can_edit) {
-    return null;
-  }
-  const done = (): void => {
-    setStep("idle");
-  };
-  return (
-    <>
-      <Button
-        variant="danger"
-        onClick={() => {
-          setStep("delete");
-        }}
-      >
-        Delete account
-      </Button>
-      {step === "delete" ? (
-        <DeleteAccountDialog
-          account={account}
-          onClose={done}
-          {...(account.is_closed
-            ? {}
-            : {
-                onCloseInstead: () => {
-                  setStep("close");
-                },
-              })}
-        />
-      ) : null}
-      {step === "close" ? (
-        <CloseAccountDialog open account={account} onClose={done} />
-      ) : null}
-    </>
+  return canDeleteAccount(session?.household?.role) && account.can_edit;
+}
+
+/**
+ * The delete dialog, opened from the account header's menu, and the close
+ * dialog it hands over to when the person chooses "Close it instead".
+ */
+export function DeleteAccountFlow({ account, onDone }: { account: Account; onDone: () => void }) {
+  const [step, setStep] = useState<"delete" | "close">("delete");
+  return step === "delete" ? (
+    <DeleteAccountDialog
+      account={account}
+      onClose={onDone}
+      {...(account.is_closed
+        ? {}
+        : {
+            onCloseInstead: () => {
+              setStep("close");
+            },
+          })}
+    />
+  ) : (
+    <CloseAccountDialog open account={account} onClose={onDone} />
   );
 }

@@ -261,7 +261,7 @@ export function TokensSection() {
             density="compact"
           />
         ) : null}
-        <h3 className="auth-subheading">New token</h3>
+        <h4 className="auth-subheading">New token</h4>
         {catalog.isPending ? <Spinner label="Loading scopes" /> : null}
         {catalog.isError ? (
           <p className="auth-error" role="alert">

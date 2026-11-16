@@ -1,10 +1,171 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* The transactions grid: how a category was decided, suggestions, and the
-   merchant beside the bank's own wording. Shared ledger styles are in
-   ../accounts/ledger.css. */
+/* The Transactions page: the search and filter bar, the total row, and the
+   grid (merchant beside the bank's own wording, a category chip that says
+   how it was decided, a suggestion as a question). Shared ledger styles are
+   in ../accounts/ledger.css. */
 
-.cat-cell,
-.payee-cell {
+/* ---- Search and filters -------------------------------------------------- */
+/* Search, the chips, Account and Category on one row that wraps; the dates
+   and the rarer filters sit under "More filters". */
+.tx-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-3);
+}
+
+.tx-search {
+  display: flex;
+  flex: 3 1 18rem;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: min(100%, 18rem);
+}
+
+.tx-search .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tx-filters {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  min-width: min(100%, 28rem);
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.tx-more[open] {
+  flex-basis: 100%;
+}
+
+.tx-filters__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: center;
+}
+
+.tx-filters__field {
+  flex: 0 1 10rem;
+  min-width: 9rem;
+  margin: 0;
+}
+
+/* "All accounts" and "Any category" say what the selects are; the labels
+   stay for screen readers. */
+.tx-filters__field .field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.tx-more {
+  align-self: center;
+}
+
+.tx-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--color-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tx-more > summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.tx-more__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* What narrows the list besides the bar: a file, a subscription, a merchant. */
+.tx-narrowed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tx-narrowed__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+}
+
+
+/* ---- The total of the rows shown ----------------------------------------- */
+.tx-totals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.tx-totals p {
+  margin: 0;
+}
+
+.tx-totals__sum {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-totals__note {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- The grid ------------------------------------------------------------- */
+
+/* The row's link button carries the row's name for a screen reader and the
+   keyboard; the row itself is what the eye and the pointer use. The button is
+   visually hidden, and the row shows the focus ring when the button has it. */
+.tx-grid .table__row-link {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tx-grid .table tbody tr:has(.table__row-link:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.tx-grid .table tbody tr.table__row--link:hover {
+  background: var(--color-surface-sunken);
+}
+
+.tx-merchant,
+.cat-cell {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -12,10 +173,57 @@
   min-width: 0;
 }
 
-/* A suggestion is a question, not a category: set apart from a chosen one. */
+.tx-merchant__name {
+  font-weight: 600;
+}
+
+.tx-merchant__recognised {
+  font-size: var(--font-size-sm);
+}
+
+/* `.payee-cell__raw`: the bank's wording in the "always categorise" dialog. */
+.tx-merchant__raw,
+.tx-merchant__note,
+.payee-cell__raw {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.tx-merchant__marks,
+.tx-merchant__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tx-merchant__tag {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.tx-merchant__tag::before {
+  content: "#";
+}
+
+/* A suggestion is a question, not a category: no colour chip, a dashed
+   outline and the question mark set it apart from a chosen one. */
 .cat-cell__suggestion {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 999px;
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+.cat-cell__none {
+  color: var(--color-text-muted);
 }
 
 .cat-cell__choice {
@@ -33,27 +241,78 @@
   font-size: var(--font-size-sm);
 }
 
-.payee-cell__merchant {
-  font-weight: 600;
+/* Under 720px a row is two lines to glance at: merchant and amount, then
+   date and category, with the checkbox and the row menu at the sides. The
+   account and how a category was decided leave the row (the drawer shows
+   them). The table stays a table for screen readers. */
+@media (max-width: 719px) {
+  .tx-grid .table tbody tr {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "select merchant merchant amount actions"
+      "select date category category actions";
+    align-items: center;
+    column-gap: var(--space-2);
+    row-gap: 0.125rem;
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .tx-grid .table tbody tr > td,
+  .tx-grid .table tbody tr > th {
+    display: block;
+    width: auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .tx-grid .table tbody tr > [data-label]::before {
+    content: none;
+  }
+
+  .tx-grid .table .tx-col-account,
+  .tx-grid .cat-cell__why,
+  .tx-grid .tx-merchant__raw {
+    display: none;
+  }
+
+  .tx-grid .tx-col-select {
+    grid-area: select;
+  }
+
+  .tx-grid .tx-col-merchant {
+    grid-area: merchant;
+    min-width: 0;
+    font-weight: 600;
+  }
+
+  .tx-grid .tx-col-amount {
+    grid-area: amount;
+    text-align: end;
+  }
+
+  .tx-grid .tx-col-actions {
+    grid-area: actions;
+  }
+
+  .tx-grid .tx-col-date {
+    grid-area: date;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .tx-grid .tx-col-date::after {
+    content: " \00b7";
+  }
+
+  .tx-grid .tx-col-category {
+    grid-area: category;
+    min-width: 0;
+  }
 }
 
-.payee-cell__raw {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
-}
-
-.tx-quick-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.tx-quick-filters .btn[aria-pressed="true"] {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-}
+/* ---- Notices --------------------------------------------------------------- */
 
 /* A line under the toolbar that never blocks the grid: the offer to make a
    correction the merchant's rule, and what was just saved with its undo. */
@@ -106,4 +365,85 @@
 
 .tx-preview__counts {
   padding-inline-start: var(--space-5);
+}
+
+/* ---- The drawer -------------------------------------------------------------- */
+
+.tx-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tx-drawer__headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-2xl);
+}
+
+.tx-drawer__date {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.tx-drawer__facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.tx-drawer__facts > div {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: var(--space-2);
+}
+
+.tx-drawer__facts dt {
+  color: var(--color-text-muted);
+}
+
+.tx-drawer__facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tx-drawer__category,
+.tx-always {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tx-drawer__category p {
+  margin: 0;
+}
+
+.tx-drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tx-drawer__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tx-drawer__tags legend {
+  margin-block-end: var(--space-2);
+  padding: 0;
+  color: var(--color-text-muted);
+}
+
+.tx-drawer__tags p {
+  margin: 0;
 }

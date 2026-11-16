@@ -7,6 +7,7 @@ import {
   problemFromBody,
   unwrap,
 } from "../../lib/api/client";
+import type { BadgeTone } from "../../components/Badge";
 import type { components } from "../../lib/api/schema";
 import { CSRF_HEADER, csrfStore } from "../../lib/csrf";
 import { queryRoots } from "../../lib/queryKeys";
@@ -175,6 +176,51 @@ export const STATUS_LABELS: Readonly<Record<DocumentStatus, string>> = {
   rejected: "Rejected",
   failed: "Failed",
 };
+
+/** The colour of a status badge. */
+export function statusTone(status: DocumentStatus): BadgeTone {
+  switch (status) {
+    case "processed":
+      return "success";
+    case "needs_review":
+      return "warning";
+    case "rejected":
+    case "failed":
+      return "danger";
+    default:
+      return "info";
+  }
+}
+
+/**
+ * A brokerage activity export the server already read as investment activity:
+ * what is left is in the review queue (unknown accounts, skipped rows), and the
+ * cash-ledger column mapping would only turn its trades into plain cash rows.
+ */
+export function readAsActivity(row: { parser_version: string | null }): boolean {
+  return row.parser_version?.startsWith("brokerage_activity_table/") ?? false;
+}
+
+/**
+ * A brokerage positions export the server read as what each account holds:
+ * the review queue has what is left (accounts to choose, figures that do not
+ * add up); a column mapping would turn its holdings into cash rows.
+ */
+export function readAsPositions(row: { parser_version: string | null }): boolean {
+  return row.parser_version?.startsWith("brokerage_positions_table/") ?? false;
+}
+
+/**
+ * How the server read a brokerage export, in words ("Read as investment
+ * activity" or "... holdings"), or null for anything else. Shown wherever the
+ * file is listed or opened, whatever its status, so a file that waits says it too.
+ */
+export function investmentReading(row: { parser_version: string | null }): string | null {
+  if (readAsPositions(row)) {
+    return "Read as investment holdings";
+  }
+  return readAsActivity(row) ? "Read as investment activity" : null;
+}
 
 export type DetectedAccount = Schemas["DetectedAccount"];
 export type DocumentAccounts = Schemas["DocumentAccounts"];

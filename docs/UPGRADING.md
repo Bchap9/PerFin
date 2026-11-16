@@ -294,6 +294,64 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.11
+
+The redesign: six sections and Settings, one Inbox, a drawer per
+transaction, light and dark ([USING.md](USING.md)). No migration, no new
+setting, no new container, no new outbound connection. One new read-only
+endpoint, `GET /inbox/summary`, gives the Inbox count (API.md); nothing
+was removed from the API and no response changed.
+
+- **Every old address still works.** It forwards to its one new home and
+  keeps what came after `?` and `#`, so bookmarks, links in old
+  notifications and links in your own notes keep working. In short (the
+  full table is in USING.md, "Where the old pages went"):
+
+  | Old address | Now |
+  | --- | --- |
+  | `/review`, `/documents` | `/inbox` |
+  | `/documents/library`, `/documents/<id>` | `/inbox/documents`, `/inbox/documents/<id>` |
+  | `/documents/learned` | `/settings/learned` |
+  | `/investments` | `/accounts/investments` |
+  | `/loans`, `/assets` | `/accounts?group=loans`, `/accounts?group=property` |
+  | `/loans/<id>`, `/assets/<id>` | the account's page, Schedule or Valuations tab |
+  | `/subscriptions`, `/budgets`, `/goals` | `/plan/subscriptions`, `/plan/budgets`, `/plan/goals` |
+  | `/calendar` | `/plan/upcoming` |
+  | `/net-worth`, `/tax` | `/reports/net-worth`, `/reports/tax` |
+  | `/tax/mapping` | `/settings/categories?tab=tax` |
+  | `/rules` | `/settings/rules` |
+
+  A bookmarked `/review?document=<id>` still opens that document's card.
+  `/loans/<id>` and `/assets/<id>` look the object up first; if it was
+  deleted, the page says so and links to Accounts.
+- **The dashboard layout you customised is no longer used.** Home is one
+  fixed page, and its customise dialog is gone. Nothing was deleted from
+  the database: the `dashboard_layout` preference is still stored and still
+  accepted by the API, and is simply not read. Budgets, goals, holdings,
+  loans and missing tax documents, which could be dashboard widgets, are
+  one click away in Plan, Accounts and Reports.
+- **Fonts are served by PerFin itself** (Figtree and Bricolage Grotesque,
+  OFL-1.1, bundled under `/static/`). The CSP keeps `font-src 'self'` and
+  `style-src 'self'`; a strict proxy or egress policy needs nothing new,
+  and the browser still loads nothing from another site
+  ([what-leaves-the-host.md](security/what-leaves-the-host.md)).
+- **One reload picks up the new look.** A tab left open across the upgrade
+  keeps the old bundle until it is reloaded. The service worker caches only
+  content-hashed files under `/static/` and never the page itself, so the
+  reload fetches the new page and its new files; nothing needs to be
+  cleared by hand. PerFin installed as an app on a phone or a desktop
+  needs the same: reload it, or close it and open it again.
+- **Habits that changed.** The category of a transaction is no longer a
+  select in the list: open the row (its drawer) or select several rows and
+  use the bar. "Check again" moved from Documents to Settings, What PerFin
+  learned. Upload is at the top of the Inbox.
+- **Rollback.** This release adds no revision, so the database stays at
+  `0014`, the head of rc.10. Going back is the first case under
+  "Rollback": set `PERFIN_VERSION` back (Compose) or `helm rollback`
+  (Helm); no restore is needed. Take the backup before the upgrade all the
+  same. In rc.10 the new addresses (`/inbox`, `/plan/...`) do not exist,
+  so a bookmark made in rc.11 does not open its page there.
+
 ### 1.0.0-rc.10
 
 Categorisation and subscriptions ([CATEGORISATION.md](CATEGORISATION.md)).

@@ -19,9 +19,12 @@ import { groupedSecret, otpauthQrDataUrl } from "./qr";
 
 export interface TotpSetupProps {
   onAdded: (result: FactorAdded) => void;
+  /** Level of "Scan the code…": 3 under a card's title (default), 5 under Settings' "Add an authenticator app". */
+  headingLevel?: 3 | 5;
 }
 
-export function TotpSetup({ onAdded }: TotpSetupProps) {
+export function TotpSetup({ onAdded, headingLevel = 3 }: TotpSetupProps) {
+  const Heading = `h${String(headingLevel)}` as "h3" | "h5";
   const queryClient = useQueryClient();
   const runWithStepUp = useStepUp();
   const [enrollment, setEnrollment] = useState<TotpEnrollment | null>(null);
@@ -103,9 +106,9 @@ export function TotpSetup({ onAdded }: TotpSetupProps) {
 
   return (
     <section className="auth-stack" aria-labelledby={headingId}>
-      <h3 id={headingId} className="auth-subheading">
+      <Heading id={headingId} className="auth-subheading">
         Scan the code with your authenticator app
-      </h3>
+      </Heading>
       {qr === null ? null : <img className="totp-qr" src={qr} width={200} height={200} alt="QR code for your authenticator app" />}
       <p>
         Can not scan it? Enter this key in the app instead:{" "}

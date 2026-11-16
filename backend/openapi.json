@@ -10741,6 +10741,51 @@
         "title": "ImportedStatement",
         "type": "object"
       },
+      "InboxSummary": {
+        "description": "What waits on a person, counted over what the caller may see.\n\n``documents``: documents with an open review item. ``loose``: open review\nitems of no document. ``subscriptions``: series that are suggested or\nhave an open change, each counted once. ``suggestions`` and\n``uncategorised``: the categorisation summary's counts. ``cards``: what\nthe Inbox shows as cards, ``documents + loose + subscriptions``, plus one\nwhen there are suggestions; an offer to make a rule is not counted.",
+        "properties": {
+          "cards": {
+            "minimum": 0.0,
+            "title": "Cards",
+            "type": "integer"
+          },
+          "documents": {
+            "minimum": 0.0,
+            "title": "Documents",
+            "type": "integer"
+          },
+          "loose": {
+            "minimum": 0.0,
+            "title": "Loose",
+            "type": "integer"
+          },
+          "subscriptions": {
+            "minimum": 0.0,
+            "title": "Subscriptions",
+            "type": "integer"
+          },
+          "suggestions": {
+            "minimum": 0.0,
+            "title": "Suggestions",
+            "type": "integer"
+          },
+          "uncategorised": {
+            "minimum": 0.0,
+            "title": "Uncategorised",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "documents",
+          "loose",
+          "subscriptions",
+          "suggestions",
+          "uncategorised",
+          "cards"
+        ],
+        "title": "InboxSummary",
+        "type": "object"
+      },
       "InvestmentTxnCreate": {
         "additionalProperties": false,
         "properties": {
@@ -36392,6 +36437,51 @@
         "summary": "Extracted rows of a document, for the mapping editor",
         "tags": [
           "imports"
+        ]
+      }
+    },
+    "/api/v1/inbox/summary": {
+      "get": {
+        "operationId": "get_summary_api_v1_inbox_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What waits on a person",
+        "tags": [
+          "inbox"
         ]
       }
     },

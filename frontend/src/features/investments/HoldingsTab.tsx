@@ -131,13 +131,14 @@ export function HoldingsTab({ account }: { account: string }) {
       id: "security",
       header: "Security",
       rowHeader: true,
+      className: "holding-security",
       cell: (h) => (
         <>
           {h.security.symbol === null ? (
             <strong>{h.security.name}</strong>
           ) : (
             <>
-              <strong>{h.security.symbol}</strong> <span className="muted">{h.security.name}</span>
+              <strong>{h.security.symbol}</strong> <span className="cell-note">{h.security.name}</span>
             </>
           )}
         </>
@@ -188,6 +189,7 @@ export function HoldingsTab({ account }: { account: string }) {
       id: "cost",
       header: "Cost basis",
       align: "end",
+      className: "holding-cost",
       cell: (h) => (
         <>
           <MoneyText amount={h.cost_basis.amount} currency={h.cost_basis.currency} tone="none" />
@@ -217,6 +219,8 @@ export function HoldingsTab({ account }: { account: string }) {
       ),
     },
   ];
+  // With one account chosen, every row would name it.
+  const shown = account === "" ? columns : columns.filter((column) => column.id !== "account");
 
   return (
     <QueryState loading={query.isPending} error={query.error} label="holdings">
@@ -235,13 +239,13 @@ export function HoldingsTab({ account }: { account: string }) {
           {data.holdings.length === 0 ? (
             <EmptyState
               title="No holdings yet"
-              description="Upload your broker's positions export (a CSV of what each account holds) or a statement, or record a buy under Transactions."
+              description="Upload your broker's positions export (a CSV of what each account holds) or a statement, or record a buy under Activity."
             />
           ) : (
             <>
               <Totals data={data} />
               <Freshness data={data} />
-              <Table caption="Holdings" columns={columns} rows={data.holdings} rowKey={(h) => `${h.account_id}:${h.security.id}`} maxHeight="none" />
+              <Table caption="Holdings" className="holdings-table" columns={shown} rows={data.holdings} rowKey={(h) => `${h.account_id}:${h.security.id}`} maxHeight="none" />
               <div className="planning-grid">
                 <Card title="By asset class" headingLevel={3}>
                   <AllocationBars title="Allocation by asset class" slices={data.allocation["asset_class"] ?? []} labels={titleCase} />

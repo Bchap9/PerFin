@@ -73,7 +73,9 @@ and `documents.viewer_download` have their defaults and no API) and `GET
 fields on transactions; the bulk action `accept_suggestions`; and a
 changed `DELETE /recurring/{id}` for a detected series ("Rules and
 provenance", "Categorisation notes", "Recurring notes" below;
-CATEGORISATION.md);
+CATEGORISATION.md). 1.0.0-rc.11 adds one read-only route for the
+redesigned app's Inbox count, `GET /inbox/summary` ("Inbox notes" below;
+USING.md);
 the Phase 7+ routes in the list are not built yet. The Phase 2 routes, and
 the Phase 5-6 routes for brokerage, loan and tax-form uploads, holdings,
 performance, loan payments, schedules and simulation, manual assets, net
@@ -161,6 +163,7 @@ GET             /categorisation/summary         how my transactions got their ca
 GET             /categorisation/learned         what PerFin learned from the household's corrections
 DELETE          /categorisation/learned/{id}    forget one learned entry (member or above)
 POST            /categorisation/refresh         look again at what nobody decided (job; owner/admin)
+GET             /inbox/summary                  what waits on me: the counts behind the Inbox badge
 GET             /jobs/{id}                      state of a job of my household
 
 GET/POST/PATCH/DELETE /budgets
@@ -1268,6 +1271,22 @@ Categorisation notes (`app.domain.categorisation`, router
   queued hourly by `categorise.dispatch` for households whose versions are
   behind. Audit `categorise.refresh` (versions and counts).
 
+Inbox notes (`app.domain.inbox`, router `inbox`): `GET /inbox/summary`
+(any role; a token needs `review:read`) answers `{"documents", "loose",
+"subscriptions", "suggestions", "uncategorised", "cards"}`, every count
+over what the caller may see. `documents` counts documents with an open
+review item and `loose` the open items of no document, both through the
+review list's visibility rule, so they match `GET /review/cards`.
+`subscriptions` counts the series `GET /subscriptions?status=suggested`
+lists together with the series of the open changes of `GET
+/subscriptions/events?state=open`, each once. `suggestions` and
+`uncategorised` are those of `GET /categorisation/summary`. `cards` is
+`documents + loose + subscriptions`, plus one when `suggestions` is not
+zero: the cards on the Inbox that ask a question. An offer to make a rule
+(`offer_rule` in `GET /categorisation/learned`) is not counted and not
+computed, so the route stays cheap when the live-update stream asks for it
+again. It writes nothing and is not part of the AI read API.
+
 Jobs notes (`app.domain.jobs.service`, router `jobs`): `GET /jobs/{id}`
 returns `{"id", "type", "state", "attempts", "max_attempts", "finished",
 "created_at", "updated_at"}` for a job of the caller's active household
@@ -1292,7 +1311,9 @@ creation order (`limit` 1-500, default 100). An account is `{"id", "type",
 "number_last4", "is_asset", "manual_balance", "include_in_net_worth",
 "opened_on", "closed_on", "is_closed", "balance": {"amount", "currency"},
 "balance_date", "can_edit", "created_at", "updated_at"}` (`balance` at the
-end of today, UTC). `POST /accounts` (`Idempotency-Key` honoured) takes
+end of today, UTC; a brokerage or retirement account with investment
+activity is worth its cash plus its holdings at market value, as net worth
+counts it). `POST /accounts` (`Idempotency-Key` honoured) takes
 `type`, `name` and optionally `nickname`, `currency` (default the
 household's base currency), `institution_id` (`404 institution-not-found`),
 `asset_kind` (required for and only for `manual_asset`), `subtype` (one of
@@ -1850,7 +1871,10 @@ person customises the dashboard, then an ordered list of `{"widget", "size"}`
 (`small|medium|large`; widgets `net_worth`, `cash_flow`, `spending`, `budgets`,
 `goals`, `recent_transactions`, `review_queue`, `upcoming_bills`, `holdings`,
 `loans`, `tax_documents`, `accounts`; each at most once; `[]` is an empty
-dashboard; anything else is `422`). A token reads them only with the
+dashboard; anything else is `422`). Since 1.0.0-rc.11 the web app no
+longer reads or writes `dashboard_layout`: Home is one fixed page. The
+field stays in the API and the database, so a saved layout is kept,
+unread. A token reads them only with the
 `settings:read` scope (`403 insufficient-scope` otherwise).
 
 Tax vault notes (`app.domain.tax`, router `tax`; scopes `tax:read` /

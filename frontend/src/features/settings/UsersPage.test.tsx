@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, currentHref, json, mockApi, problem, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import type { AdminUser } from "./usersApi";
 import { isLocked, newUserProblems, signInSummary } from "./UsersPage";
@@ -124,7 +125,7 @@ describe("users page access", () => {
   it("is not listed for, and tells nothing to, someone who is not an instance administrator", async () => {
     const { api } = usersApi({ userId: "u-2", role: "owner", instanceAdmin: false });
     const view = renderApp("/settings");
-    expect(await screen.findByRole("link", { name: "Household members" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Members" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     view.unmount();
 
@@ -193,7 +194,7 @@ describe("creating a user", () => {
     // The form is empty again: the password does not linger on the page.
     expect(within(form).getByLabelText(/^Initial password/)).toHaveValue("");
 
-    await user.click(within(note).getByRole("link", { name: "Household members" }));
+    await user.click(within(note).getByRole("link", { name: "Members" }));
     await waitFor(() => {
       expect(currentHref(view.router)).toBe("/settings/household");
     });
@@ -347,5 +348,14 @@ describe("changing a user", () => {
     const dialog = await screen.findByRole("dialog", { name: "Reset the second factors of Bob?" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(api.calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+});
+
+describe("users page accessibility", () => {
+  it("has no axe violations", async () => {
+    usersApi(ADMIN);
+    const { container } = renderApp("/settings/users");
+    await screen.findByRole("region", { name: "Users of this PerFin instance" });
+    await expectNoAxeViolations(container);
   });
 });

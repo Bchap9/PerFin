@@ -105,7 +105,7 @@ export function DocumentLine({
       : null;
   return (
     <p className="review-document">
-      <Link to="/documents/$documentId" params={{ documentId: document.id }}>
+      <Link to="/inbox/documents/$documentId" params={{ documentId: document.id }}>
         {document.original_filename ?? "Unnamed file"}
       </Link>
       <span className="ledger-muted">
@@ -258,7 +258,7 @@ function DuplicateBody({
         {otherId === null ? null : (
           <p>
             Imported from{" "}
-            <Link to="/documents/$documentId" params={{ documentId: otherId }}>
+            <Link to="/inbox/documents/$documentId" params={{ documentId: otherId }}>
               {other.data?.original_filename ?? "another file"}
             </Link>
             .
@@ -460,7 +460,7 @@ function SignControl({ item, actionable, trailing }: ControlProps) {
 function MapColumnsLink({ documentId }: { documentId: string }) {
   return (
     <Link
-      to="/documents/$documentId/mapping"
+      to="/inbox/documents/$documentId/mapping"
       params={{ documentId }}
       className="btn btn--primary btn--md"
     >
@@ -950,7 +950,7 @@ function isHeldStatement(item: ReviewItem): boolean {
 
 function asReadNote(item: ReviewItem): string {
   if (hasSuggestedKinds(item)) {
-    return "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin has learned”; nothing else of the statement is.";
+    return "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin learned”; nothing else of the statement is.";
   }
   const reason = itemReason(item);
   if (reason === "investment_lines_held") {
@@ -1438,10 +1438,20 @@ function CardView({ model }: { model: CardModel }) {
         }}
       />
     ));
+  // Several cards share a heading ("1 thing(s) to settle"), so each card is
+  // named after its file as well. Two cards can still share a name (two
+  // files of the same name, two loose items of one kind), so a card is a
+  // named group in the list, not a landmark: landmarks need distinct names.
+  const regionName = `${heading}: ${
+    document?.original_filename ?? (asked === undefined ? "no file" : explain(asked).title)
+  }`;
   return (
     <Card
       className="review-card"
       title={heading}
+      role="group"
+      aria-labelledby={undefined}
+      aria-label={regionName}
       actions={
         <Button
           size="sm"
@@ -1594,12 +1604,16 @@ export function LooseCard({ item }: { item: ReviewItem }) {
   );
 }
 
-/** An item that was resolved or dismissed, as it is kept in the queue's history. */
+/**
+ * An item that was resolved or dismissed, as it is kept in the queue's
+ * history. Many share a title, so each is a group in the list, not a landmark.
+ */
 export function ClosedItem({ item }: { item: ReviewItem }) {
   const explanation = explain(item);
   return (
     <Card
       className="review-card"
+      role="group"
       title={explanation.title}
       actions={
         <Badge tone={item.state === "resolved" ? "success" : "neutral"}>
@@ -1659,7 +1673,7 @@ export function SettledLine({ document }: { document: ReviewDocument }) {
           View the rows
         </Link>
         <Link
-          to="/documents/$documentId"
+          to="/inbox/documents/$documentId"
           params={{ documentId: document.id }}
           className="link-action"
         >

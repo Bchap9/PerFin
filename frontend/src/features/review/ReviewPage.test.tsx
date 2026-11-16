@@ -260,7 +260,7 @@ describe("review queue", () => {
           json(item("r-1", "possible_duplicate", {}, { state: "resolved" })),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const group = await screen.findByRole("group", {
       name: "Compare transactions",
@@ -293,7 +293,7 @@ describe("review queue", () => {
           json(item("r-1", "possible_duplicate", {}, { state: "resolved" })),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(await screen.findByText(/march\.ofx/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Not a duplicate" }));
@@ -365,7 +365,7 @@ describe("review queue", () => {
           ),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText(/the other 9 activity lines were imported/),
@@ -447,7 +447,7 @@ describe("review queue", () => {
           ),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const table = await screen.findByRole("table", { name: "Lines in doubt" });
     const boxes = within(table).getAllByRole("checkbox");
@@ -528,7 +528,7 @@ describe("review queue", () => {
         next_step: "correct_fields",
       }),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     const lines = await screen.findByRole("table", { name: "Lines in doubt" });
     // A security waits whole: its lines cannot be chosen one by one.
     expect(within(lines).queryByRole("checkbox")).not.toBeInTheDocument();
@@ -582,7 +582,7 @@ describe("review queue", () => {
           ),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText("Check what the local model suggested"),
@@ -644,7 +644,7 @@ describe("review queue", () => {
           ),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText(/a difference of \$0\.30/),
@@ -687,7 +687,7 @@ describe("review queue", () => {
         { reason: "investment_low_confidence" },
       ),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(await screen.findByText("Dates may be wrong")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Import as read" }),
@@ -708,7 +708,7 @@ describe("review queue", () => {
         { reason: "investment_low_confidence" },
       ),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(
       await screen.findByText("Nothing to check against"),
     ).toBeInTheDocument();
@@ -736,7 +736,7 @@ describe("review queue", () => {
         { reason: "investment_reconciliation_failed" },
       ),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(
       await screen.findByText("Statement does not add up"),
     ).toBeInTheDocument();
@@ -767,14 +767,14 @@ describe("review queue", () => {
           ),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const group = await screen.findByRole("group", {
       name: "Compare statements",
     });
     expect(
       await within(group).findByRole("link", { name: "march.ofx" }),
-    ).toHaveAttribute("href", "/documents/d-1");
+    ).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(
       screen.getByRole("button", { name: "Import anyway" }),
     ).toBeInTheDocument();
@@ -793,14 +793,14 @@ describe("review queue", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json(item("r-2", "unknown_account", {}, { state: "resolved" })),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const button = await screen.findByRole("button", {
       name: "Use this account",
     });
     // No ranking came with the item: nothing is chosen for the person.
     expect(button).toBeDisabled();
-    await screen.findByRole("option", { name: "Savings" });
+    await within(screen.getByLabelText("Account for this file")).findByRole("option", { name: "Savings" });
     await user.selectOptions(
       screen.getByLabelText("Account for this file"),
       "a-2",
@@ -837,11 +837,11 @@ describe("review queue", () => {
           json(item("r-4", "unparsed", {}, { state: "resolved" })),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByRole("link", { name: "Map columns" }),
-    ).toHaveAttribute("href", "/documents/d-1/mapping");
+    ).toHaveAttribute("href", "/inbox/documents/d-1/mapping");
     const again = screen.getAllByRole("button", { name: "Process again" });
     await user.click(again[1] ?? again[0] ?? document.body);
     await waitFor(() => {
@@ -885,7 +885,7 @@ describe("review queue", () => {
           json(item("r-7", "receipt_match", {}, { state: "resolved" })),
       },
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText(
@@ -919,7 +919,7 @@ describe("review queue", () => {
       "POST /api/v1/review/:id/dismiss": () =>
         problem(409, "review-item-closed"),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText("This email was not accepted."),
@@ -944,7 +944,7 @@ describe("review queue", () => {
         transactions: 12,
       }),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(
       await screen.findByText(
         "This file lists several accounts; 12 of its rows belong to an account PerFin does not know.",
@@ -957,7 +957,7 @@ describe("review queue", () => {
       [item("r-6", "unknown_account", {}, { can_resolve: false })],
       "viewer",
     );
-    renderApp("/review");
+    renderApp("/inbox");
     await screen.findByText(
       "PerFin could not tell which account this file belongs to.",
     );
@@ -992,12 +992,12 @@ describe("review queue", () => {
         },
       ),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const link = await screen.findByRole("link", {
       name: "october-statement.pdf",
     });
-    expect(link).toHaveAttribute("href", "/documents/d-1");
+    expect(link).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(
       screen.getByText(
         "None of your accounts matches the account number in this file.",
@@ -1131,7 +1131,7 @@ function accountItem(scores: readonly [number, number]): ReviewItem {
 describe("review cards", () => {
   it("shows one card for a document with three findings", async () => {
     reviewApi([], "member", {}, [threeFindings()]);
-    const { container } = renderApp("/review");
+    const { container } = renderApp("/inbox");
     expect(
       await screen.findByRole("heading", { name: "3 thing(s) to settle" }),
     ).toBeInTheDocument();
@@ -1147,7 +1147,7 @@ describe("review cards", () => {
 
   it("the card's only primary button is its action", async () => {
     reviewApi([], "member", {}, [threeFindings()]);
-    renderApp("/review");
+    renderApp("/inbox");
     await screen.findByRole("heading", { name: "3 thing(s) to settle" });
     const primary = cardOf("october-export.csv").querySelectorAll(".btn--primary");
     expect(primary).toHaveLength(1);
@@ -1164,7 +1164,7 @@ describe("review cards", () => {
     reviewApi([], "member", {}, [
       card([notice], { action: "acknowledge", open: 0, notices: 1 }),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(
       await screen.findByRole("heading", { name: "For your information" }),
     ).toBeInTheDocument();
@@ -1177,7 +1177,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...ranked, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const select = await screen.findByLabelText("Account for this file");
     await waitFor(() => {
@@ -1203,7 +1203,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...ranked, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const select = await screen.findByLabelText("Account for this file");
     await waitFor(() => {
@@ -1226,12 +1226,12 @@ describe("review cards", () => {
     const api = reviewApi([tied], "member", {
       "GET /api/v1/review/:id": () => json(tied),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const select = await screen.findByLabelText("Account for this file");
     await waitFor(() => {
       expect(detailCalls(api)).toHaveLength(1);
     });
-    await screen.findByRole("option", { name: "Savings" });
+    await within(select).findByRole("option", { name: "Savings" });
     expect(select).toHaveValue("");
     expect(screen.getByRole("button", { name: "Use this account" })).toBeDisabled();
   });
@@ -1254,7 +1254,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...sign, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText("Positive amounts in this file are:"),
@@ -1301,7 +1301,7 @@ describe("review cards", () => {
         { reason: "mapping_required", next_step: "column_mapping" },
       ),
     ]);
-    renderApp("/review");
+    renderApp("/inbox");
     expect(
       await screen.findByText(
         "The answer is kept for this account in this file.",
@@ -1330,7 +1330,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...near, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText(
@@ -1374,7 +1374,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...held, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(
       await screen.findByText(
@@ -1406,7 +1406,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...held, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Keep it" }));
     await waitFor(() => {
@@ -1436,7 +1436,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...near, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const second = await screen.findByRole("group", { name: "Row 2" });
     expect(
@@ -1487,7 +1487,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...near, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const first = await screen.findByRole("group", { name: "Row 1" });
     const second = screen.getByRole("group", { name: "Row 2" });
@@ -1528,7 +1528,7 @@ describe("review cards", () => {
       "GET /api/v1/transactions/:id": () =>
         json(tx("t-9", { review_state: "confirmed" })),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     await screen.findByRole("heading", { name: "1 thing(s) to settle" });
     await waitFor(() => {
       expect(detailCalls(api)).toHaveLength(1);
@@ -1549,7 +1549,7 @@ describe("review cards", () => {
         json({ ...DOUBTED, regions: [], alternatives: [] }),
       "GET /api/v1/transactions/:id": () => problem(404, "transaction-not-found"),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByText("Loading row")).not.toBeInTheDocument();
@@ -1570,7 +1570,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/resolve": () =>
         json({ ...DOUBTED, state: "resolved" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const confirm = await screen.findByRole("button", { name: "Confirm as read" });
     expect(screen.getByRole("group", { name: "Row LANTERN CAFE" })).toBeInTheDocument();
@@ -1596,7 +1596,7 @@ describe("review cards", () => {
       { "GET /api/v1/review/:id": () => json(SKIPPED) },
       [card([SKIPPED], { action: "check_rows" })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     await screen.findByRole("heading", { name: "1 thing(s) to settle" });
     expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(
@@ -1616,7 +1616,7 @@ describe("review cards", () => {
       "POST /api/v1/review/:id/dismiss": () =>
         json({ ...locked, state: "dismissed" }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const ok = await screen.findByRole("button", { name: "OK" });
     // "OK" dismisses the item; a second button that does the same is not shown.
@@ -1649,7 +1649,7 @@ describe("review cards", () => {
       },
       [card([copy], { open: 0, notices: 1 })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     expect(await screen.findByText("Already uploaded")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "OK" })).toBeInTheDocument();
@@ -1677,7 +1677,7 @@ describe("review cards", () => {
       },
       [card([copy], { open: 0, notices: 1 })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "OK" }));
     await waitFor(() => {
@@ -1699,7 +1699,7 @@ describe("review cards", () => {
       },
       [threeFindings()],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Check against the statement" }),
@@ -1735,7 +1735,7 @@ describe("review cards", () => {
       },
       [card([second], { action: "reconcile" })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Check against the statement" }),
@@ -1774,7 +1774,7 @@ describe("review cards", () => {
       },
       [card([unnamed], { action: "reconcile" })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Check against the statement" }),
@@ -1805,7 +1805,7 @@ describe("review cards", () => {
       },
       [threeFindings()],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Check against the statement" }),
@@ -1857,7 +1857,7 @@ describe("review cards", () => {
           ],
         }),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const select = await screen.findByLabelText("Account for this file");
     await waitFor(() => {
@@ -1873,7 +1873,7 @@ describe("review cards", () => {
     );
     expect(screen.getByRole("link", { name: "Open the file" })).toHaveAttribute(
       "href",
-      "/documents/d-1",
+      "/inbox/documents/d-1",
     );
     expect(screen.queryByText("Item resolved")).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing to review")).not.toBeInTheDocument();
@@ -1915,7 +1915,7 @@ describe("review cards", () => {
       },
       [card([ranked, notice], { open: 1, notices: 1 })],
     );
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     const select = await screen.findByLabelText("Account for this file");
     await waitFor(() => {
@@ -1966,16 +1966,17 @@ describe("review cards", () => {
         ],
       ),
     ]);
-    renderApp("/review?document=d-2");
+    renderApp("/inbox?document=d-2");
     expect(
       await screen.findByRole("link", { name: "november-export.csv" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "october-export.csv" }),
     ).not.toBeInTheDocument();
+    // Stage 3: the Inbox names the way back "Show everything" (plan, Task 7).
     expect(
-      screen.getByRole("link", { name: "Show every file" }),
-    ).toHaveAttribute("href", "/review");
+      screen.getByRole("link", { name: "Show everything" }),
+    ).toHaveAttribute("href", "/inbox");
   });
 
   it("lists resolved items of one document from the items endpoint", async () => {
@@ -1988,7 +1989,8 @@ describe("review cards", () => {
     const api = reviewApi([], "member", {
       "GET /api/v1/review": () => json({ items: [done], next_cursor: null }),
     });
-    renderApp("/review?document=d-2");
+    // Stage 3: the "Show" filter lives on Inbox, History.
+    renderApp("/inbox/history?document=d-2");
     const user = userEvent.setup();
     await user.selectOptions(await screen.findByLabelText("Show"), "resolved");
     expect(

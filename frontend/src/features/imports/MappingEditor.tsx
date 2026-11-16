@@ -10,6 +10,7 @@ import { Card } from "../../components/Card";
 import { Checkbox } from "../../components/Checkbox";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
+import { PageHeader } from "../../components/PageHeader";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { useToast } from "../../components/Toast";
@@ -195,7 +196,7 @@ export function MappingForm({
         description: "The file is being imported.",
         tone: "success",
       });
-      void navigate({ to: "/documents/$documentId", params: { documentId } });
+      void navigate({ to: "/inbox/documents/$documentId", params: { documentId } });
     },
     onError: (error) => {
       setServerError(errorMessage(error));
@@ -459,7 +460,7 @@ export function MappingForm({
           <Button type="submit" variant="primary" loading={save.isPending}>
             Save mapping and import
           </Button>
-          <Link to="/documents/$documentId" params={{ documentId }}>
+          <Link to="/inbox/documents/$documentId" params={{ documentId }}>
             Cancel
           </Link>
         </div>
@@ -487,12 +488,18 @@ export function MappingEditorPage() {
   });
   const mime = document.data?.mime_detected ?? "";
   const hasPages = mime === "application/pdf" || mime.startsWith("image/");
+  const fileName = document.data?.original_filename ?? "Document";
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">Map columns</h1>
-        <Link to="/documents">All uploads</Link>
-      </div>
+    <div className="ledger-stack">
+      <PageHeader
+        title="Map columns"
+        breadcrumbs={[
+          { to: "/inbox", label: "Inbox" },
+          { to: "/inbox/documents", label: "Documents" },
+          { to: `/inbox/documents/${encodeURIComponent(documentId)}`, label: fileName },
+          { label: "Map columns" },
+        ]}
+      />
       {preview.isPending ? <Spinner label="Loading preview" /> : null}
       {preview.isError ? (
         <p role="alert" className="ledger-error">
@@ -521,6 +528,6 @@ export function MappingEditorPage() {
           />
         </>
       ) : null}
-    </section>
+    </div>
   );
 }

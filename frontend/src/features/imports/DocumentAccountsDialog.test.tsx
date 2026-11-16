@@ -220,7 +220,7 @@ describe("document account choices", () => {
       "POST /api/v1/documents/:id/accounts/apply": () =>
         json({ document_id: "d-1", created: ["a-9"], job_id: "j-1" }, 202),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {
@@ -302,7 +302,7 @@ describe("document account choices", () => {
       "POST /api/v1/documents/:id/accounts/apply": () =>
         json({ document_id: "d-1", created: ["a-9"], job_id: "j-1" }, 202),
     });
-    renderApp("/review");
+    renderApp("/inbox");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {

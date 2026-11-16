@@ -343,7 +343,9 @@ premises. See AI_ACCESS.md.
       against local fake TLS services only; no real ntfy, Gotify, Matrix or
       SMTP provider was used. The `notification_channel` table is created
       by migration `0007_phase7`)
-- [x] Configurable dashboard widgets
+- [x] Configurable dashboard widgets (retired by stage 3: Home is one
+      fixed page; the saved `dashboard_layout` stays in the database and
+      the API, unread)
 - [x] Encrypted backup/restore scripts with restore test
       (scripts/backup.sh, scripts/restore.sh, docs/BACKUP_RESTORE.md; the
       restore verification test runs both scripts in `--bare` mode against
@@ -410,12 +412,37 @@ The road from the release candidates to `v1.0.0` (owner's decision,
       statements inside the repository. Not built, by decision: a category
       model, merchants outside the United States, merchant category codes,
       automatic payees, logos, a merchant editor, guesses for split lines.
-- [ ] Stage 3, the UI redesign: new navigation and the Inbox; the
-      Subscriptions view moves under Plan (it is a working screen in
-      today's layout, built from components that can be rehoused); a
-      report by merchant and a dashboard card for subscription changes;
-      `CategoryPicker` in the rule editor, the budget and the calendar
-      forms.
+- [ ] Stage 3, the UI redesign (`v1.0.0-rc.11`; [USING.md](USING.md)):
+      six sections and Settings (Home, Inbox, Transactions, Accounts,
+      Plan, Reports), each piece of data with one home and every old
+      address redirecting to it (`frontend/src/app/routeMap.ts`); the
+      Inbox gathering documents, loose review items, subscription changes
+      and suggested categories, with its count on the rail from one new
+      read-only endpoint (`GET /inbox/summary`); filters in the address
+      and a drawer per transaction, where a category is chosen and
+      "Always use … for …" is offered unticked with the server's preview;
+      one page per account with tabs by type (a loan and an asset are tabs
+      of their account); Subscriptions, Budgets, Goals and Upcoming under
+      Plan; Net worth and Tax under Reports; Settings as a grouped list
+      with the tax mapping as the Categories page's Tax hints tab; a
+      command palette (Ctrl+K or Cmd+K); new tokens in light and dark
+      checked for contrast, self-hosted fonts, no `style` attribute
+      (ESLint), axe in every page test and a route audit; pages loaded on
+      demand under a bundle budget (`npm run check:bundle`). Not ticked:
+      the changelog, the upgrade note and the full gates (`make check`,
+      `mkdocs build --strict`) and the visual check against the approved
+      mock-up are still to run, and rc.11 is not tagged. Not built, by
+      decision: a customisable Home, a search of transactions in the
+      palette, the page and row a transaction came from, per-document row
+      counts in lists, a duplicate-charge alert, assigning Inbox items to a
+      member, a pinnable rail, institutions, payee and month drill-down
+      from Reports. Planned for this stage earlier and not built: a report
+      by merchant, a Home card for subscription changes of its own (Home
+      lists the first Inbox cards, subscription changes among them, and
+      the next charges under "Coming up"), and `CategoryPicker` in the rule
+      editor, the budget and the calendar forms (it is used in
+      Transactions: the drawer, the bulk bar, the edit dialog and "Always
+      categorise").
 - [ ] Stage 4, the release review.
 
 Release verification for v1.0.0 (2026-11-04): the ten steps in

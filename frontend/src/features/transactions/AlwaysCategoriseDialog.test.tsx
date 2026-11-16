@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** "Always categorise <merchant> as...": from the row menu, and offered after a correction in the grid. */
+/** "Always categorise <merchant> as...": the row menu's dialog, and the `?always=` link that opens the drawer with the box ticked. */
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 
 import { authedSession, currentHref, json, mockApi, renderApp, type SessionOptions } from "../auth/testing";
 import type { MerchantRulePreview } from "../rules/api";
 import { account, lookupHandlers, NOW, page, tx } from "./fixtures";
-import { forgetTeachDismissals } from "./TeachPrompt";
 
 const MERCHANT = { raw_payee: "SQ *QUIET BEAN COFFEE 0042", payee_id: null, merchant_key: "quiet bean coffee", merchant: "Quiet Bean Coffee" };
 const ROW = tx("t-1", { ...MERCHANT, category_id: "c-2", category_source: "person" });
@@ -58,10 +57,6 @@ async function openDialog(user: UserEvent): Promise<HTMLElement> {
   await user.click(screen.getByRole("menuitem", { name: MENU_ITEM }));
   return screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
 }
-
-beforeEach(() => {
-  forgetTeachDismissals();
-});
 
 describe("Always categorise a merchant, from the row", () => {
   it("the dialog states the three counts from the server", async () => {
@@ -146,7 +141,7 @@ describe("Always categorise a merchant, from the row", () => {
     const user = userEvent.setup();
     const dialog = await openDialog(user);
     const link = await within(dialog).findByRole("link", { name: "Coffee shops" });
-    expect(link).toHaveAttribute("href", "/rules/r-3");
+    expect(link).toHaveAttribute("href", "/settings/rules/r-3");
     expect(link.closest("p")).toHaveTextContent("The rule Coffee shops already decides this merchant");
     expect(within(dialog).queryByRole("button", { name: /Save rule|Change the rule/ })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
@@ -270,129 +265,42 @@ describe("Always categorise a merchant, from the row", () => {
   });
 });
 
-describe("Offering the rule after a correction in the grid", () => {
-  const UNSET = tx("t-1", { ...MERCHANT, category_id: null });
-  const PROMPT = /from now on\?/;
-
-  function grid(body: MerchantRulePreview, rows = [UNSET]) {
-    const api = setup(body, rows);
-    api.on("PATCH /api/v1/transactions/:id", (call) => json(tx("t-1", { ...MERCHANT, ...(call.body as object), category_source: "person" })));
-    return api;
-  }
-
-  it('changing a category offers the rule once and "Not now" hides it', async () => {
-    const api = grid(preview({ uncategorised: 3, guessed: 0, decided: 1, same_category: 1 }));
-    renderApp("/transactions");
-    const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
-    const prompt = await screen.findByRole("group", { name: "Make it a rule?" });
-    expect(within(prompt).getByText("Use Groceries for Quiet Bean Coffee from now on? 3 other transactions have no category yet.")).toBeInTheDocument();
-    expect(screen.getAllByText(PROMPT)).toHaveLength(1);
-    expect(api.callsTo("POST", "/api/v1/rules/merchant/preview").at(-1)?.body).toEqual({ transaction_id: "t-1", category_id: "c-1" });
-    // "Always..." opens the dialog with the category just chosen; nothing is saved by asking.
-    await user.click(within(prompt).getByRole("button", { name: "Always…" }));
-    const dialog = await screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
-    expect(within(dialog).getByLabelText(/Set the category to/)).toHaveValue("c-1");
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(0);
-
-    await user.click(within(screen.getByRole("group", { name: "Make it a rule?" })).getByRole("button", { name: "Not now" }));
-    expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
-    // Not asked again for this merchant: no prompt, and the server is not even asked.
-    const asked = api.callsTo("POST", "/api/v1/rules/merchant/preview").length;
-    await user.selectOptions(screen.getByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-2");
-    await waitFor(() => {
-      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")).toHaveLength(2);
-    });
-    await waitFor(() => {
-      expect(api.callsTo("GET", "/api/v1/transactions").length).toBeGreaterThan(2);
-    });
-    expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
-    expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(asked);
-  });
-
-  it("says so when the others carry a guess instead of nothing", async () => {
-    grid(preview({ uncategorised: 0, guessed: 1, decided: 0, same_category: 1 }));
-    renderApp("/transactions");
-    const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
-    expect(await screen.findByText("Use Groceries for Quiet Bean Coffee from now on? 1 other transaction has a different guess.")).toBeInTheDocument();
-  });
-
-  it("no prompt when nothing else would change", async () => {
-    const cases: MerchantRulePreview[] = [
-      preview({ uncategorised: 0, guessed: 0, decided: 4, same_category: 1 }),
-      // The merchant has a rule already, an earlier rule decides it, or it cannot teach.
-      preview({ existing_rule_id: "r-9" }),
-      preview({ shadowed_by: "r-3" }),
-      preview({ teachable: false, reason: "not_a_purchase" }),
-    ];
-    for (const body of cases) {
-      const api = grid(body);
-      renderApp("/transactions");
-      const user = userEvent.setup();
-      await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
-      await waitFor(() => {
-        expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).not.toHaveLength(0);
-      });
-      await waitFor(() => {
-        expect(api.callsTo("GET", "/api/v1/transactions").length).toBeGreaterThan(1);
-      });
-      expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
-      cleanup();
-    }
-  });
-
-  it("no prompt for a cleared category or a row without a merchant", async () => {
-    const api = grid(preview({ uncategorised: 3 }), [
-      tx("t-1", { ...MERCHANT, category_id: "c-1" }),
-      tx("t-2", { raw_payee: "CHECK 1042", payee_id: null, merchant_key: null, merchant: null, category_id: null }),
-    ]);
-    renderApp("/transactions");
-    const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "");
-    await user.selectOptions(screen.getByLabelText("Category of CHECK 1042"), "c-1");
-    await waitFor(() => {
-      expect(api.callsTo("PATCH", "/api/v1/transactions/:id")).toHaveLength(2);
-    });
-    await waitFor(() => {
-      expect(api.callsTo("GET", "/api/v1/transactions").length).toBeGreaterThan(1);
-    });
-    expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
-    expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
-  });
-});
-
 describe("Always categorise a merchant, from what PerFin learned", () => {
-  it("a link with a transaction opens the dialog for that row", async () => {
+  // Stage 2 opened the dialog from `?always=`; it now opens the row's drawer with the box ticked (plan Task 11).
+  const BOX = "Always use Dining for Quiet Bean Coffee";
+
+  it("a link with a transaction opens the drawer for that row with the box ticked", async () => {
     const api = setup(preview(), []);
     api.on("GET /api/v1/transactions/:id", () => json(ROW));
     renderApp("/transactions?always=t-1");
-    const dialog = await screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
-    expect(within(dialog).getByText("SQ *QUIET BEAN COFFEE 0042")).toBeInTheDocument();
-    expect(api.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
-    // Closed, it stays closed.
-    await userEvent.setup().click(await within(dialog).findByRole("button", { name: "Cancel" }));
+    const drawer = await screen.findByRole("dialog", { name: "Quiet Bean Coffee" });
+    expect(within(drawer).getByText("SQ *QUIET BEAN COFFEE 0042")).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/transactions/t-1").length).toBeGreaterThan(0);
+    expect(within(drawer).getByRole("checkbox", { name: BOX })).toBeChecked();
+    expect(await within(drawer).findByText("17 transactions without a category")).toBeInTheDocument();
+    // Asking is not saving.
+    expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(0);
+    await userEvent.setup().click(within(drawer).getByRole("button", { name: "Close" }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 
-  it("closing the dialog takes the transaction out of the address, and the other filters stay", async () => {
+  it("closing the drawer takes the transaction out of the address, and the other filters stay", async () => {
     const api = setup(preview(), []);
     api.on("GET /api/v1/transactions/:id", () => json(ROW));
     const { router } = renderApp("/transactions?always=t-1&category=none");
-    const dialog = await screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
-    await userEvent.setup().click(await within(dialog).findByRole("button", { name: "Cancel" }));
+    const drawer = await screen.findByRole("dialog", { name: "Quiet Bean Coffee" });
+    await userEvent.setup().click(within(drawer).getByRole("button", { name: "Close" }));
     await waitFor(() => {
       expect(currentHref(router)).toBe("/transactions?category=none");
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    // Replaced, not pushed: going back does not bring the dialog up again.
+    // Replaced, not pushed: going back does not bring the drawer up again.
     expect(router.history.length).toBe(1);
   });
 
-  it("the link does nothing for a row on an account the person may only view", async () => {
+  it("the link offers no rule for a row on an account the person may only view", async () => {
     const api = mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),
       ...lookupHandlers([account("a-1", "Everyday", { can_edit: false }), account("a-2", "Spare")]),
@@ -401,38 +309,35 @@ describe("Always categorise a merchant, from what PerFin learned", () => {
       "POST /api/v1/rules/merchant/preview": () => json(preview()),
     });
     renderApp("/transactions?always=t-1");
-    await waitFor(() => {
-      expect(api.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
-    });
-    await screen.findByText(/No transactions/);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const drawer = await screen.findByRole("dialog", { name: "Quiet Bean Coffee" });
+    await within(drawer).findByRole("link", { name: "Everyday" });
+    expect(within(drawer).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
   });
 
-  it("the link does nothing for a viewer, a row that cannot teach or a row that is gone", async () => {
+  it("the link offers no rule to a viewer, explains a row that cannot teach and says when a row is gone", async () => {
     const viewer = setup(preview(), [], "viewer");
     viewer.on("GET /api/v1/transactions/:id", () => json(ROW));
     renderApp("/transactions?always=t-1");
-    await screen.findByText(/No transactions/);
-    expect(viewer.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(0);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const read = await screen.findByRole("dialog", { name: "Quiet Bean Coffee" });
+    expect(within(read).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(viewer.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
     cleanup();
 
-    const split = setup(preview(), []);
-    split.on("GET /api/v1/transactions/:id", () => json({ ...ROW, merchant_key: null, merchant: null }));
+    const plain = setup(preview(), []);
+    plain.on("GET /api/v1/transactions/:id", () => json({ ...ROW, merchant_key: null, merchant: null }));
     renderApp("/transactions?always=t-1");
-    await waitFor(() => {
-      expect(split.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
-    });
-    await screen.findByText(/No transactions/);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const unnamed = await screen.findByRole("dialog", { name: "SQ *QUIET BEAN COFFEE 0042" });
+    expect(within(unnamed).getByText(/PerFin could not tell which merchant this is/)).toBeInTheDocument();
+    // The drawer's tag boxes are there for a member; no "Always use…" box is.
+    expect(within(unnamed).queryByRole("checkbox", { name: /^Always use/ })).not.toBeInTheDocument();
+    expect(plain.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
     cleanup();
 
     const gone = setup(preview(), []);
     renderApp("/transactions?always=t-1");
-    await waitFor(() => {
-      expect(gone.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
-    });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const missing = await screen.findByRole("dialog", { name: "Transaction" });
+    expect(await within(missing).findByRole("alert")).toBeInTheDocument();
+    expect(gone.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
   });
 });

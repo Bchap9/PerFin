@@ -166,9 +166,29 @@ app/
   (`make_channel`). docs/security/notifications.md lists what leaves.
 - **Settings**: add fields to `Settings`; insecure combinations go in
   `config_check.py` with a test.
-- **Frontend features**: `src/features/<name>/routes.tsx` exports
-  `routes(parent)`; `src/app/router.tsx` lists features explicitly (one line
-  each, appended at the end of the list).
+- **Frontend pages**: a page lives in its feature folder
+  (`src/features/<name>/`) and is registered in two places in `src/app/`.
+
+    - `routeMap.ts`, the one route map: its path in `NEW_ROUTES`, and a
+      tab in its section's `tabs` (or a page in `SETTINGS_GROUPS`) when it
+      has one. The rail, the section tab bars, the command palette, the
+      redirects and their tests all read this file.
+    - `routeTree.tsx`, the one route tree: one `page(...)` line under its
+      section's layout route, loaded with `lazyRouteComponent` unless it is
+      part of the first load (only Home and Transactions are). A page about
+      one object passes `{ detail: true }` and renders its own `h1` and
+      breadcrumbs; other pages render `PageHeader`, which is an `h2` under
+      the section's `h1`.
+
+    An address that moves gets a row in `REDIRECTS` (old path, new path,
+    search to add), never a second page. `src/app/routeMap.test.ts` checks
+    that every old route is a new route or the source of exactly one
+    redirect and that every tab points at a new route;
+    `redirects.test.tsx` renders every redirect at its old address; and
+    `src/app/oldLinks.test.ts` fails on a link in `src/features/` that
+    still points at an old address. Only `features/auth/routes.tsx` and
+    `features/setup/routes.tsx` remain, for the bare sign-in and setup
+    pages.
 
 ### Database rules
 
@@ -598,7 +618,15 @@ Routers call services; services call repos; nothing in `app/api` or `app/domain`
 ```
 src/
   main.tsx           bootstraps QueryClient, RouterProvider, theme
-  app/               router.tsx, layout, providers, theme, error boundary
+  app/               routeMap.ts (sections, tabs, settings list, redirects),
+                     routeTree.tsx (every page, lazily loaded), router.tsx,
+                     redirects.tsx, RootLayout.tsx (rail, bottom bar),
+                     SectionLayout.tsx, CommandPalette.tsx + commands.ts,
+                     inboxSummary.ts (the Inbox count), InboxBadge.tsx,
+                     providers, theme, error boundary
+    styles/          tokens.css (every colour, both themes), fonts.css,
+                     base.css, layout.css, charts.css, palette.css;
+                     contrast.test.ts checks the token pairs
   lib/
     api/             openapi-fetch client + generated schema.d.ts (npm run gen:api)
     csrf.ts          reads the CSRF token from /auth/session and adds X-CSRF-Token
@@ -606,8 +634,15 @@ src/
     money.ts, dates.ts
     idempotency.ts   Idempotency-Key for creating POSTs (useIdempotencyKey: one key
                      per thing asked for, reused on retry, dropped after success)
-  components/        design system (Button, Input, Table, Dialog, Card, ...)
-  features/<name>/   routes.tsx, queries.ts, components, tests
+    urlState.ts      search parameters as state (replace, defaults left out)
+    useMediaQuery.ts the three widths (PHONE_MAX 819, TABLE_CARDS_MAX 719,
+                     ICON_RAIL_MAX 1023)
+    categoryColour.ts  a category's chip class
+  components/        design system (Button, Input, Table, Dialog, Card, Drawer,
+                     Menu, SectionNav, PageHeader, Breadcrumbs, Stat, Chip,
+                     ProgressBar, StackBar, Sparkline, QuietNote, ...)
+  test/              axe.ts (expectNoAxeViolations), setup.ts
+  features/<name>/   api.ts, pages, components, a .css file, tests
     auth/            sign-in pages, guard.ts (root beforeLoad: session required
                      except on the public sign-in/setup/reset pages),
                      returnTo.ts (relative return_to only), StepUp.tsx
@@ -623,8 +658,65 @@ Feature tests stub `fetch` with `mockApi` from `features/auth/testing.tsx`
 calls. Pages under `/settings` are wrapped in `StepUpProvider`; a sensitive
 action elsewhere needs its own provider.
 
-No `dangerouslySetInnerHTML`, no inline scripts or styles that need
-`unsafe-inline`, no third-party CDNs; everything is bundled.
+Every page test file has a `has no axe violations` case for its main
+state (`expectNoAxeViolations` from `src/test/axe.ts`, which runs
+`axe-core` with colour contrast off, since jsdom computes no colours), and
+every page has exactly one `h1`. `src/app/routeAudit.test.tsx` renders every
+route in the route map and checks the heading, the one `h1` and axe under
+each `data-theme` (structure only; the contrast of each theme is
+`app/styles/contrast.test.ts`), plus a few tab states the generated fixture
+never reaches (the account hub as a mortgage, an asset and a brokerage
+account; the other Reports views). Tests address pages by their current path (an old path still
+redirects, but a test of the page uses the new one) and query by role and
+accessible name.
+
+No `dangerouslySetInnerHTML`, no inline scripts, no third-party CDNs;
+everything is bundled, the fonts included.
+
+### Styling
+
+The CSP is `style-src 'self'`, so:
+
+- **CSS is a file** imported by the component that uses it. There is no
+  `style` attribute or prop, no inline style, no CSS-in-JS and no runtime
+  `<style>` injection. ESLint enforces the first with the core rule
+  `no-restricted-syntax` on `JSXAttribute[name.name='style']`
+  (`frontend/eslint.config.js`).
+- **Geometry that comes from data is drawn with SVG attributes** (`width`,
+  `height`, `x`, `y`, `d`): bars, stacked bars, sparklines, progress bars
+  and the page viewer's word boxes.
+- **The one CSSOM write** is the position of a floating menu in
+  `components/Menu.tsx` (`style.top` and `style.left`). The CSP does not
+  block CSSOM writes; keep it the only one.
+- **Colours are tokens.** Every colour is a `--color-*` custom property in
+  `src/app/styles/tokens.css`, defined for light and for dark; no colour
+  literal appears in any other stylesheet or component (the browser's
+  theme colours in `index.html` and the manifest are the exception). `app/styles/contrast.test.ts` checks
+  the text, control, focus and chart pairs in both themes (axe cannot in
+  jsdom).
+- **Charts colour through classes**: `chart-series-1` … `chart-series-6`
+  set `fill` and `stroke` from `--color-series-N` (`app/styles/charts.css`),
+  with `chart-grid` and `chart-axis` for the frame. Recharts elements take
+  them as `className`. A category's chip colour is `chip--s1` …
+  `chip--s6`, from `lib/categoryColour.ts::categoryColourClass`.
+- **Widths are literals in media queries** (720, 820 and 1024 px), mirrored
+  as constants in `lib/useMediaQuery.ts`; a media query cannot read a
+  custom property.
+- **Page vocabulary**: a page starts with `PageHeader` (title, one-line
+  description, actions, breadcrumbs); panels are `Card`; figures are
+  `StatGroup` and `Stat`.
+
+### Bundle budget
+
+`npm run check:bundle` (after `npm run build`) reads `dist/index.html`,
+gzips each file and fails with a table of figures against the budget in
+`frontend/scripts/check-bundle.mjs`: the JS `/` needs at most 250 kB gzip,
+the largest lazy chunk at most 160 kB, all JS at most the recorded baseline
+plus 5%, all CSS at most 20 kB, and the Latin font files at most 120 kB.
+`make frontend-check` and CI run it. A change that goes over reports the
+figures; the budget is not raised to make it pass. Pages load lazily (see
+"Plug-in points"), so a new page adds to its own chunk, not to the first
+load.
 
 ## Dev stack
 

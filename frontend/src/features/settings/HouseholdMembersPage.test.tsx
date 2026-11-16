@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, noContent, problem, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import type { Member } from "./api";
 import { assignableRoles, canEditMember } from "./HouseholdMembersPage";
@@ -44,6 +45,15 @@ async function stepUp(user: ReturnType<typeof userEvent.setup>) {
   await user.type(await within(dialog).findByLabelText(/^Authentication code/), "246810");
   await user.click(within(dialog).getByRole("button", { name: "Verify and continue" }));
 }
+
+describe("members page", () => {
+  it("is called Members, so it is not confused with the household's name and currency", async () => {
+    membersApi({ role: "owner" });
+    renderApp("/settings/household");
+    expect(await screen.findByRole("heading", { level: 2, name: "Members" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Household members" })).not.toBeInTheDocument();
+  });
+});
 
 describe("member rules", () => {
   it("offers only what the server would allow", () => {
@@ -180,5 +190,14 @@ describe("household members page", () => {
     membersApi({ household: false });
     renderApp("/settings/household");
     expect(await screen.findByText(/not a member of a household yet/)).toBeInTheDocument();
+  });
+});
+
+describe("members page accessibility", () => {
+  it("has no axe violations", async () => {
+    membersApi({ role: "owner" });
+    const { container } = renderApp("/settings/household");
+    await screen.findByText("Carol");
+    await expectNoAxeViolations(container);
   });
 });

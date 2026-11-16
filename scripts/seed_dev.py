@@ -442,10 +442,18 @@ def build_ledger(seeding: Seeding) -> dict[str, dict[str, Any]]:
 
 
 def build_investments(seeding: Seeding) -> None:
-    """A brokerage account (two lots sold in part) and a retirement account."""
+    """A brokerage account (two lots sold in part) and a retirement account.
+
+    Each opens with cash before its first buy, so its cash never goes
+    negative and the account is worth at least its holdings.
+    """
     api, today = seeding.api, seeding.today
-    brokerage = _account(seeding, type="brokerage", name="Brokerage")
-    retirement = _account(seeding, type="retirement", name="Retirement IRA")
+    funded = {
+        "opening_balance": usd("5000.00"),
+        "opening_balance_date": (today - timedelta(days=250)).isoformat(),
+    }
+    brokerage = _account(seeding, type="brokerage", name="Brokerage", **funded)
+    retirement = _account(seeding, type="retirement", name="Retirement IRA", **funded)
     securities = [
         api.post(
             "/securities",

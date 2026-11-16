@@ -2,6 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, currentHref, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, referenceHandlers } from "../planning/testing";
 
@@ -67,17 +68,17 @@ function setup(options: { path?: string; session?: SessionOptions; detail?: Row;
     "GET /api/v1/subscriptions/:id": () => json(options.detail ?? DETAIL),
     ...options.handlers,
   });
-  const app = renderApp(options.path ?? "/subscriptions/s-1");
+  const app = renderApp(options.path ?? "/plan/subscriptions/s-1");
   // By exact path: the ":id" pattern would also count the calls for the events.
   const detailReads = (): number => api.calls.filter((call) => call.method === "GET" && call.path === "/api/v1/subscriptions/s-1").length;
   return { api, detailReads, user: userEvent.setup(), ...app };
 }
 
-/** A viewport below the 720px line: the series is a page of its own. */
+/** A viewport below the 720px line: the series is a page of its own. Only the width query matches. */
 function narrowScreen(): void {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn((query: string) => ({ matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined })),
+    vi.fn((query: string) => ({ matches: query === "(max-width: 719px)", media: query, addEventListener: () => undefined, removeEventListener: () => undefined })),
   );
 }
 
@@ -116,7 +117,7 @@ describe("one subscription up close", () => {
     expect(within(changes).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Aug 10, 2026: New"]);
 
     // The list stays behind the dialog.
-    expect(screen.getByRole("heading", { level: 1, name: "Subscriptions" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Subscriptions" })).toBeInTheDocument();
   });
 
   it("says who set the status and when nothing is expected or has changed", async () => {
@@ -133,22 +134,22 @@ describe("one subscription up close", () => {
     expect(within(detail).getByText("Nothing else has changed.")).toBeInTheDocument();
   });
 
-  it("links to the transactions of the series", async () => {
+  it("links to its transactions", async () => {
     setup();
     const detail = await screen.findByRole("dialog", { name: "Streamly" });
     expect(within(detail).getByRole("link", { name: "See in transactions" })).toHaveAttribute("href", "/transactions?subscription=s-1");
   });
 
   it("opens from the list and closes back to it", async () => {
-    const { user, router } = setup({ path: "/subscriptions" });
+    const { user, router } = setup({ path: "/plan/subscriptions" });
     const active = await screen.findByRole("table", { name: "Active" });
     const link = within(active).getByRole("link", { name: "Streamly" });
-    expect(link).toHaveAttribute("href", "/subscriptions/s-1");
+    expect(link).toHaveAttribute("href", "/plan/subscriptions/s-1");
     await user.click(link);
     const detail = await screen.findByRole("dialog", { name: "Streamly" });
-    expect(currentHref(router)).toBe("/subscriptions/s-1");
+    expect(currentHref(router)).toBe("/plan/subscriptions/s-1");
     await user.click(within(detail).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => { expect(currentHref(router)).toBe("/subscriptions"); });
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions"); });
     expect(screen.queryByRole("dialog", { name: "Streamly" })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Active" })).toBeInTheDocument();
   });
@@ -156,11 +157,52 @@ describe("one subscription up close", () => {
   it("is a page of its own on a narrow screen, with a way back", async () => {
     narrowScreen();
     setup();
-    expect(await screen.findByRole("heading", { level: 1, name: "Streamly" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Streamly" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByRole("table", { name: "Active" })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Charges" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to subscriptions" })).toHaveAttribute("href", "/subscriptions");
+    // The way back is the breadcrumbs: Plan / Subscriptions / Streamly.
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Plan", "Subscriptions", "Streamly"]);
+    expect(within(crumbs).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/plan");
+    expect(within(crumbs).getByRole("link", { name: "Subscriptions" })).toHaveAttribute("href", "/plan/subscriptions");
+    expect(within(crumbs).getByText("Streamly")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("has no axe violations as a page on a narrow screen", async () => {
+    narrowScreen();
+    const { container } = setup();
+    await screen.findByRole("heading", { level: 2, name: "Streamly" });
+    await screen.findByRole("table", { name: "Charges" });
+    await expectNoAxeViolations(container);
+  });
+
+  it("a bill's breadcrumbs lead back to the Bills tab on a narrow screen", async () => {
+    narrowScreen();
+    const water = { ...STREAMLY, id: "b-1", name: "Harbor Water", merchant: "Harbor Water", kind: "bill" };
+    setup({ path: "/plan/subscriptions/b-1?kind=bills", detail: { subscription: water, charges: [], events: [] } });
+    const crumbs = await screen.findByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Subscriptions" })).toHaveAttribute("href", "/plan/subscriptions?kind=bills");
+  });
+
+  it("a bill opened from the Bills tab closes back to the Bills tab", async () => {
+    const water = { ...STREAMLY, id: "b-1", name: "Harbor Water", merchant: "Harbor Water", kind: "bill" };
+    const { user, router } = setup({
+      path: "/plan/subscriptions?kind=bills",
+      detail: { subscription: water, charges: [], events: [] },
+      handlers: {
+        "GET /api/v1/subscriptions": () =>
+          json({ as_of: "2026-11-14", items: [STREAMLY, water], needs_look: 0, subscriptions: TOTALS, bills: TOTALS }),
+      },
+    });
+    const active = await screen.findByRole("table", { name: "Active" });
+    const link = within(active).getByRole("link", { name: "Harbor Water" });
+    expect(link).toHaveAttribute("href", "/plan/subscriptions/b-1?kind=bills");
+    await user.click(link);
+    const detail = await screen.findByRole("dialog", { name: "Harbor Water" });
+    await user.click(within(detail).getByRole("button", { name: "Close" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions?kind=bills"); });
+    expect(screen.getByRole("button", { name: "Bills", pressed: true })).toBeInTheDocument();
   });
 
   it("edits the name, the amount range and the cadence through the schedule form", async () => {

@@ -64,7 +64,7 @@ describe("enrolment-only flow", () => {
     await user.click(within(dialog).getByLabelText(/I have stored this somewhere safe/));
     await user.click(done);
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/budgets");
+      expect(router.state.location.pathname).toBe("/plan/budgets");
     });
     expect(screen.queryByText("AAAA-BBBB-CCCC-DDDD")).not.toBeInTheDocument();
   });

@@ -76,7 +76,7 @@ export function ExportSection({ pollMs = 1000 }: { pollMs?: number }) {
   };
 
   return (
-    <Card title="Export your data" headingLevel={2}>
+    <Card title="Export your data">
       <div className="planning-form">
         <p>
           Creates one archive with everything in this household: accounts, transactions, budgets, rules and more. Documents are
@@ -159,7 +159,7 @@ export function ImportSection({ pollMs = 1000 }: { pollMs?: number }) {
   const job = query.data;
 
   return (
-    <Card title="Import an archive" headingLevel={2}>
+    <Card title="Import an archive">
       <div className="planning-form">
         <p>Restore an archive made by PerFin's export. Existing records are kept; the archive's records are added or merged.</p>
         <Field label="Archive file" id={fileId}>
@@ -224,7 +224,7 @@ export function ImportSection({ pollMs = 1000 }: { pollMs?: number }) {
 
 export function DataPage() {
   return (
-    <SettingsPage title="Data export and import">
+    <SettingsPage title="Export and import">
       <ExportSection />
       <ImportSection />
     </SettingsPage>

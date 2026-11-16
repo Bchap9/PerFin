@@ -2,10 +2,10 @@
 /**
  * One subscription or bill up close: what it is, what it costs, when it is
  * expected next, the charges linked to it, how its price moved and what else
- * changed. A dialog over the list on wide screens, a page on narrow ones.
+ * changed. A dialog over the list on wide screens; on narrow ones a page under
+ * Plan, with the breadcrumbs "Plan / Subscriptions / <name>" as the way back.
  *
- * `SeriesFacts`, `Charges`, `PriceHistory` and `Changes` are fed by props, so
- * the next stage can rehouse them without touching the data layer.
+ * `SeriesFacts`, `Charges`, `PriceHistory` and `Changes` are fed by props.
  */
 import "./subscriptions.css";
 
@@ -19,14 +19,15 @@ import { Card } from "../../components/Card";
 import { Dialog } from "../../components/Dialog";
 import { MoneyText } from "../../components/MoneyText";
 import { compareIsoDates, formatDate } from "../../lib/dates";
+import { useMediaQuery } from "../../lib/useMediaQuery";
 import { useAuthSession } from "../auth/session";
 import { ScheduleDialog } from "../calendar/RecurringTab";
 import { PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
 import { useRouteParam } from "../planning/useRouteParam";
 import { getSubscription, subscriptionKeys, type Subscription, type SubscriptionCharge, type SubscriptionEvent } from "./api";
+import { NARROW_QUERY, useKindSearch } from "./SubscriptionsPage";
 import { cadenceText, datedEventText, magnitude, priceLine, sourceText, statusText, unconfirmedNote } from "./text";
-import { useWide } from "./useWide";
 
 type Level = 2 | 3;
 
@@ -168,7 +169,8 @@ export function Changes({ events, headingLevel }: { events: readonly Subscriptio
 /** The series named by the route, as a dialog over the list or as a page. */
 export function SubscriptionDetail() {
   const id = useRouteParam("id");
-  const wide = useWide();
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const kindSearch = useKindSearch();
   const navigate = useNavigate();
   const query = useQuery({ queryKey: subscriptionKeys.detail(id), queryFn: () => getSubscription(id), enabled: id !== "" });
   const accounts = useAccounts();
@@ -180,7 +182,8 @@ export function SubscriptionDetail() {
   const role = session?.household?.role;
   // A member changes only series on accounts they may edit; the server checks again.
   const mayEdit = subscription !== undefined && role !== undefined && role !== "viewer" && account?.can_edit !== false;
-  const headingLevel: Level = wide ? 3 : 2;
+  // Under the dialog's h2, or under the page's h2 inside Plan.
+  const headingLevel: Level = 3;
   const title = subscription?.name ?? "Subscription";
 
   const body = (
@@ -199,13 +202,14 @@ export function SubscriptionDetail() {
   // The form is a dialog of its own, beside this one and not inside it.
   const form = editing && subscription !== undefined ? <ScheduleDialog editing={subscription} onClose={() => { setEditing(false); }} /> : null;
 
-  if (!wide) {
+  if (narrow) {
     return (
       <>
-        <PlanningPage title={title} actions={edit}>
-          <p className="subs-detail__back">
-            <Link to="/subscriptions">Back to subscriptions</Link>
-          </p>
+        <PlanningPage
+          title={title}
+          actions={edit}
+          breadcrumbs={[{ to: "/plan", label: "Plan" }, { to: kindSearch.kind === "bills" ? "/plan/subscriptions?kind=bills" : "/plan/subscriptions", label: "Subscriptions" }, { label: title }]}
+        >
           {body}
         </PlanningPage>
         {form}
@@ -214,7 +218,7 @@ export function SubscriptionDetail() {
   }
   return (
     <>
-      <Dialog open size="lg" title={title} footer={edit} onClose={() => void navigate({ to: "/subscriptions" })}>
+      <Dialog open size="lg" title={title} footer={edit} onClose={() => void navigate({ to: "/plan/subscriptions", search: kindSearch })}>
         {body}
       </Dialog>
       {form}

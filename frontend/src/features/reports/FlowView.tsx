@@ -13,6 +13,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { Field } from "../../components/Field";
 import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
+import { Stat, StatGroup } from "../../components/Stat";
 import { Table, type TableColumn } from "../../components/Table";
 import { compareAmounts } from "../../lib/money";
 import type { FlowReport, GroupBy, ReportItem } from "./api";
@@ -92,23 +93,20 @@ function FlowReportView({ report, account }: { report: FlowReport; account: stri
   return (
     <>
       <UnconvertedNote amounts={report.unconverted} currency={report.currency} what={`of ${lower}`} />
-      <dl className="report-figures">
-        <div>
-          <dt>Total {lower}</dt>
-          <dd>
-            <MoneyText amount={report.total.amount} currency={report.total.currency} tone="none" />
-          </dd>
-        </div>
+      <StatGroup>
+        <Stat label={`Total ${lower}`} size="display" value={<MoneyText amount={report.total.amount} currency={report.total.currency} tone="none" />} />
         {top === undefined || nothing || report.items.length < 2 ? null : (
-          <div>
-            <dt>{group === "month" ? "Highest month" : `Largest ${groupNoun(group, 1)}`}</dt>
-            <dd>
-              <MoneyText amount={top.amount.amount} currency={top.amount.currency} tone="none" />
-              <span className="report-figures__detail">{itemLabel(top, group)}</span>
-            </dd>
-          </div>
+          <Stat
+            label={group === "month" ? "Highest month" : `Largest ${groupNoun(group, 1)}`}
+            value={
+              <>
+                <MoneyText amount={top.amount.amount} currency={top.amount.currency} tone="none" />
+                <span className="report-figures__detail">{itemLabel(top, group)}</span>
+              </>
+            }
+          />
         )}
-      </dl>
+      </StatGroup>
       <Card
         title={title}
         actions={<DownloadCsvButton table={() => flowCsv(report)} filename={csvFilename([lower, "by", groupNoun(group, 1), report.date_from, "to", report.date_to])} />}
