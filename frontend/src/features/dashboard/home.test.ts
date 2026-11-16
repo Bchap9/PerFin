@@ -189,8 +189,9 @@ describe("needs you rows", () => {
       [{ id: "loose-1", kind: "possible_duplicate" }],
     );
     expect(rows.map((row) => row.id)).toEqual(["money", "import-old", "import-new", "note", "loose-1"]);
-    expect(rows[0]).toMatchObject({ title: "money.pdf", question: "Check the balance against the statement", document: "money" });
-    expect(rows[4]).toMatchObject({ document: null });
+    expect(rows[0]).toMatchObject({ title: "money.pdf", question: "Check the balance against the statement", document: "money", anchor: null });
+    // An item of no document opens the Inbox at its own card.
+    expect(rows[4]).toMatchObject({ document: null, anchor: "inbox-item-loose-1" });
   });
 
   it("puts an action it does not know with the notes", () => {
@@ -241,6 +242,8 @@ describe("needs you series rows", () => {
     expect(rows[2]?.question).toBe("Might be a bill");
     expect(rows[3]?.question).toBe("Might be a subscription");
     expect(rows.every((row) => row.document === null)).toBe(true);
+    // Each row opens the Inbox at its series' card.
+    expect(rows.map((row) => row.anchor)).toEqual(["inbox-series-s-old", "inbox-series-s-tv", "inbox-series-s-many", "inbox-series-s-few"]);
   });
 
   it("says each change and each guess in the words of the Inbox's card", () => {

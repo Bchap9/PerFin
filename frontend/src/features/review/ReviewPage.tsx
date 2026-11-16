@@ -38,6 +38,7 @@ import {
   SettledCard,
   SettledLine,
 } from "./DocumentCard";
+import { itemAnchor } from "../inbox/order";
 
 export { DocumentLine, ExplanationBlock } from "./DocumentCard";
 
@@ -104,7 +105,7 @@ function useCardEntries(documentId: string | null, sort: CardSort | undefined): 
       }
       entries.push({
         key: card.action_item_id,
-        documentId: card.document.id,
+        anchor: documentAnchor(card.document.id),
         node: (
           <div className="review-entry">
             {card.open === 0 && seen.has(card.document.id) ? (
@@ -121,13 +122,13 @@ function useCardEntries(documentId: string | null, sort: CardSort | undefined): 
     for (const entry of settled) {
       entries.splice(Math.min(entry.place, entries.length), 0, {
         key: `settled-${entry.document.id}`,
-        documentId: entry.document.id,
+        anchor: documentAnchor(entry.document.id),
         node: <SettledCard document={entry.document} />,
       });
     }
     if (documentId === null) {
       for (const item of sorted.loose) {
-        entries.push({ key: item.id, node: <LooseCard item={item} /> });
+        entries.push({ key: item.id, anchor: itemAnchor(item.id), node: <LooseCard item={item} /> });
       }
     }
   }
@@ -137,8 +138,11 @@ function useCardEntries(documentId: string | null, sort: CardSort | undefined): 
 /** One entry of the card list. */
 interface Entry {
   key: string;
-  /** The document of the card, so an upload row can point at it (`#inbox-document-<id>`). */
-  documentId?: string;
+  /**
+   * The card's anchor, so an upload row or a Home row can point at it
+   * (`#inbox-document-<id>`, `#inbox-item-<id>`).
+   */
+  anchor: string;
   node: ReactNode;
 }
 
@@ -175,11 +179,7 @@ export function ReviewCardList({
   return (
     <ul className="review-list" aria-label={label}>
       {entries.map((entry) => (
-        <li
-          key={entry.key}
-          id={entry.documentId === undefined ? undefined : documentAnchor(entry.documentId)}
-          className="review-list__item"
-        >
+        <li key={entry.key} id={entry.anchor} tabIndex={-1} className="review-list__item">
           {entry.node}
         </li>
       ))}

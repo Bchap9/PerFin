@@ -16,7 +16,7 @@ import {
   subtractAmounts,
   sumAmounts,
 } from "../../lib/money";
-import { orderCards, subscriptionCards } from "../inbox/order";
+import { itemAnchor, orderCards, seriesAnchor, subscriptionCards } from "../inbox/order";
 import { changeText, guessText } from "../inbox/words";
 import type { Subscription, SubscriptionEvent } from "../subscriptions/api";
 import type { Transaction } from "../transactions/api";
@@ -323,6 +323,8 @@ export interface NeedsYouRow {
   question: string;
   /** The document the row opens on the Inbox; `null` for an item of no document. */
   document: string | null;
+  /** The anchor of the row's card on the Inbox, when `document` cannot open it (`inbox/order.ts`). */
+  anchor: string | null;
 }
 
 /** Document cards in the Inbox's order (`inbox/order.ts`), then the loose items. */
@@ -336,12 +338,14 @@ export function needsYouRows(
       title: card.document.original_filename ?? "A document with no name",
       question: QUESTIONS.get(card.action) ?? "Something to note",
       document: card.document.id,
+      anchor: null,
     })),
     ...loose.map((item) => ({
       id: item.id,
       title: "An item of no document",
       question: LOOSE_QUESTIONS.get(item.kind) ?? "Something to check",
       document: null,
+      anchor: itemAnchor(item.id),
     })),
   ];
 }
@@ -371,6 +375,7 @@ export function needsYouSeriesRows(suggested: readonly SeriesWords[], changes: r
       title: entry.name,
       question: newest === undefined ? guess : `${changeText(newest)}${more}`,
       document: null,
+      anchor: seriesAnchor(entry.id),
     };
   });
 }

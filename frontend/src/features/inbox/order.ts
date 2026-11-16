@@ -110,3 +110,16 @@ export function subscriptionCards<Series extends OrderedSeries = Subscription, C
     .sort((a, b) => (b.series?.occurrences ?? 0) - (a.series?.occurrences ?? 0));
   return [...changed, ...quiet];
 }
+
+/**
+ * The anchors of the Inbox cards that `?document=` cannot open: an item of no
+ * document and a subscription series. Home's Needs you rows link to
+ * `/inbox#<anchor>`, and the Inbox focuses that card once it has loaded.
+ */
+export function itemAnchor(itemId: string): string {
+  return `inbox-item-${itemId}`;
+}
+
+export function seriesAnchor(seriesId: string): string {
+  return `inbox-series-${seriesId}`;
+}

@@ -194,7 +194,12 @@ export function NeedsYouPanel() {
           <ul className="home-rows" aria-label="What needs you">
             {rows.map((row) => (
               <li key={row.id}>
-                <Link className="home-row" to="/inbox" search={row.document === null ? {} : { document: row.document }}>
+                <Link
+                  className="home-row"
+                  to="/inbox"
+                  search={row.document === null ? {} : { document: row.document }}
+                  {...(row.anchor === null ? {} : { hash: row.anchor })}
+                >
                   <span className="home-row__main">
                     <span className="home-row__title">{row.title}</span>
                     <span className="home-row__sub">{row.question}</span>

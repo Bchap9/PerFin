@@ -662,8 +662,11 @@ Every page test file has a `has no axe violations` case for its main
 state (`expectNoAxeViolations` from `src/test/axe.ts`, which runs
 `axe-core` with colour contrast off, since jsdom computes no colours), and
 every page has exactly one `h1`. `src/app/routeAudit.test.tsx` renders every
-route in the route map and checks the heading, the one `h1` and axe in both
-themes. Tests address pages by their current path (an old path still
+route in the route map and checks the heading, the one `h1` and axe under
+each `data-theme` (structure only; the contrast of each theme is
+`app/styles/contrast.test.ts`), plus a few tab states the generated fixture
+never reaches (the account hub as a mortgage, an asset and a brokerage
+account; the other Reports views). Tests address pages by their current path (an old path still
 redirects, but a test of the page uses the new one) and query by role and
 accessible name.
 

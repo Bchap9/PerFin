@@ -12,13 +12,15 @@
  *
  * The cards that need an answer are one list, as many as
  * `GET /inbox/summary` counts. `?document=<id>` shows only that document's
- * card. An answered card stays until the page is left, saying what happened.
+ * card; `#<anchor>` (`inbox-item-<id>`, `inbox-series-<id>`,
+ * `inbox-document-<id>`) shows everything and focuses that card once it has
+ * loaded. An answered card stays until the page is left, saying what happened.
  */
 import "./inbox.css";
 
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { Link, useLocation, useSearch } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
@@ -41,7 +43,7 @@ import {
 import { bulkAction, useCategories, useCategorisationSummary } from "../transactions/api";
 import { inboxPageKeys, listRuleOffers, listSuggestedRows, listSuggestedSeries } from "./api";
 import { RuleOfferCard, SubscriptionCard, SuggestionsCard, type MerchantGroup } from "./cards";
-import { orderCards, subscriptionCards } from "./order";
+import { orderCards, seriesAnchor, subscriptionCards } from "./order";
 import { RecentImports } from "./RecentImports";
 import { UploadZone } from "./UploadZone";
 
@@ -99,6 +101,31 @@ function documentParam(search: Record<string, unknown>): string | null {
   return typeof given === "string" && given !== "" ? given : null;
 }
 
+/**
+ * Focuses the card the address's hash names, once, when it appears: the cards
+ * load after the page, so the router's own scroll to the hash finds nothing.
+ */
+function useFocusHashCard(): void {
+  const hash = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
+  const done = useRef("");
+  useEffect(() => {
+    if (!hash.startsWith("inbox-") || done.current === hash) {
+      return;
+    }
+    const target = document.getElementById(hash);
+    if (target === null) {
+      return;
+    }
+    done.current = hash;
+    // jsdom has no scrollIntoView; browsers do.
+    const scrollable: { scrollIntoView?: unknown } = target;
+    if (typeof scrollable.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "start" });
+    }
+    target.focus({ preventScroll: true });
+  });
+}
+
 export function InboxPage() {
   const search: Record<string, unknown> = useSearch({ strict: false });
   const documentId = documentParam(search);
@@ -108,6 +135,7 @@ export function InboxPage() {
   const mayWrite = role !== undefined && role !== "viewer";
   const accounts = useAccounts();
   const summary = useInboxSummary();
+  useFocusHashCard();
 
   const cards = useQuery({ queryKey: reviewKeys.cards(), queryFn: () => listReviewCards() });
   const suggestedSeries = useQuery({
@@ -189,7 +217,7 @@ export function InboxPage() {
     ...series.map((entry) => {
       const account = entry.series === null ? undefined : accountById.get(entry.series.account_id);
       return (
-        <li key={`series-${entry.id}`} className="review-list__item">
+        <li key={`series-${entry.id}`} id={seriesAnchor(entry.id)} tabIndex={-1} className="review-list__item">
           <SubscriptionCard
             entry={entry}
             canDecide={mayWrite && account?.can_edit !== false}

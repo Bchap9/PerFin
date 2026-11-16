@@ -35,8 +35,8 @@ Home is one fixed page. Nothing on it can be hidden or moved.
 - **Net worth**: the figure, its change since the start of the month, a
   12-month line and a link to Accounts.
 - **Needs you**: the first three Inbox cards, one line each, and a line for
-  transactions that have no category or a suggestion. "Open Inbox" goes to
-  the rest.
+  transactions that have no category or a suggestion. Each card's line
+  opens the Inbox at that card. "Open Inbox" goes to the rest.
 - **Spending this month**: the month so far, compared with the same day of
   last month, and the largest categories.
 - **Coming up**: the next charges in 30 days, from your subscriptions and

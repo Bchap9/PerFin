@@ -103,8 +103,10 @@ migration, no new setting, no new container, nothing new leaves the host
   account. It does not search transactions.
 - **Light and dark.** The theme toggle cycles System, Light and Dark and
   says which is chosen; System follows the device. Every text and control
-  colour meets WCAG 2.2 AA contrast in both themes, a test checks each
-  pair, and every page is checked with axe in both.
+  colour meets WCAG 2.2 AA contrast in both themes, and a test checks each
+  token pair in each theme. Every page is also checked with axe for
+  structure (names, roles, landmarks); axe cannot measure contrast in the
+  test runner, so the token test is the contrast check.
 - **A phone layout.** Under 820 px the rail becomes a top bar and a bottom
   bar with the six sections, Settings moves into the account menu, the
   drawer fills the screen and panels stack. Under 720 px lists switch to

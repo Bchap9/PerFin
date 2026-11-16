@@ -286,8 +286,8 @@ describe("Home", () => {
     const links = within(list).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/inbox?document=d-money",
-      "/inbox",
-      "/inbox",
+      "/inbox#inbox-series-s-stream",
+      "/inbox#inbox-series-s-gym",
       "/transactions?category=none",
     ]);
     expect(links[1]).toHaveTextContent("Streamly Plus");
@@ -322,7 +322,7 @@ describe("Home", () => {
     const links = within(list).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/inbox?document=d-import",
-      "/inbox",
+      "/inbox#inbox-item-l-dup",
       "/transactions?category=none",
     ]);
     expect(links[1]).toHaveTextContent("An item of no document");

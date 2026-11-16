@@ -404,15 +404,54 @@ describe("Inbox, Needs you", () => {
     await within(list).findByText("Lumen Streaming");
     const homeRows = within(list).getAllByRole("link");
     expect(homeRows).toHaveLength(3);
-    expect(homeRows.map((row) => row.getAttribute("href"))).toEqual(["/inbox?document=d-2", "/inbox", "/inbox"]);
+    const hrefs = homeRows.map((row) => row.getAttribute("href") ?? "");
+    // Each row links to its own card: a document by `?document=`, the others by their card's anchor.
+    expect(hrefs).toEqual(["/inbox?document=d-2", "/inbox#inbox-item-r-loose", "/inbox#inbox-series-s-1"]);
 
     await user.click(element(rail));
     expect(await screen.findByRole("link", { name: "Needs you, 3" })).toBeInTheDocument();
     const entries = await waitingCards();
+    await within(element(entries[2])).findByRole("heading", { name: "Lumen Streaming" });
     expect(entries).toHaveLength(3);
-    // The same cards in the same order as Home's rows.
+    // The same cards in the same order as Home's rows, every one of them.
+    const cardOf = (href: string): string => {
+      const url = new URL(href, "http://perfin.test");
+      const documentId = url.searchParams.get("document");
+      return documentId === null ? url.hash.slice(1) : `inbox-document-${documentId}`;
+    };
+    expect(entries.map((entry) => entry.id)).toEqual(hrefs.map(cardOf));
     expect(within(element(entries[0])).getByRole("link", { name: "maple-card-october.csv" })).toBeInTheDocument();
-    expect(within(element(entries[2])).getByRole("heading", { name: "Lumen Streaming" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Lumen Streaming", /^Lumen Streaming/, "inbox-series-s-1"],
+    ["An item of no document", /^An item of no document/, "inbox-item-r-loose"],
+  ])("Home's %s row opens the Inbox at its card", async (_title, name, anchor) => {
+    // jsdom has no scrollIntoView; the router and the Inbox call it in a browser.
+    const scrolled: string[] = [];
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value(this: Element) {
+        scrolled.push(this.id);
+      },
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    });
+    inboxApi({ cards: [MONEY_NEW], loose: [LOOSE], suggested: [SUGGESTED] });
+    renderApp("/");
+    const user = userEvent.setup();
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    const list = await within(panel).findByRole("list", { name: "What needs you" });
+    // The series row comes last, once every row has loaded.
+    await within(list).findByText("Lumen Streaming");
+    await user.click(within(list).getByRole("link", { name }));
+    // The card is focused once it has loaded, so a person lands on it, not at the top of the Inbox.
+    await waitFor(() => {
+      expect(window.document.activeElement?.id).toBe(anchor);
+    });
+    expect(window.document.activeElement?.closest("ul")).toHaveAccessibleName("Waiting on you");
+    expect(scrolled).toContain(anchor);
   });
 
   it("?document= shows one card", async () => {

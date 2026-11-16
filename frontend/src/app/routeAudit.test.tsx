@@ -346,6 +346,79 @@ describe.each(NEW_ROUTES.map((route) => [route]))("%s", (route) => {
   });
 });
 
+/** The first item of a generated list body replaced by `patch`, keeping the body's shape. */
+function patchFirst(body: unknown, patch: Record<string, unknown>): unknown {
+  if (Array.isArray(body)) {
+    const rows: unknown[] = body;
+    return rows.map((row, index) => (index === 0 ? { ...(row as object), ...patch } : row));
+  }
+  const items = (body as { items?: unknown[] }).items;
+  return items === undefined ? { ...(body as object), ...patch } : { ...(body as object), items: patchFirst(items, patch) };
+}
+
+/** The account fixture as another type, in the list and on its own. */
+function accountAs(type: string): Record<string, Handler> {
+  return {
+    "GET /api/v1/accounts": () => json(patchFirst(declaredBody("/api/v1/accounts"), { type })),
+    "GET /api/v1/accounts/:account_id": () => json(patchFirst(declaredBody("/api/v1/accounts/{account_id}"), { type })),
+  };
+}
+
+/**
+ * Page states the generated fixture never reaches, because it takes the first
+ * value of every enum (a checking account) and each page's default tab: the
+ * account hub's loan, asset and investment tabs, and the other Reports views.
+ */
+const VARIANTS: [address: string, tab: string, overrides: Record<string, Handler>][] = [
+  ["/accounts/a-1?tab=schedule", "Schedule", accountAs("mortgage")],
+  ["/accounts/a-1?tab=valuations", "Valuations", accountAs("manual_asset")],
+  ["/accounts/a-1?tab=holdings", "Holdings", accountAs("brokerage")],
+  ["/reports?tab=income", "Income", {}],
+  ["/reports?tab=cashflow", "Cash flow", {}],
+];
+
+describe.each(VARIANTS)("%s", (address, tab, overrides) => {
+  async function openVariant() {
+    const api = mockApi({
+      ...Object.fromEntries(declaredHandlers()),
+      ...OVERRIDES,
+      ...overrides,
+      "GET /api/v1/auth/session": authedSession(OWNER),
+    });
+    const view = renderApp(address);
+    await screen.findAllByRole("heading", { level: 1 }, { timeout: 5000 });
+    await waitFor(() => {
+      expect(view.queryClient.isFetching()).toBe(0);
+      expect(document.querySelector("[aria-busy='true'], .spinner")).toBeNull();
+    });
+    return { ...view, api };
+  }
+
+  it("opens on its tab, with exactly one h1", async () => {
+    const { api } = await openVariant();
+    // The tab shows its row, not an error or a "missing" panel.
+    expect(await unanswered(api)).toEqual([]);
+    expect(
+      screen
+        .queryAllByRole("alert")
+        .map((alert) => alert.textContent)
+        .filter((text) => text !== ""),
+    ).toEqual([]);
+    expect(document.querySelector(".empty-state")?.textContent ?? null).toBeNull();
+    // The hub's tabs are a tab list; the Reports views are the section's tab bar of links.
+    const chosen =
+      screen.queryByRole("tab", { name: tab, selected: true }) ??
+      screen.queryAllByRole("link", { name: tab }).find((link) => link.getAttribute("aria-current") === "page");
+    expect(chosen).toBeDefined();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "Something went wrong" })).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    await openVariant();
+    await expectNoAxeViolations(document.documentElement);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Keyboard journeys (spec section 8). Hidden elements stay tabbable in jsdom
@@ -516,6 +589,12 @@ function stubPhoneWidth(): void {
   );
 }
 
+// The shell's phone layout is CSS only: RootLayout reads no media query, so the
+// matchMedia stub below changes nothing it renders (only the theme and the
+// subscription pages read matchMedia). The phone-specific checks here are the
+// rules read from layout.css under (max-width: 819px); the DOM assertions hold
+// at any width. Real widths, and horizontal scroll at 360 px, are checked by
+// hand in a browser (plan Task 25); jsdom does no layout.
 describe("phone width", () => {
   it("the bottom bar holds the six sections, and the account menu holds Settings", async () => {
     stubPhoneWidth();
