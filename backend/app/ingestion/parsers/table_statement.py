@@ -167,7 +167,9 @@ are read the same way:
    may have been a row's wrapped text, and the lines after it rows.
    Figures by day under it have no words and are not counted, and neither
    is a dated balance line (``01/31 | Ending Balance | 405.50``: a summary
-   grid printed under the table).
+   grid printed under the table), also with more of the grid beside it
+   (``06/01 | Beginning Balance | 159.63 | Minimum Balance | 94.70``: the
+   label stands in a cell of its own with its figure in the next).
    **Sections without a header.** A section title outside any table
    (before the first header, or after a line of heading words ended the
    table) opens a section whose rows are read from their own shape
@@ -2903,14 +2905,36 @@ class TableStatementParser(DocumentParser):
         it starts with a date, its last cell is an amount and it has words
         (figures by day have none), and what follows the date is no balance
         label (``04/30 | Ending Balance | 1,200.00``: a line of the summary;
-        ``New Balance Outlet 114`` is a payee)."""
+        ``New Balance Outlet 114`` is a payee). A balance label in a cell of
+        its own with its figure in the next one is a line of the summary
+        whatever else the line prints (``06/01 | Beginning Balance | 159.63
+        | Minimum Balance | 94.70``: a grid of labels and values)."""
         if not (self._date_led_amount(line) and self._worded(line)):
             return False
         described = self._after_date(line.text)
         labels = (*self.opening_labels, *self.closing_labels)
-        return not any(
+        if any(
             described.startswith(label) and self._label_only(described[len(label) :])
             for label in labels
+        ):
+            return False
+        worded = next(
+            (
+                at
+                for at, cell in enumerate(line.cells)
+                if any(ch.isalpha() for ch in cell.text)
+                and not self._date_shaped(cell.text.strip(_DATE_MARKS))
+            ),
+            None,
+        )
+        if worded is None or worded + 1 >= len(line.cells):
+            return True
+        norm = normalise(line.cells[worded].text)
+        return not (
+            read_amount(line.cells[worded + 1].text) is not None
+            and any(
+                norm.startswith(label) and self._label_only(norm[len(label) :]) for label in labels
+            )
         )
 
     def _after_date(self, text: str) -> str:

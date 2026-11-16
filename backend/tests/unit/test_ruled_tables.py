@@ -170,6 +170,15 @@ def test_lines_under_a_header_we_do_not_read_are_counted() -> None:
             # A balance line is the summary's, figures by day have no words,
             # a line without a date is no row: none of them is counted.
             [("01/31/2026", 62.0), ("Ending Balance", 150.0), ("1,200.00", 300.0)],
+            # The same with more of the summary beside it (a grid of labels
+            # and values): the label has its figure right after it.
+            [
+                ("01/01/2026", 62.0),
+                ("Beginning Balance", 150.0),
+                ("1,150.00", 300.0),
+                ("Minimum Balance", 350.0),
+                ("94.70", 440.0),
+            ],
             [("01/07/2026", 62.0), ("1,192.50", 300.0)],
             [("Thank you for banking with us", 62.0), ("0.00", 300.0)],
         ]

@@ -942,7 +942,8 @@ a child answering with parser output is `bad_output`.
     outside any (`Date |
     Balance`; figures by day under it have no words and are not counted,
     and neither is a dated balance line of a summary grid printed under
-    the table); each group of a table printed across the page that
+    the table, with or without another label and its value beside it);
+    each group of a table printed across the page that
     prints a date or a figure and reads no row
     (`table_across_unread:<n>`); a dated line whose amount was looked
     for under it and not found; the undated lines with a figure of a
