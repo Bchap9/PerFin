@@ -88,6 +88,40 @@ def test_a_tombstone_of_another_account_does_not_apply(
     assert (result.exact, result.near, result.new) == ([], {}, [0, 1, 2])
 
 
+RESPELLED = [HashInput(row.posted_date, row.amount, f"{row.raw_payee} POS 0042") for row in ROWS]
+
+
+def test_a_deleted_row_spelled_another_way_is_held(
+    factories: Factories, ledger: LedgerFactories
+) -> None:
+    """The same month from another file: the tombstone's date and amount are
+    read, and the row it fits waits instead of coming back as new."""
+    household = factories.household()
+    account = ledger.account(household.id, name="Everyday")
+    _tombstone(factories, household.id, account, assign_import_hashes(account.id, ROWS)[1])
+    with factories.transaction() as db:
+        set_context(db, household.id)
+        result = dedupe(db, household.id, account.id, RESPELLED)
+    assert result.removed == []
+    # One tombstone, one row held; its twin and the other purchase are new.
+    assert result.near == {0: []}
+    assert result.resembles_removed == [0]
+    assert result.new == [1, 2]
+
+
+def test_a_respelled_row_is_not_held_for_another_accounts_tombstone(
+    factories: Factories, ledger: LedgerFactories
+) -> None:
+    household = factories.household()
+    account = ledger.account(household.id, name="Everyday")
+    other = ledger.account(household.id, name="Rainy day")
+    _tombstone(factories, household.id, other, assign_import_hashes(account.id, ROWS)[1])
+    with factories.transaction() as db:
+        set_context(db, household.id)
+        result = dedupe(db, household.id, account.id, RESPELLED)
+    assert (result.near, result.resembles_removed, result.new) == ({}, [], [0, 1, 2])
+
+
 # ---------------------------------------------------------------------------
 # The account of a statement that prints no digits
 # ---------------------------------------------------------------------------
@@ -163,6 +197,62 @@ def test_card_statement_does_not_land_on_the_checking_account(
     either = _match(factories, household.id, last4=None, institution_id=bank.id)
     assert either.account_id is None
     assert set(either.candidates) == {checking.id, card.id}
+
+
+@pytest.mark.parametrize("liability", [None, False])
+@pytest.mark.parametrize("kind", [AccountType.BROKERAGE, AccountType.RETIREMENT])
+def test_bank_statement_does_not_land_on_the_sole_investment_account(
+    factories: Factories, ledger: LedgerFactories, kind: AccountType, liability: bool | None
+) -> None:
+    household = factories.household()
+    bank = ledger.institution(household.id, name="Larkspur Mutual")
+    invest = ledger.account(household.id, type=kind, name="Long term", institution_id=bank.id)
+    result = _match(
+        factories, household.id, last4=None, institution_id=bank.id, liability=liability
+    )
+    # Named for a person to choose, never chosen.
+    assert result == AccountMatch(None, (invest.id,))
+
+
+@pytest.mark.parametrize(
+    "kind", [AccountType.LOAN, AccountType.MORTGAGE, AccountType.LINE_OF_CREDIT]
+)
+def test_card_statement_does_not_land_on_the_sole_loan(
+    factories: Factories, ledger: LedgerFactories, kind: AccountType
+) -> None:
+    household = factories.household()
+    bank = ledger.institution(household.id, name="Larkspur Mutual")
+    loan = ledger.account(household.id, type=kind, name="Borrowed", institution_id=bank.id)
+    result = _match(factories, household.id, last4=None, institution_id=bank.id, liability=True)
+    assert result == AccountMatch(None, (loan.id,))
+    assert _match(factories, household.id, last4=None, institution_id=bank.id) == result
+
+
+def test_side_unknown_never_chooses_a_card(factories: Factories, ledger: LedgerFactories) -> None:
+    household = factories.household()
+    bank = ledger.institution(household.id, name="Larkspur Mutual")
+    card = ledger.account(
+        household.id, type=AccountType.CREDIT_CARD, name="Card", institution_id=bank.id
+    )
+    args = {"last4": None, "institution_id": bank.id}
+    assert _match(factories, household.id, **args) == AccountMatch(None, (card.id,))
+    # Known to be a card statement, it is the match.
+    owed = _match(factories, household.id, liability=True, **args)
+    assert owed == AccountMatch(card.id, (card.id,), by="institution")
+
+
+def test_an_account_of_another_kind_beside_it_leaves_candidates_only(
+    factories: Factories, ledger: LedgerFactories
+) -> None:
+    household = factories.household()
+    bank = ledger.institution(household.id, name="Larkspur Mutual")
+    checking = ledger.account(household.id, name="Everyday", institution_id=bank.id)
+    invest = ledger.account(
+        household.id, type=AccountType.BROKERAGE, name="Long term", institution_id=bank.id
+    )
+    result = _match(factories, household.id, last4=None, institution_id=bank.id, liability=False)
+    assert result.account_id is None
+    assert set(result.candidates) == {checking.id, invest.id}
 
 
 def test_digits_that_match_nothing_do_not_fall_back(

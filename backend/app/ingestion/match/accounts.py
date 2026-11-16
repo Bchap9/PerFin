@@ -14,7 +14,13 @@ statements mask the whole number) is matched by its institution instead: the
 one open account of the household at ``institution_id``, on the statement's
 side of the balance sheet when the caller knows it (``liability``: a card
 statement never lands on the checking account of the same bank). Several
-such accounts are candidates and none is chosen. Digits that are printed and
+such accounts are candidates and none is chosen. Nor is a sole account of a
+kind that cannot hold the statement (:data:`INSTITUTION_MATCH_TYPES`): a
+bank statement is put on a checking or savings account and a card statement
+on a credit card, never on a brokerage, retirement, loan, mortgage, line of
+credit or manual account that happens to be the only one there; with the
+side unknown only a checking or savings account is chosen. Such an account
+is still named as a candidate, for a person to choose. Digits that are printed and
 match no account never fall back to the institution: a number the household
 does not have is a new account, not the old one. :attr:`AccountMatch.by` says
 which of the two a match went by.
@@ -45,8 +51,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import AccountGrant, GrantLevel, HouseholdMember, HouseholdRole
-from app.domain.accounts.models import LIABILITY_TYPES, Account, Institution
+from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, Institution
 from app.ingestion.match.institutions import pick
+
+#: The account types a statement without digits may be put on by its
+#: institution alone, by the ``liability`` side the caller names (module doc).
+INSTITUTION_MATCH_TYPES: dict[bool | None, frozenset[AccountType]] = {
+    True: frozenset({AccountType.CREDIT_CARD}),
+    False: frozenset({AccountType.CHECKING, AccountType.SAVINGS}),
+    None: frozenset({AccountType.CHECKING, AccountType.SAVINGS}),
+}
 
 
 @dataclass(frozen=True)
@@ -101,7 +115,8 @@ def match_account(
     """The account with ``last4`` (and ``institution`` to break ties), if exactly one.
 
     Without ``last4``: the one open account at ``institution_id``, on the
-    ``liability`` side when that is given (module doc).
+    ``liability`` side when that is given, if it is of a kind that holds
+    such a statement (module doc).
     """
     if not last4:
         return _sole_account_of(db, household_id, institution_id, liability, allowed)
@@ -141,7 +156,8 @@ def _sole_account_of(
 ) -> AccountMatch:
     """The match of a statement without digits: the one open account of the
     household at ``institution_id`` (on the ``liability`` side, by type, when
-    given) among ``allowed``; several are candidates only."""
+    given) among ``allowed``; several are candidates only, and so is one of
+    a type outside :data:`INSTITUTION_MATCH_TYPES` for that side."""
     if institution_id is None:
         return AccountMatch(None)
     query = (
@@ -153,13 +169,14 @@ def _sole_account_of(
         )
         .order_by(Account.id)
     )
-    candidates = tuple(
-        account_id
+    found = [
+        (account_id, account_type)
         for account_id, account_type in db.execute(query)
         if (allowed is None or account_id in allowed)
         and (liability is None or (account_type in LIABILITY_TYPES) is liability)
-    )
-    if len(candidates) == 1:
+    ]
+    candidates = tuple(account_id for account_id, _ in found)
+    if len(found) == 1 and found[0][1] in INSTITUTION_MATCH_TYPES[liability]:
         return AccountMatch(candidates[0], candidates, by="institution")
     return AccountMatch(None, candidates)
 
