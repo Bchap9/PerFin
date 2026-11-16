@@ -1239,7 +1239,9 @@ def test_confirmed_wording_is_remembered_and_nothing_else_of_the_statement(
     assert set(stored) == {"layout", "kind", "phrase", "meaning", "learned_at", "document_id"}
     account = stmt.accounts[0]
     private = [account.number, account.number[-4:], str(abs(row.amount)), row.symbol or ""]
-    assert not any(value and value in json.dumps(kept) for value in private)
+    # The random id and the timestamp can hold any four digits by chance.
+    worded = json.dumps({k: v for k, v in stored.items() if k not in {"document_id", "learned_at"}})
+    assert not any(value and value in worded for value in private)
     (added,) = _audits(env, "learned_wording.add")
     assert (added["layout"], added["count"]) == ("fidelity-investments-statement", 1)
     assert "periodic" not in json.dumps(added)
