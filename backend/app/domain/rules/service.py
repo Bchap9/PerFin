@@ -37,6 +37,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ValidationError
@@ -110,6 +111,10 @@ TEST_SCAN_MAX: Final = 5000
 BATCH: Final = 500
 #: Transaction ids listed in one audit row or event at most.
 IDS_IN_RECORD_MAX: Final = 100
+#: ``transaction.category_source`` of a category a rule set.
+RULE_SOURCE: Final = "rule"
+#: ``transaction.category_source`` of a category a person chose: never a rule job's to change.
+PERSON_SOURCE: Final = "person"
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +563,7 @@ def transaction_facts(
             ),
             tag_ids=frozenset(tags.get(row.id, [])),
             review_state=row.review_state,
+            merchant_key=row.merchant_key,
         )
         for row in rows
     ]
@@ -718,7 +724,13 @@ class ApplySummary:
 
 
 def write_outcome(db: Session, row: Transaction, outcome: Outcome) -> bool:
-    """Apply ``outcome`` to ``row`` (and its splits and tags); True when it changed."""
+    """Apply ``outcome`` to ``row`` (and its splits and tags); True when it changed.
+
+    A changed categorisation is recorded as the rule's: ``category_source =
+    "rule"`` at full confidence with the deciding rule's id, and a pending
+    suggestion is dropped. ``updated_at`` moves (a rule's write is a change
+    to the row; the importer equalises its new rows afterwards).
+    """
     changed = outcome.changed
     if not changed:
         return False
@@ -743,6 +755,10 @@ def write_outcome(db: Session, row: Transaction, outcome: Outcome) -> bool:
             if outcome.before.splits:
                 tx_repo.replace_splits(db, row, [])
             row.category_id = after.category_id
+        row.category_source = RULE_SOURCE
+        row.category_confidence = Decimal(1)
+        row.category_rule_id = outcome.category_rule
+        row.suggested_category_id = None
     if RuleField.PAYEE in changed:
         row.payee_id = after.payee_id
     if RuleField.NOTES in changed:
@@ -764,10 +780,27 @@ def _apply_batch(
     *,
     payee_names: Mapping[uuid.UUID, str],
     protect: Iterable[RuleField] = (),
+    respect_people: bool = False,
 ) -> None:
+    """Evaluate and write one batch.
+
+    ``respect_people``: a row whose category a person chose (or cleared, or
+    split) is evaluated with its categorisation protected, so a rule can
+    still tag it, flag it or name its payee but never re-categorise it.
+    """
     facts = transaction_facts(db, household_id, rows)
-    outcomes = engine.evaluate_many(rules, facts, payee_names=payee_names, protect=protect)
-    for row, outcome in zip(rows, outcomes, strict=True):
+    ordered = engine.order_rules(rules)
+    guarded = frozenset(protect)
+    by_hand = guarded | {RuleField.CATEGORIZATION}
+    for row, fact in zip(rows, facts, strict=True):
+        person = respect_people and row.category_source == PERSON_SOURCE
+        outcome = engine.evaluate(
+            ordered,
+            fact,
+            payee_names=payee_names,
+            protect=by_hand if person else guarded,
+            ordered=True,
+        )
         summary.scanned += 1
         if not outcome.matched:
             continue
@@ -905,7 +938,10 @@ def run_rules(
     """The ``run_rules`` job: re-apply the rules over existing transactions.
 
     Runs as the system over the whole household (an owner or admin asked
-    for it), newest first, in locked batches of :data:`BATCH`.
+    for it), newest first, in locked batches of :data:`BATCH`. The category
+    of a row a person decided (``category_source = "person"``) is never
+    changed; every other field of such a row, and every other row, is the
+    rules' to write as before.
     """
     summary = ApplySummary()
     rules = compiled_rules(
@@ -928,7 +964,9 @@ def run_rules(
         batch = rules_repo.transactions_after(db, clauses, after=after, limit=BATCH, lock=True)
         if not batch:
             break
-        _apply_batch(db, household_id, rules, batch, summary, payee_names=names)
+        _apply_batch(
+            db, household_id, rules, batch, summary, payee_names=names, respect_people=True
+        )
         after = (batch[-1].posted_date, batch[-1].id)
         if len(batch) < BATCH:
             break

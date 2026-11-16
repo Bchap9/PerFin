@@ -22,11 +22,17 @@ the order the rules are passed in):
    * ``add_tags`` accumulates (a union); ``flag_for_review`` moves
      ``review_state`` from ``none`` to ``pending`` (a confirmed or already
      pending transaction is left as it is);
-   * fields in ``protect`` (what a person just entered by hand) are never
-     written; the action is reported as skipped.
+   * fields in ``protect`` (what a person just entered by hand, or a
+     category a person chose earlier) are never written; the action is
+     reported as skipped.
 
 4. A matching rule with ``stop_processing`` ends the run (first-match mode
    for that rule); otherwise later rules are evaluated too (all-matches).
+
+A ``merchant`` condition compares the transaction's stored merchant key with
+the rule's, whole and exactly: no folding, no prefix, and a transaction with
+no key matches none. :attr:`Outcome.category_rule` names the rule whose
+action produced the final categorisation, when the run changed it.
 
 Text matching folds both sides (NFKC, case folding, whitespace runs to one
 space, trimmed). ``glob`` supports ``*`` and ``?`` only and is matched by
@@ -64,6 +70,7 @@ from app.domain.rules.schemas import (
     DateCondition,
     FlagForReviewAction,
     MemoCondition,
+    MerchantCondition,
     NotCondition,
     PayeeCondition,
     PayeeIsCondition,
@@ -118,6 +125,8 @@ class TxnFacts:
     splits: tuple[SplitLine, ...] = ()
     tag_ids: frozenset[uuid.UUID] = frozenset()
     review_state: ReviewState = ReviewState.NONE
+    #: Who was paid (``transaction.merchant_key``); ``None`` when unknown.
+    merchant_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +152,9 @@ class Outcome:
     after: TxnFacts
     matched: tuple[uuid.UUID, ...] = ()
     skipped: tuple[Skipped, ...] = ()
+    #: The rule whose action set the final categorisation (category or
+    #: splits); ``None`` when no rule changed it.
+    category_rule: uuid.UUID | None = None
 
     @property
     def added_tags(self) -> frozenset[uuid.UUID]:
@@ -284,6 +296,8 @@ def matches(condition: Condition, txn: TxnFacts) -> bool:
             )
         case MemoCondition():
             return text_matches(condition.op, condition.value, txn.memo)
+        case MerchantCondition():
+            return txn.merchant_key is not None and txn.merchant_key == condition.key
         case PayeeIsCondition():
             return txn.payee_id is not None and txn.payee_id in condition.payee_ids
         case AmountCondition():
@@ -452,7 +466,15 @@ def evaluate(
             run.apply(rule, action)
         if rule.stop_processing:
             break
-    return Outcome(before=txn, after=run.state, matched=tuple(matched), skipped=tuple(run.skipped))
+    after = run.state
+    decided = (txn.category_id, txn.splits) != (after.category_id, after.splits)
+    return Outcome(
+        before=txn,
+        after=after,
+        matched=tuple(matched),
+        skipped=tuple(run.skipped),
+        category_rule=run.assigned.get(RuleField.CATEGORIZATION) if decided else None,
+    )
 
 
 def evaluate_many(

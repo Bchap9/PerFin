@@ -39,6 +39,7 @@ from app.domain.rules.schemas import (
     DateCondition,
     FlagForReviewAction,
     MemoCondition,
+    MerchantCondition,
     NotCondition,
     PayeeCondition,
     PayeeIsCondition,
@@ -158,6 +159,73 @@ def test_category_conditions_see_splits() -> None:
     assert engine.matches(CategoryIsCondition(category_ids=[CATS[1]]), split)
     assert not engine.matches(CategoryUnsetCondition(), split)
     assert engine.matches(CategoryIsCondition(category_ids=[CATS[2]]), txn(category_id=CATS[2]))
+
+
+def test_merchant_condition_matches_the_key_only() -> None:
+    grocer = MerchantCondition(key="corner grocer")
+    assert engine.matches(grocer, txn(merchant_key="corner grocer"))
+    # The whole key: never a prefix of a longer one, never a part of it.
+    assert not engine.matches(grocer, txn(merchant_key="corner grocer deli"))
+    assert not engine.matches(grocer, txn(merchant_key="corner"))
+    assert not engine.matches(grocer, txn(merchant_key="grocer"))
+    # A row with no merchant matches no merchant rule, whatever its descriptor says.
+    assert not engine.matches(grocer, txn(merchant_key=None, raw_payee="CORNER GROCER"))
+    assert not engine.matches(grocer, txn())
+    assert engine.matches(NotCondition(condition=grocer), txn())
+    assert engine.matches(AllCondition(conditions=[grocer]), txn(merchant_key="corner grocer"))
+
+
+def test_outcome_names_the_rule_that_set_the_category() -> None:
+    first, second = uuid.UUID(int=71), uuid.UUID(int=72)
+    rules = [
+        # Matches first, but its split cannot be made: the category is still free.
+        rule(
+            EVERYTHING,
+            SplitAmountAction(
+                lines=[
+                    SplitAmountLine(category_id=CATS[0], amount=Decimal("1.00")),
+                    SplitAmountLine(category_id=CATS[1], amount=Decimal("2.00")),
+                ]
+            ),
+            order=0,
+            rule_id=first,
+        ),
+        rule(
+            MerchantCondition(key="corner coffee"),
+            SetCategoryAction(category_id=CATS[2]),
+            order=1,
+            rule_id=second,
+        ),
+        # A third rule that would also set it comes too late.
+        rule(EVERYTHING, SetCategoryAction(category_id=CATS[3]), order=2),
+    ]
+    outcome = engine.evaluate(rules, txn(merchant_key="corner coffee"))
+    assert outcome.matched[:2] == (first, second)
+    assert outcome.after.category_id == CATS[2]
+    assert outcome.category_rule == second
+
+    # The first writer is named when it is the one that wrote.
+    [only] = engine.evaluate_many(rules[1:], [txn(merchant_key="corner coffee")])
+    assert only.category_rule == second
+    # A rule that "sets" the category the row already has changed nothing.
+    same = engine.evaluate(rules[1:], txn(merchant_key="corner coffee", category_id=CATS[2]))
+    assert RuleField.CATEGORIZATION not in same.changed
+    assert same.category_rule is None
+    # A protected category names no rule either.
+    kept = engine.evaluate(
+        rules[1:], txn(merchant_key="corner coffee"), protect=[RuleField.CATEGORIZATION]
+    )
+    assert kept.after.category_id is None
+    assert kept.category_rule is None
+
+
+def test_a_rule_that_only_tags_names_no_category_rule() -> None:
+    tagger = rule(EVERYTHING, AddTagsAction(tag_ids=[TAGS[0]]), FlagForReviewAction())
+    outcome = engine.evaluate([tagger], txn(category_id=CATS[1]))
+    assert outcome.matched == (tagger.id,)
+    assert outcome.changed == {RuleField.TAGS, RuleField.REVIEW_STATE}
+    assert outcome.category_rule is None
+    assert engine.evaluate([], txn()).category_rule is None
 
 
 # ---- ordering semantics --------------------------------------------------------------
