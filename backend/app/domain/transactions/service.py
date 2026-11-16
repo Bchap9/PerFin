@@ -41,9 +41,17 @@ and a confirmed duplicate's hash lives on with the row that was kept.
 A row added for a document (``source_document_id``, a line the reader missed)
 needs a document the caller may change; it has no ``import_hash``.
 
-A new manual transaction goes through the household's rules
-(``app.domain.rules.service.apply_rules_to``) in the same database
-transaction; the category, payee, notes and tags given by hand are protected.
+A new manual transaction goes to the categorisation engine
+(``app.domain.categorisation.engine.categorise_rows``) in the same database
+transaction: it gets its merchant key, the household's rules run, and what is
+still undecided is guessed for; the category, payee, notes and tags given by
+hand are protected.
+
+A category a person sets or clears, a split they make or remove and a
+suggestion they accept are recorded as theirs (``category_source = person``,
+``engine.person_decided``), here and nowhere else: no guess, rule job or
+refresh changes that row's category afterwards, and the choice teaches the
+household's memory. Setting the category a row already has changes nothing.
 
 Reports exclude transactions whose ``review_state`` is ``pending`` unless the
 household setting ``reports.include_pending_review`` is ``true``
@@ -54,6 +62,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -201,6 +210,10 @@ def to_out(db: Session, principal: Principal, rows: Sequence[Transaction]) -> li
     """API models for ``rows`` (tags, splits and transfer legs loaded in batches)."""
     if not rows:
         return []
+    # Imported here, as everywhere in this module: the engine reaches the
+    # rules service, which imports this module.
+    from app.domain.categorisation import engine
+
     household_id = rows[0].household_id
     ids = [row.id for row in rows]
     tags = repo.tag_ids_for(db, household_id, ids)
@@ -258,6 +271,7 @@ def to_out(db: Session, principal: Principal, rows: Sequence[Transaction]) -> li
                 created_at=row.created_at,
                 updated_at=row.updated_at,
                 merchant_key=row.merchant_key,
+                merchant=engine.display_name(row.merchant_key),
                 category_source=cast("CategorySource | None", row.category_source),
                 category_confidence=(
                     None if row.category_confidence is None else f"{row.category_confidence:.2f}"
@@ -417,7 +431,12 @@ def create_transaction(
     With ``source_document_id`` the row is added for that document, which the
     caller must be allowed to change: ``404 document-not-found`` when it is
     hidden, of another household or missing, ``403`` when it is read-only.
+
+    A category given in the request is the person's choice. The row then
+    goes to the categorisation engine (:func:`_categorise_new`).
     """
+    from app.domain.categorisation import engine
+
     household_id = _household(principal)
     account = get_visible_account(db, principal, data.account_id, need="edit")
     source_document_id = _editable_document_id(db, principal, data.source_document_id)
@@ -438,6 +457,9 @@ def create_transaction(
         currency=account.currency,
         payee_id=data.payee_id,
         category_id=data.category_id,
+        # A category typed here is the person's from the first write.
+        category_source=engine.PERSON_SOURCE if data.category_id is not None else None,
+        category_confidence=engine.CERTAIN if data.category_id is not None else None,
         raw_payee=data.raw_payee,
         memo=data.memo,
         notes=data.notes,
@@ -461,7 +483,7 @@ def create_transaction(
         after=after,
         request=request,
     )
-    _apply_rules_to_new(db, principal, row, data, request=request)
+    _categorise_new(db, principal, row, data, request=request)
     return row
 
 
@@ -477,7 +499,7 @@ def _editable_document_id(
     return get_editable_document(db, principal, document_id).id
 
 
-def _apply_rules_to_new(
+def _categorise_new(
     db: Session,
     principal: Principal,
     row: Transaction,
@@ -485,13 +507,16 @@ def _apply_rules_to_new(
     *,
     request: HTTPConnection | None,
 ) -> None:
-    """Run the household's rules over a new manual transaction (rules hook).
+    """Hand a new manual transaction to the categorisation engine.
 
-    Fields the person entered by hand are protected: rules never overwrite a
-    category, payee, notes or tags given in the request.
+    The engine keys the row, runs the household's rules and guesses for what
+    is still undecided. Fields the person entered by hand are protected:
+    rules never overwrite a category, payee, notes or tags given in the
+    request, and a category given there is never guessed over. That category
+    is then recorded as the person's decision, which teaches the memory (the
+    key is known only once the engine ran).
     """
-    # Imported here: ``app.domain.rules.service`` imports this module.
-    from app.domain.rules.service import apply_rules_to
+    from app.domain.categorisation import engine
 
     protect = [
         name
@@ -503,9 +528,18 @@ def _apply_rules_to_new(
         )
         if given
     ]
-    apply_rules_to(
-        db, row.household_id, [row], protect=protect, user_id=principal.user_id, request=request
+    engine.categorise_rows(
+        db,
+        row.household_id,
+        [row],
+        protect={row.id: protect},
+        user_id=principal.user_id,
+        request=request,
     )
+    if data.category_id is not None:
+        engine.person_decided(
+            db, row, before_category_id=None, before_source=None, at=clock.utcnow()
+        )
 
 
 _SIMPLE_FIELDS: Final = (
@@ -529,9 +563,19 @@ def update_transaction(
     *,
     request: HTTPConnection | None,
 ) -> Transaction:
-    """Apply ``data`` to ``row`` (loaded for edit and locked)."""
+    """Apply ``data`` to ``row`` (loaded for edit and locked).
+
+    A ``category_id`` that differs from the row's (also ``null``) is the
+    person's decision: the row becomes theirs and the audit row says how the
+    category was decided before and after. A changed ``raw_payee`` names
+    another merchant: the key is recomputed and, on a row nobody decided, the
+    guess is made again; a decided row keeps its category.
+    """
+    from app.domain.categorisation import engine
+
     household_id = row.household_id
     given = data.model_fields_set
+    category_before, source_before = row.category_id, row.category_source
     split = repo.has_splits(db, household_id, row.id)
     if "category_id" in given and data.category_id is not None and split:
         raise _split_conflict()
@@ -573,6 +617,19 @@ def update_transaction(
         old_tags = sorted(repo.tag_ids_for(db, household_id, [row.id]).get(row.id, []))
         if repo.set_tags(db, row, data.tag_ids):
             before["tag_ids"], after["tag_ids"] = old_tags, sorted(data.tag_ids)
+    renamed = "raw_payee" in after
+    if renamed and "category_id" in after:
+        # Both at once: the choice is learned for the merchant the row names now.
+        row.merchant_key = engine.identify(row.raw_payee).key
+    if "category_id" in after:
+        engine.person_decided(
+            db,
+            row,
+            before_category_id=category_before,
+            before_source=source_before,
+            at=clock.utcnow(),
+        )
+        before["category_source"], after["category_source"] = source_before, row.category_source
     if after:
         row.updated_at = clock.utcnow()
         db.flush()
@@ -586,6 +643,10 @@ def update_transaction(
             after=after,
             request=request,
         )
+    if renamed:
+        # After the flush: the engine reads the row from the database. Its
+        # writes are pinned; this request already moved ``updated_at``.
+        engine.reconsider(db, household_id, transaction_ids=[row.id], rekey=True)
     return row
 
 
@@ -679,7 +740,13 @@ def set_splits(
     *,
     request: HTTPConnection | None,
 ) -> Transaction:
-    """Replace the splits of ``row`` (loaded for edit and locked); see :class:`SplitSet`."""
+    """Replace the splits of ``row`` (loaded for edit and locked); see :class:`SplitSet`.
+
+    A split is the person's decision about the row (its lines carry the
+    categories), and so is removing every split, with a category or without.
+    """
+    from app.domain.categorisation import engine
+
     household_id = row.household_id
     for line in data.splits:
         _amount_in(line.amount.currency, line.amount.amount, row.currency)
@@ -693,8 +760,10 @@ def set_splits(
         if total != row.amount:
             raise split_sum_mismatch(row.amount, total, row.currency)
     old = repo.splits_for(db, household_id, [row.id]).get(row.id, [])
+    category_before, source_before = row.category_id, row.category_source
     before = {
         "category_id": row.category_id,
+        "category_source": source_before,
         "splits": [
             {"category_id": s.category_id, "amount": format_amount(s.amount, row.currency)}
             for s in old
@@ -714,7 +783,11 @@ def set_splits(
         ],
     )
     row.category_id = None if data.splits else data.category_id
-    row.updated_at = clock.utcnow()
+    now = clock.utcnow()
+    engine.person_decided(
+        db, row, before_category_id=category_before, before_source=source_before, at=now
+    )
+    row.updated_at = now
     db.flush()
     _record(
         db,
@@ -725,6 +798,7 @@ def set_splits(
         before=before,
         after={
             "category_id": row.category_id,
+            "category_source": row.category_source,
             "splits": [
                 {
                     "category_id": line.category_id,
@@ -750,14 +824,12 @@ _EVENT_ACCOUNTS_MAX: Final = 50
 def bulk(
     db: Session, principal: Principal, data: BulkAction, *, request: HTTPConnection | None
 ) -> BulkResult:
-    """Apply ``data.action`` to every id the caller may edit (each authorised alone)."""
+    """Apply ``data.action`` to every id the caller may edit (each authorised alone).
+
+    ``categorise`` and ``accept_suggestions`` are the person's decisions:
+    every row they change becomes theirs (``engine.person_decided``).
+    """
     household_id = _household(principal)
-    if data.action == "accept_suggestions":
-        # Declared in the API first; without this the action would fall through
-        # to the last branch below (delete).
-        raise ProblemError(
-            409, "not-ready", "Not available yet", "Accepting suggestions is not available yet."
-        )
     if data.action == "categorise":
         _check_refs(db, household_id, category_ids=[data.category_id])
     if data.tag_ids:
@@ -776,12 +848,20 @@ def bulk(
             elif row.category_id == data.category_id:
                 results[tid] = BulkItemResult(id=tid, result="unchanged")
             else:
-                previous = row.category_id
-                row.category_id = data.category_id
-                row.updated_at = now
+                _bulk_decide(db, principal, row, data, request, data.category_id, now)
                 changed.append(row)
                 results[tid] = BulkItemResult(id=tid, result="updated")
-                _bulk_audit(db, principal, row, data, request, {"category_id": previous})
+    elif data.action == "accept_suggestions":
+        split_ids = repo.split_transaction_ids(db, household_id, list(rows))
+        for tid, row in rows.items():
+            if tid in split_ids:
+                results[tid] = BulkItemResult(id=tid, result="skipped", reason="split")
+            elif row.suggested_category_id is None:
+                results[tid] = BulkItemResult(id=tid, result="skipped", reason="suggestion-missing")
+            else:
+                _bulk_decide(db, principal, row, data, request, row.suggested_category_id, now)
+                changed.append(row)
+                results[tid] = BulkItemResult(id=tid, result="updated")
     elif data.action == "confirm":
         for tid, row in rows.items():
             if row.review_state is ReviewState.CONFIRMED:
@@ -836,6 +916,34 @@ def bulk(
     )
 
 
+def _bulk_decide(
+    db: Session,
+    principal: Principal,
+    row: Transaction,
+    data: BulkAction,
+    request: HTTPConnection | None,
+    category_id: uuid.UUID | None,
+    now: datetime,
+) -> None:
+    """Give ``row`` the category a person chose for it in a bulk action (audited)."""
+    from app.domain.categorisation import engine
+
+    category_before, source_before = row.category_id, row.category_source
+    row.category_id = category_id
+    engine.person_decided(
+        db, row, before_category_id=category_before, before_source=source_before, at=now
+    )
+    row.updated_at = now
+    _bulk_audit(
+        db,
+        principal,
+        row,
+        data,
+        request,
+        {"category_id": category_before, "category_source": source_before},
+    )
+
+
 def _bulk_audit(
     db: Session,
     principal: Principal,
@@ -845,8 +953,8 @@ def _bulk_audit(
     before: Mapping[str, Any] | None,
 ) -> None:
     after: dict[str, Any] = {}
-    if data.action == "categorise":
-        after = {"category_id": data.category_id}
+    if data.action in ("categorise", "accept_suggestions"):
+        after = {"category_id": row.category_id, "category_source": row.category_source}
     elif data.action == "confirm":
         after = {"review_state": ReviewState.CONFIRMED}
     elif data.action in ("tag", "untag"):
