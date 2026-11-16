@@ -88,6 +88,26 @@
   font-size: var(--font-size-sm);
 }
 
+/* An offer on the row ("Add loan terms") reads like the row's links ("Schedule"). */
+.account-row__link {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font-weight: 500;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 0.22em;
+  cursor: pointer;
+}
+
+.account-row__link:hover {
+  color: var(--color-accent-hover);
+  text-decoration-color: currentColor;
+}
+
 .account-row__balance {
   flex: none;
   font-weight: 600;

@@ -130,9 +130,9 @@ function RowDetails({ account, extras }: { account: Account; extras: Extras }) {
     }
     return mayAdd ? (
       <span className="account-row__detail">
-        <Button size="sm" variant="ghost" aria-label={`Add loan terms for ${name}`} onClick={() => { extras.onAddTerms(account); }}>
+        <button type="button" className="account-row__link" aria-label={`Add loan terms for ${name}`} onClick={() => { extras.onAddTerms(account); }}>
           Add loan terms
-        </Button>
+        </button>
       </span>
     ) : null;
   }
@@ -150,9 +150,9 @@ function RowDetails({ account, extras }: { account: Account; extras: Extras }) {
     }
     return mayAdd ? (
       <span className="account-row__detail">
-        <Button size="sm" variant="ghost" aria-label={`Add asset details for ${name}`} onClick={() => { extras.onAddAsset(account); }}>
+        <button type="button" className="account-row__link" aria-label={`Add asset details for ${name}`} onClick={() => { extras.onAddAsset(account); }}>
           Add asset details
-        </Button>
+        </button>
       </span>
     ) : null;
   }

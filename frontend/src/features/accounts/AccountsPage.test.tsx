@@ -213,13 +213,14 @@ describe("accounts page", () => {
     expect(
       within(loans).getByRole("link", { name: "Schedule of Example mortgage" }),
     ).toHaveAttribute("href", "/accounts/a-6?tab=schedule");
+    // The offers sit in the row's line of links, styled like "Schedule", not as indented buttons.
     expect(
       within(loans).getByRole("button", { name: "Add loan terms for Car loan" }),
-    ).toBeInTheDocument();
+    ).toHaveClass("account-row__link");
     const property = screen.getByRole("region", { name: "Property and other" });
     expect(
       within(property).getByRole("button", { name: "Add asset details for Lake cabin" }),
-    ).toBeInTheDocument();
+    ).toHaveClass("account-row__link");
   });
 
   it("adds terms to a loan account that has none", async () => {
