@@ -2487,21 +2487,27 @@ def test_0014_rolling_overlap_what_the_previous_release_can_still_write(
                 == "active"
             )
         # Writes of the previous release that the migrated schema refuses.
-        refused: tuple[tuple[str, dict[str, object]], ...] = (
-            ("UPDATE scheduled_transaction SET active = false WHERE id = :id", {"id": running}),
+        refused: tuple[tuple[str, dict[str, object], str], ...] = (
+            (
+                "UPDATE scheduled_transaction SET active = false WHERE id = :id",
+                {"id": running},
+                "ck_scheduled_transaction_active_matches_status",
+            ),
             (
                 "UPDATE scheduled_transaction SET active = true WHERE id = :id",
                 {"id": switched_off},
+                "ck_scheduled_transaction_active_matches_status",
             ),
             (
                 "UPDATE transaction SET category_id = :c, updated_at = now() WHERE id = :id",
                 {"c": category, "id": suggested},
+                "ck_transaction_suggestion_only_without_category",
             ),
         )
-        for statement, params in refused:
+        for statement, params, constraint in refused:
             with app.connect() as conn, conn.begin():
                 set_context(conn, household)
-                with pytest.raises(DBAPIError, match="check constraint"):
+                with pytest.raises(DBAPIError, match=constraint):
                     conn.execute(text(statement), params)
         with app.connect() as conn, conn.begin():
             set_context(conn, household)
