@@ -320,7 +320,7 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
   or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed before lose it in the
   refresh the hourly `categorise.dispatch` job queues after the upgrade
-  (clean-up version 3, merchant list version 10); nothing needs to be run
+  (clean-up version 3, merchant list version 11); nothing needs to be run
   by hand, and an admin's "Check again" (Settings, What PerFin learned)
   runs it at once. Categories on those rows stay; what was learned under such a key
   no longer answers, and the cash suggestion of a withdrawal or a cash

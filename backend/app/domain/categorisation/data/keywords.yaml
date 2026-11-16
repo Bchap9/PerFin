@@ -181,7 +181,14 @@ keywords:
   - {word: water dept, category: utilities.water}
   - {word: water district, category: utilities.water}
   - {word: water dist, category: utilities.water}
-  - {word: sewer, category: utilities.water}
+  # "sewer" alone is a plumber or a pipe supplier as often as a bill.
+  - {word: sewer dist, category: utilities.water}
+  - {word: sewer district, category: utilities.water}
+  - {word: sewer dept, category: utilities.water}
+  - {word: sewer service, category: utilities.water}
+  - {word: sewer utility, category: utilities.water}
+  - {word: sewer authority, category: utilities.water}
+  - {word: city sewer, category: utilities.water}
   # "electric" alone is a guitar shop as often as a bill.
   - {word: electricity, category: utilities.electricity}
   - {word: electric bill, category: utilities.electricity}

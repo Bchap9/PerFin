@@ -80,6 +80,8 @@ def test_a_bank_s_own_line_is_stated(raw: str, direction: Direction, category: s
         ("BRISTLECONE WATER DIST BILLPAY", "out", "utilities.water"),
         ("ELKTON SEWER DIST PPD ID: 0000000001", "out", "utilities.water"),
         ("LANTERN CITY SEWER", "out", "utilities.water"),
+        ("PINEGATE SEWER DISTRICT", "out", "utilities.water"),
+        ("PINEGATE SEWER SERVICE 0412", "out", "utilities.water"),
         ("WILLOWMERE TUITION 0412", "out", "family.education"),
         # The entry description of a labelled ACH line says what the company
         # was paid for when its name does not.
@@ -147,6 +149,21 @@ def test_ambiguous_wording_answers_nothing_wrong(raw: str, direction: Direction)
         "income.interest",
         "transfers.cash",
     }, (raw, category)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "ROTO SEWER DRAIN CLEANING",
+        "SEWER PIPE SUPPLY",
+        "QUARRYVALE SEWER AND DRAIN 0412",
+    ],
+)
+def test_a_trade_that_works_on_sewers_is_no_water_bill(raw: str) -> None:
+    # A plumber or a pipe supplier is paid for work, not for the household's
+    # water: only a sewer district's or a city's wording says that.
+    category, _ = _answer(raw, "out")
+    assert category != "utilities.water", raw
 
 
 @pytest.mark.parametrize(

@@ -49,10 +49,11 @@ Stage 4 of four on the way to 1.0.0: the release review.
   payment, insurance, taxes, childcare, education) now makes such a series
   a bill; it changes nothing else about it, and a stated category still
   wins. More such bills are suggested: `APTS` (rent), `WATER DIST`,
-  `SEWER`, `TUITION`, and the entry description of a labelled ACH line
+  `SEWER DIST` (a sewer district's or a city's wording; `SEWER` alone is a
+  plumber as often), `TUITION`, and the entry description of a labelled ACH line
   (`<name> DES:RENT PMT`, `DES:TUITION`) when the name holds no telling
   word, though never cash there (`<name> DES:WITHDRAWAL` is a company
-  paid, not a withdrawal at the counter); `SWIM SCHOOL` is a pastime, not school (merchant list version 10).
+  paid, not a withdrawal at the counter); `SWIM SCHOOL` is a pastime, not school (merchant list version 11).
   With nobody filing anything, the kind of a planted series is right for
   92.5% (was 82.5%).
 
