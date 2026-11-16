@@ -192,8 +192,11 @@ keep their names; `docs/DEVELOPMENT.md` "Plug-in points" changes with it.
 **Inbox** has three sub-pages: **Needs you** (`/inbox`), **Documents**
 (`/inbox/documents`, the library) and **History** (`/inbox/history`).
 
-- **Needs you** has an Upload button and a drop zone at the top, then the
-  cards (section 4), then "Imported recently".
+- **Needs you** has an Upload button at the top, then the cards (section 4),
+  then the drop zone ("Add documents", `#inbox-add-documents`), then
+  "Imported recently". The visual check (Task 25) moved the drop zone under
+  the cards so the questions come first, as in the mock-up; every "add
+  documents" link lands on `/inbox#inbox-add-documents`.
 - **Document detail and the mapping editor** sit under the library's path,
   with breadcrumbs ("Inbox / Documents / file name").
 - **History** lists answered and dismissed review items, which today sit
@@ -537,7 +540,7 @@ as the Review page does today with `SettledCard`.
   statement balance (`unchecked`), the quiet marker "Not checked against a
   balance". A file that failed says so.
 - **Empty Inbox**: "All clear. Every document you added is imported. Drop
-  new statements here any time." The upload zone stays.
+  new statements below any time." The upload zone stays.
 - **`?document=<id>`** shows only that document's card, with "Show
   everything", as `/review?document=` does today.
 

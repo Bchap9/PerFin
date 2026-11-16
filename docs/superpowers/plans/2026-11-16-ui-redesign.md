@@ -602,7 +602,7 @@ Inside a lane the tasks run in order. Lanes meet only through the names below. A
 **Interfaces:**
 - **`UploadZone`**: today's XHR upload with progress, a drop zone (a `<label>` over an `<input type="file" multiple>`, which keyboard and screen readers can reach), and per-file rows.
   - A finished row links to `/inbox/documents/<id>` (audit finding 1).
-  - A file that needs a person says "Waiting on you below", with a link that scrolls to its card.
+  - A file that needs a person says "Waiting on you above", with a link that scrolls to its card (Task 25 moved the zone under the cards; it was "below" when the zone sat on top).
 - **`RecentImports`**: `GET /documents?limit=25`, kept on the client when `status` is `processed` or `failed` and `updated_at` is within the last 14 days, at most 10.
   - Each row has the file name (a link), the account (a link, from `account_id` and the accounts list), the period, and `QuietNote` "Not checked against a balance" when `unchecked`.
   - Failed files say "Could not be read".
