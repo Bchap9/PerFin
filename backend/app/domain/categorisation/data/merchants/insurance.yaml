@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Insurers: car, home, life, health, dental and vision, pets, and home
+# warranties. Format and sources: ../README.md. One entry a line here.
+#
+# A premium is `series: bill`: monthly, or paid for six months or a year.
+# An insurer that sells several lines under one billing name ("State
+# Farm", "Allstate") is `mixed: true`: the statement does not say which
+# policy was paid, so its category (car insurance, the usual one) is a
+# suggestion and never a fact. A company that is also a bank or a
+# retirement plan ("USAA", "Nationwide", "Prudential") is matched only with
+# the word that makes the charge a premium.
+merchants:
+  # Car insurance.
+  - {key: geico, name: GEICO, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], match: [geico]}
+  - {key: progressive, name: Progressive, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], match: [progressive insurance, progressive ins, prog direct ins, progressive direct, prog casualty, progressive casualty, progressive leasing ins]}
+  - {key: the general, name: The General, category: transport.car_insurance, series: bill, cadences: [monthly], match: [the general insurance, the general ins, general automobile ins]}
+  - {key: root insurance, name: Root Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], match: [root insurance, root ins]}
+  - {key: direct auto insurance, name: Direct Auto Insurance, category: transport.car_insurance, series: bill, cadences: [monthly], match: [direct auto insurance, direct auto ins, direct general]}
+  - {key: mercury insurance, name: Mercury Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], match: [mercury insurance, mercury ins, mercury casualty]}
+
+  # Several lines under one name: a suggestion only.
+  - {key: state farm, name: State Farm, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [state farm, statefarm]}
+  - {key: allstate, name: Allstate, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [allstate]}
+  - {key: liberty mutual, name: Liberty Mutual, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [liberty mutual, libertymutual]}
+  - {key: farmers insurance, name: Farmers Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [farmers insurance, farmers ins, farmers group]}
+  - {key: nationwide insurance, name: Nationwide, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [nationwide insurance, nationwide ins, nationwide mutual ins]}
+  - {key: usaa insurance, name: USAA Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [usaa insurance, usaa ins, usaa p c, usaa prop cas]}
+  - {key: travelers, name: Travelers, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [travelers insurance, travelers ins, travelers indemnity, travelers personal ins]}
+  - {key: american family insurance, name: American Family Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [american family insurance, american family ins, amfam]}
+  - {key: erie insurance, name: Erie Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, annual], mixed: true, match: [erie insurance, erie ins]}
+  - {key: auto owners insurance, name: Auto-Owners Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [auto owners insurance, auto owners ins]}
+  - {key: safeco, name: Safeco, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [safeco]}
+  - {key: the hartford, name: The Hartford, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [the hartford, hartford insurance, hartford ins]}
+  - {key: amica, name: Amica Mutual, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [amica]}
+  - {key: aaa insurance, name: AAA Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [aaa insurance, aaa ins, csaa insurance, csaa ins, auto club insurance]}
+  - {key: kemper, name: Kemper, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], mixed: true, match: [kemper insurance, kemper ins, kemper]}
+  - {key: farm bureau insurance, name: Farm Bureau Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [farm bureau insurance, farm bureau ins, farm bureau mutual]}
+  - {key: lemonade, name: Lemonade, category: housing.insurance, series: bill, cadences: [monthly, annual], mixed: true, match: [lemonade insurance, lemonade ins, lemonade inc]}
+
+  # Home insurance and home warranties.
+  - {key: assurant, name: Assurant, category: housing.insurance, series: bill, cadences: [monthly, annual], match: [assurant]}
+  - {key: american home shield, name: American Home Shield, category: housing.maintenance, series: bill, cadences: [monthly, annual], match: [american home shield, amer home shield, ahs warranty]}
+
+  # Life insurance.
+  - {key: northwestern mutual, name: Northwestern Mutual, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [northwestern mutual, northwestern mu, nwmutual]}
+  - {key: new york life, name: New York Life, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [new york life, ny life, nylife]}
+  - {key: metlife, name: MetLife, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [metlife, metropolitan life]}
+  - {key: prudential insurance, name: Prudential, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [prudential insurance, prudential ins, pruco life]}
+  - {key: massmutual, name: MassMutual, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [massmutual, mass mutual]}
+  - {key: guardian life, name: Guardian Life, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [guardian life]}
+  - {key: aflac, name: Aflac, category: financial.insurance, series: bill, cadences: [monthly], match: [aflac]}
+  - {key: globe life, name: Globe Life, category: financial.insurance, series: bill, cadences: [monthly], match: [globe life]}
+  - {key: primerica, name: Primerica, category: financial.insurance, series: bill, cadences: [monthly], match: [primerica]}
+  - {key: transamerica, name: Transamerica, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [transamerica]}
+  - {key: mutual of omaha, name: Mutual of Omaha, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [mutual of omaha]}
+  - {key: lincoln financial, name: Lincoln Financial, category: financial.insurance, series: bill, cadences: [monthly, quarterly, annual], match: [lincoln national life, lincoln financial]}
+
+  # Health, dental and vision plans.
+  - {key: blue cross blue shield, name: Blue Cross Blue Shield, category: health.insurance, series: bill, cadences: [monthly], match: [blue cross, bluecross, bcbs, blue shield, anthem blue cross, florida blue, highmark, carefirst, premera, regence]}
+  - {key: anthem, name: Anthem, category: health.insurance, series: bill, cadences: [monthly], match: [anthem, elevance health]}
+  - {key: aetna, name: Aetna, category: health.insurance, series: bill, cadences: [monthly], match: [aetna]}
+  - {key: cigna, name: Cigna, category: health.insurance, series: bill, cadences: [monthly], match: [cigna]}
+  - {key: unitedhealthcare, name: UnitedHealthcare, category: health.insurance, series: bill, cadences: [monthly], match: [unitedhealthcare, united healthcare, uhc, unitedhealthone]}
+  - {key: humana, name: Humana, category: health.insurance, series: bill, cadences: [monthly], match: [humana]}
+  - {key: oscar health, name: Oscar Health, category: health.insurance, series: bill, cadences: [monthly], match: [oscar health, oscar insurance, hioscar]}
+  - {key: ambetter, name: Ambetter, category: health.insurance, series: bill, cadences: [monthly], match: [ambetter]}
+  - {key: healthcare gov, name: HealthCare.gov marketplace plan, category: health.insurance, series: bill, cadences: [monthly], match: [healthcare gov, covered california, covered ca]}
+  - {key: medicare premium, name: Medicare premium, category: health.insurance, series: bill, cadences: [monthly, quarterly], match: [cms medicare, medicare premium, medicare prem]}
+  - {key: delta dental, name: Delta Dental, category: health.insurance, series: bill, cadences: [monthly, annual], match: [delta dental, deltadental]}
+  - {key: vsp vision, name: VSP Vision Care, category: health.insurance, series: bill, cadences: [monthly, annual], match: [vsp vision, vsp individual]}
+
+  # Pet insurance.
+  - {key: trupanion, name: Trupanion, category: family.pets, series: bill, cadences: [monthly], match: [trupanion]}
+  - {key: healthy paws, name: Healthy Paws, category: family.pets, series: bill, cadences: [monthly], match: [healthy paws, healthypaws]}
+  - {key: nationwide pet insurance, name: Nationwide Pet Insurance, category: family.pets, series: bill, cadences: [monthly, annual], match: [nationwide pet, nationwide pet insurance, nationwide pet ins]}
+  - {key: embrace pet insurance, name: Embrace Pet Insurance, category: family.pets, series: bill, cadences: [monthly, annual], match: [embrace pet]}
+  - {key: fetch pet insurance, name: Fetch Pet Insurance, category: family.pets, series: bill, cadences: [monthly], match: [fetch pet, fetch by the dodo]}
+  - {key: pets best, name: Pets Best, category: family.pets, series: bill, cadences: [monthly, annual], match: [pets best, petsbest]}
+  - {key: aspca pet insurance, name: ASPCA Pet Health Insurance, category: family.pets, series: bill, cadences: [monthly, annual], match: [aspca pet insurance, aspca pet health, aspca pet ins]}

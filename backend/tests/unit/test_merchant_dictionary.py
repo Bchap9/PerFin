@@ -424,6 +424,280 @@ def test_no_entry_for_p2p_or_card_issuers() -> None:
     assert dictionary.merchants()["adp"].category == "income.salary"
 
 
+# --- what the shipped files hold: subscriptions, bills and keywords -------------
+
+MERCHANTS_MIN, MERCHANTS_MAX = 800, 1500
+KEYWORDS_MIN, KEYWORDS_MAX = 100, 150
+SUBSCRIPTIONS_MIN = 150
+BILLS_MIN = 60
+
+#: A biller that fronts many products, by a core a statement gives it and its key.
+OPAQUE_BILLERS = (
+    ("apple com bill", "apple services"),
+    ("apl itunes com bill", "apple services"),
+    ("itunes com bill", "apple services"),
+    ("google play", "google play"),
+    ("google lanternapp", "google play"),
+    ("microsoft", "microsoft"),
+    ("msft", "microsoft"),
+)
+
+#: What stands next to an opaque biller and is not one: ``(core, key, category)``.
+BESIDE_OPAQUE_BILLERS = (
+    ("apple store r123", "apple store", "shopping.electronics"),
+    ("google fi", "google fi", "utilities.phone"),
+    ("google youtube tv", "youtube tv", "leisure.subscriptions"),
+    ("google google one", "google one", "leisure.software"),
+    ("google fiber", "google fiber", "utilities.internet"),
+    ("microsoft store", "microsoft store", "shopping.electronics"),
+    ("microsoft xbox game pass", "xbox game pass", "leisure.games"),
+)
+
+#: A series the dictionary must know: ``(core, key, series, category)``.
+KNOWN_SERIES = (
+    ("spotify", "spotify", "subscription", "leisure.subscriptions"),
+    ("nytimes nytimes disc", "new york times", "subscription", "leisure.news"),
+    ("adobe creative cloud", "adobe", "subscription", "leisure.software"),
+    ("dropbox", "dropbox", "subscription", "leisure.software"),
+    ("playstation plus", "playstation plus", "subscription", "leisure.games"),
+    ("planet fit club fees", "planet fitness", "subscription", "health.fitness"),
+    ("hellofresh", "hellofresh", "subscription", "food.groceries"),
+    ("dollar shave club", "dollar shave club", "subscription", "family.personal_care"),
+    ("vzwrlss apocc visb", "verizon wireless", "bill", "utilities.phone"),
+    ("t mobile auto pay", "t mobile", "bill", "utilities.phone"),
+    ("comcast cable comm", "xfinity", "bill", "utilities.internet"),
+    ("duke energy carolinas", "duke energy", "bill", "utilities.electricity"),
+    ("pg e webrecurring", "pacific gas and electric", "bill", "utilities.electricity"),
+    ("socalgas", "socalgas", "bill", "utilities.heating"),
+    ("geico auto", "geico", "bill", "transport.car_insurance"),
+    ("state farm insurance", "state farm", "bill", "transport.car_insurance"),
+    ("simplisafe", "simplisafe", "bill", "utilities.other"),
+    ("public storage", "public storage", "bill", "housing.fees"),
+)
+
+#: A billing name that covers several lines of one company, and one that
+#: covers a single line: ``(core, key, mixed)``.
+MIXED_BILLERS = (
+    ("verizon recurring pay", "verizon", True),
+    ("verizon wireless", "verizon wireless", False),
+    ("verizon fios", "verizon fios", False),
+    ("att bill payment", "at and t", True),
+    ("at t mobility", "at and t wireless", False),
+    ("state farm ro 27", "state farm", True),
+    ("allstate", "allstate", True),
+    ("geico auto", "geico", False),
+    ("aetna", "aetna", False),
+)
+
+#: Names that are also a bank, a surname, a shop or an everyday word: only a
+#: form that is the service's own may match, so these cores name nobody (or
+#: somebody else, given as the key).
+NOT_A_SERIES: tuple[tuple[str, str | None], ...] = (
+    ("usaa", None),  # also a bank
+    ("usaa credit card payment", None),
+    ("nationwide", None),  # also a bank
+    ("norton", None),  # a surname
+    ("pandora jewelry", "pandora jewelry"),  # the jeweller, not the radio
+    ("pandora", None),
+    ("calm waters spa", None),
+    ("frontier airlines", "frontier airlines"),  # not the telephone company
+    ("spectrum", None),  # a word many businesses carry
+    ("ring", None),
+    ("equinox", None),
+    ("zoom", None),
+    ("cox", None),  # a surname
+    ("clear", None),
+    ("medium", None),
+    ("tidal", None),
+    ("aaa locksmith", None),
+    ("apple", None),
+)
+
+#: A word and the category it says: found in an invented payee's core.
+TELLING_WORDS = (
+    ("harbor pizza", "pizza", "food.restaurants"),
+    ("maple grill", "grill", "food.restaurants"),
+    ("lantern cafe", "cafe", "food.coffee"),
+    ("corner pharmacy", "pharmacy", "health.pharmacy"),
+    ("maple family dental", "dental", "health.dental"),
+    ("harbor vet clinic", "vet", "family.pets"),
+    ("lantern fuel stop", "fuel", "transport.fuel"),
+    ("harbor street parking", "parking", "transport.parking"),
+    ("maple liquor", "liquor", "food.alcohol"),
+    ("lantern daycare", "daycare", "family.childcare"),
+    ("maple car wash", "car wash", "transport.car_maintenance"),
+    ("harbor animal hospital", "animal hospital", "family.pets"),
+)
+
+#: Words that are a surname, a place or say too little: never a keyword.
+NOT_KEYWORDS = (
+    "baker",
+    "cook",
+    "butcher",
+    "park",
+    "bar",
+    "gas",
+    "market",
+    "store",
+    "shop",
+    "club",
+    "house",
+    "garden",
+    "auto",
+    "home",
+    "service",
+    "services",
+    "center",
+    "bill",
+    "payment",
+    "online",
+    "plus",
+    "king",
+    "hill",
+    "springs",
+)
+
+
+def _series_counts() -> dict[str, int]:
+    counts = {"subscription": 0, "bill": 0}
+    for merchant in dictionary.merchants().values():
+        if merchant.series is not None:
+            counts[merchant.series] += 1
+    return counts
+
+
+def test_size_for_1_0() -> None:
+    assert MERCHANTS_MIN <= len(dictionary.merchants()) <= MERCHANTS_MAX
+    words = [entry for entry in _shipped_keywords() if "word" in entry]
+    assert KEYWORDS_MIN <= len(words) <= KEYWORDS_MAX, len(words)
+    assert len({entry["word"] for entry in words}) == len(words), "a keyword is written twice"
+    # The sector files of this edition ship.
+    held = {file for file, _ in _shipped_merchants()}
+    for file in (
+        "software.yaml",
+        "news_music_games.yaml",
+        "memberships_boxes.yaml",
+        "fitness.yaml",
+        "telecom_utilities.yaml",
+        "insurance.yaml",
+        "streaming.yaml",
+    ):
+        assert file in held, file
+
+
+def test_series_floors() -> None:
+    counts = _series_counts()
+    assert counts["subscription"] >= SUBSCRIPTIONS_MIN, counts
+    assert counts["bill"] >= BILLS_MIN, counts
+    for core, key, series, category in KNOWN_SERIES:
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+        assert hit.merchant.series == series, core
+        assert hit.merchant.category == category, core
+    for core, expected in NOT_A_SERIES:
+        hit = dictionary.lookup(core)
+        assert (hit.merchant.key if hit is not None else None) == expected, core
+    # One billing name for several lines is a bill whose category is only suggested.
+    for core, key, mixed in MIXED_BILLERS:
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+        assert hit.merchant.series == "bill", core
+        assert hit.merchant.mixed is mixed, core
+    # A habit is not a series, whatever the shop.
+    for key in ("kroger", "starbucks", "chevron", "walmart", "mcdonalds"):
+        assert dictionary.merchants()[key].series is None, key
+
+
+def test_every_series_has_a_cadence() -> None:
+    without = sorted(
+        key
+        for key, merchant in dictionary.merchants().items()
+        if merchant.series is not None and not merchant.cadences
+    )
+    assert without == []
+    # A bill comes monthly or less often; nobody is billed for power by the week.
+    hasty = sorted(
+        key
+        for key, merchant in dictionary.merchants().items()
+        if merchant.series == "bill" and {"weekly", "biweekly"} & set(merchant.cadences)
+    )
+    assert hasty == []
+
+
+def test_opaque_billers_are_mixed() -> None:
+    assert len({key for _, key in OPAQUE_BILLERS}) >= 3
+    for core, key in OPAQUE_BILLERS:
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+        assert hit.merchant.mixed is True, core
+        assert hit.merchant.series == "subscription", core
+        assert hit.merchant.category == "leisure.software", core
+    # What it fronts and the statement names, or the maker's own shop, is itself.
+    for core, key, category in BESIDE_OPAQUE_BILLERS:
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+        assert hit.merchant.category == category, core
+        assert hit.merchant.mixed is False, core
+
+
+def test_keywords_are_not_merchant_tokens() -> None:
+    keywords = {
+        entry["word"]: entry["category"] for entry in _shipped_keywords() if "word" in entry
+    }
+    owners: dict[str, list[tuple[str, str]]] = {}
+    for _, entry in _shipped_merchants():
+        for match in entry["match"]:
+            plain = _plain(match)
+            assert plain not in keywords, f"{entry['key']!r}: the match {plain!r} is a keyword"
+            owners.setdefault(plain.split()[0], []).append((entry["key"], entry["category"]))
+    # A word that opens a merchant's name ("pizza" in "pizza hut") may be a
+    # keyword only when it files a payee in that merchant's group: a line of
+    # that merchant cut short is then never suggested somewhere else.
+    for word, category in keywords.items():
+        group = category.partition(".")[0]
+        elsewhere = sorted(
+            key for key, held in owners.get(word, []) if held.partition(".")[0] != group
+        )
+        assert elsewhere == [], f"the keyword {word!r} ({category}) opens the name of {elsewhere}"
+    # A merchant's own name is answered by the merchant, never by a word in it.
+    for key in ("pizza hut", "taco bell", "burger king"):
+        if key in dictionary.merchants():
+            hit = dictionary.lookup(key)
+            assert hit is not None, key
+            assert hit.merchant.key == key
+
+
+def test_keywords_say_what_was_bought() -> None:
+    for core, word, category in TELLING_WORDS:
+        assert dictionary.keyword(core, None) == KeywordHit(
+            category=category, word=word, strong=False
+        ), core
+    words = {entry["word"] for entry in _shipped_keywords() if "word" in entry}
+    assert sorted(words & set(NOT_KEYWORDS)) == []
+    for word in NOT_KEYWORDS:
+        assert dictionary.keyword(f"lantern {word}", None) is None, word
+    # Only a processor that fronts one trade makes a keyword sure enough to state.
+    strong = [entry for entry in _shipped_keywords() if entry.get("strong")]
+    assert all("via" in entry for entry in strong), strong
+    assert all(entry.get("via") is None or "word" not in entry for entry in strong), strong
+
+
+def test_every_merchant_finds_itself() -> None:
+    served = dictionary.merchants()
+    lost: list[str] = []
+    for _, entry in _shipped_merchants():
+        for match in entry["match"]:
+            hit = dictionary.lookup(_plain(match))
+            if hit is None or hit.merchant is not served[entry["key"]] or hit.how != "exact":
+                found = hit.merchant.key if hit is not None else None
+                lost.append(f"{entry['key']!r}: {_plain(match)!r} finds {found!r}")
+    assert lost == []
+
+
 # --- the matcher, on tables built here ---------------------------------------
 
 STREAMBOX: dict[str, Any] = {

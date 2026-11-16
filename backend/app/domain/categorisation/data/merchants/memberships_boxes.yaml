@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Memberships, and boxes that arrive on a schedule: meal kits, pet food,
+# beauty, clothing, razors, wine. Format and sources: ../README.md. One
+# entry a line here.
+#
+# A shop's membership is its own entry with a longer match than the shop,
+# so it wins over it ("uber one" over "uber"). A name that is a first name
+# or an everyday word ("Harry's", "Billie", "Ollie", "Ritual", "Prose",
+# "Clear", "Factor") is matched only by a form that is the company's own,
+# or left out.
+merchants:
+  # Shop and delivery memberships.
+  - {key: sams club membership, name: Sam's Club Membership, category: leisure.memberships, series: subscription, cadences: [annual], match: [sams club membership, sam club membership, samsclub membership, sams club renewal, sam club renewal, sams membership]}
+  - {key: bjs membership, name: BJ's Membership, category: leisure.memberships, series: subscription, cadences: [annual], match: [bjs membership, bj membership, bjs wholesale membership]}
+  - {key: walmart plus, name: Walmart+, category: leisure.memberships, series: subscription, cadences: [monthly, annual], match: [walmart plus, wmt plus, wal mart plus, walmart membership]}
+  - {key: instacart plus, name: Instacart+, category: leisure.memberships, series: subscription, cadences: [monthly, annual], match: [instacart plus, instacart express, instacart membership, instacart subscription]}
+  - {key: dashpass, name: DoorDash DashPass, category: leisure.memberships, series: subscription, cadences: [monthly, annual], match: [dashpass, doordash dashpass]}
+  - {key: uber one, name: Uber One, category: leisure.memberships, series: subscription, cadences: [monthly, annual], match: [uber one, uber pass]}
+  - {key: chewy autoship, name: Chewy Autoship, category: family.pets, series: subscription, cadences: [monthly, two_monthly, quarterly], match: [chewy autoship]}
+
+  # Clubs and associations.
+  - {key: aaa membership, name: AAA Membership, category: leisure.memberships, series: subscription, cadences: [annual], match: [aaa membership, aaa dues, aaa renewal, aaa auto club, auto club membership]}
+  - {key: aarp, name: AARP, category: leisure.memberships, series: subscription, cadences: [annual], match: [aarp]}
+  - {key: clear, name: CLEAR, category: leisure.travel, series: subscription, cadences: [annual], match: [clearme, clear clearme, clear plus, clear secure]}
+  - {key: priority pass, name: Priority Pass, category: leisure.travel, series: subscription, cadences: [annual], match: [priority pass, prioritypass]}
+  - {key: onstar, name: OnStar, category: transport.car_maintenance, series: subscription, cadences: [monthly, annual], match: [onstar]}
+  - {key: tesla subscription, name: Tesla subscription, category: transport.car_maintenance, series: subscription, cadences: [monthly], match: [tesla subscription, tesla premium connectivity, tesla inc subscription]}
+  - {key: legalshield, name: LegalShield, category: financial.services, series: subscription, cadences: [monthly], match: [legalshield, legal shield]}
+  - {key: amc stubs, name: AMC Stubs, category: leisure.events, series: subscription, cadences: [monthly, annual], match: [amc stubs, amc a list, amc stubs a list]}
+  - {key: regal unlimited, name: Regal Unlimited, category: leisure.events, series: subscription, cadences: [monthly], match: [regal unlimited]}
+  - {key: cinemark movie club, name: Cinemark Movie Club, category: leisure.events, series: subscription, cadences: [monthly], match: [cinemark movie club, cinemark club]}
+
+  # Meal kits and food boxes.
+  - {key: hellofresh, name: HelloFresh, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [hellofresh, hello fresh]}
+  - {key: blue apron, name: Blue Apron, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [blue apron, blueapron]}
+  - {key: home chef, name: Home Chef, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [home chef, homechef]}
+  - {key: factor meals, name: Factor, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [factor75, factor 75, factor meals]}
+  - {key: everyplate, name: EveryPlate, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [everyplate, every plate]}
+  - {key: green chef, name: Green Chef, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [green chef, greenchef]}
+  - {key: dinnerly, name: Dinnerly, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [dinnerly]}
+  - {key: sunbasket, name: Sunbasket, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [sunbasket, sun basket]}
+  - {key: cookunity, name: CookUnity, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [cookunity]}
+  - {key: daily harvest, name: Daily Harvest, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [daily harvest, dailyharvest]}
+  - {key: hungryroot, name: Hungryroot, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [hungryroot]}
+  - {key: misfits market, name: Misfits Market, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [misfits market, misfitsmarket]}
+  - {key: imperfect foods, name: Imperfect Foods, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [imperfect foods, imperfect produce]}
+  - {key: butcherbox, name: ButcherBox, category: food.groceries, series: subscription, cadences: [monthly, two_monthly], match: [butcherbox, butcher box]}
+  - {key: huel, name: Huel, category: food.groceries, series: subscription, cadences: [monthly, two_monthly], match: [huel]}
+  - {key: athletic greens, name: AG1 (Athletic Greens), category: food.groceries, series: subscription, cadences: [monthly], match: [athletic greens, athleticgreens, drinkag1]}
+  - {key: trade coffee, name: Trade Coffee, category: food.coffee, series: subscription, cadences: [biweekly, monthly], match: [trade coffee, drinktrade]}
+
+  # Wine clubs.
+  - {key: naked wines, name: Naked Wines, category: food.alcohol, series: subscription, cadences: [monthly], match: [naked wines, nakedwines]}
+
+  # Pet food boxes.
+  - {key: barkbox, name: BarkBox, category: family.pets, series: subscription, cadences: [monthly], match: [barkbox, bark box, super chewer]}
+  - {key: the farmers dog, name: The Farmer's Dog, category: family.pets, series: subscription, cadences: [biweekly, monthly, two_monthly], match: [the farmers dog, farmers dog, the farmer dog, farmersdog]}
+  - {key: nom nom, name: Nom Nom, category: family.pets, series: subscription, cadences: [biweekly, monthly], match: [nom nom, nomnomnow]}
+
+  # Beauty, grooming and household.
+  - {key: dollar shave club, name: Dollar Shave Club, category: family.personal_care, series: subscription, cadences: [monthly, two_monthly], match: [dollar shave club, dollarshaveclub, dollar shave]}
+  - {key: ipsy, name: IPSY, category: family.personal_care, series: subscription, cadences: [monthly], match: [ipsy]}
+  - {key: birchbox, name: Birchbox, category: family.personal_care, series: subscription, cadences: [monthly], match: [birchbox]}
+  - {key: fabfitfun, name: FabFitFun, category: family.personal_care, series: subscription, cadences: [quarterly, annual], match: [fabfitfun]}
+  - {key: quip, name: quip, category: family.personal_care, series: subscription, cadences: [quarterly], match: [getquip, quip nyc]}
+  - {key: grove collaborative, name: Grove Collaborative, category: shopping.household, series: subscription, cadences: [monthly], match: [grove collaborative, grove co]}
+  - {key: the honest company, name: The Honest Company, category: shopping.household, series: subscription, cadences: [monthly], match: [the honest company, honest company]}
+
+  # Clothing and things in a box.
+  - {key: stitch fix, name: Stitch Fix, category: shopping.clothing, series: subscription, cadences: [monthly, two_monthly, quarterly], match: [stitch fix, stitchfix]}
+  - {key: rent the runway, name: Rent the Runway, category: shopping.clothing, series: subscription, cadences: [monthly], match: [rent the runway, renttherunway]}
+  - {key: nuuly, name: Nuuly, category: shopping.clothing, series: subscription, cadences: [monthly], match: [nuuly]}
+  - {key: book of the month, name: Book of the Month, category: leisure.news, series: subscription, cadences: [monthly], match: [book of the month, bookofthemonth]}
+  - {key: kiwico, name: KiwiCo, category: family.education, series: subscription, cadences: [monthly], match: [kiwico, kiwi crate]}
+  - {key: lovevery, name: Lovevery, category: family.education, series: subscription, cadences: [two_monthly, quarterly], match: [lovevery]}

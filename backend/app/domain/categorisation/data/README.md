@@ -53,9 +53,18 @@ from a purchase are not here: they are code, in `../cleanup.py`.
   (`app.domain.transactions.categories`), not a name: a household may have
   renamed the category.
 - `series` says the merchant's charges are usually a subscription or a bill;
-  detection uses it as a hint. `cadences` are from `weekly`, `biweekly`,
-  `monthly`, `two_monthly`, `quarterly`, `half_yearly`, `annual`.
-- `mixed: true` makes the category a suggestion only (a general store).
+  detection uses it as a hint. A `subscription` is a fixed price for a
+  service (streaming, software, a gym, a box); a `bill` is what a household
+  owes whatever it does (phone, internet, power, gas, water, an insurer, an
+  alarm, a storage unit). A shop where people only often buy is neither.
+  Every entry with a `series` names its `cadences`, from `weekly`,
+  `biweekly`, `monthly`, `two_monthly`, `quarterly`, `half_yearly`, `annual`.
+- `mixed: true` makes the category a suggestion only. It is for a general
+  store, for an opaque biller that fronts many products under one name (an
+  app store: one entry, `series: subscription`, `leisure.software`), and for
+  a company whose one billing name covers several lines (an insurer that
+  sells car, home and life cover; a carrier's bare name). A product the
+  statement does name is its own entry with a longer match.
 - `inflow: true` is for a company that pays a person (a payroll processor);
   it answers for money coming in only.
 - No other field is read; an unknown field is an error.
@@ -75,7 +84,10 @@ telling word first. An entry with `via` applies only to a charge that came
 through that processor (the name clean-up gives it), and is read before the
 others; with `via` and no `word` it covers everything the processor fronts.
 A keyword is a word that says what was bought. A surname or a place is not
-one.
+one, nor is a word that fits any business (`market`, `shop`, `club`). A word
+that opens a listed merchant's name (`pizza` in Pizza Hut) may be a keyword
+only in that merchant's group of categories. Only an entry with `via` and no
+`word` may be `strong`.
 
 ## Sources
 
@@ -109,9 +121,10 @@ conditions and disclaimer to this section in the same change.
    `uv run pytest -q tests/unit/test_merchant_dictionary.py`. The digest test
    fails and prints the new digest; put it in `meta.yaml` and run again.
 4. Open a pull request. The test is the gate: the schema, the token form,
-   unique keys, a match owned by one merchant, every category a default key,
-   no match that is a keyword or a processor prefix, and the digest pinned to
-   the version.
+   unique keys, a match owned by one merchant, every match finding its own
+   merchant, every category a default key, no match that is a keyword or a
+   processor prefix, a cadence for every series, the size (800 to 1,500
+   merchants, 100 to 150 keywords), and the digest pinned to the version.
 
 The version is what makes installed households catch up: each household
 records the version it was last evaluated with, and a newer one queues a

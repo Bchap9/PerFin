@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Music and audio, newspapers and magazines, and games. Format and sources:
+# ../README.md. One entry a line here.
+#
+# A game shop sells one game at a time: it has no series. A plan that a
+# statement names ("PLAYSTATION PLUS", "XBOX GAME PASS") is its own entry
+# with a longer match. A paper whose name is a town's ("Denver Post") is
+# matched by its whole name; a name that is an everyday word ("Tidal",
+# "Medium", "Wired") only by a form that is the publication's own.
+merchants:
+  # Music, radio and audiobooks.
+  - {key: spotify, name: Spotify, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [spotify]}
+  - {key: apple music, name: Apple Music, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [apple music]}
+  - {key: amazon music, name: Amazon Music, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [amazon music, amzn music]}
+  - {key: youtube music, name: YouTube Music, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [youtube music ~, youtubemusic ~]}
+  - {key: pandora, name: Pandora, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [pandora music, pandora media, pandora internet, pandora plus, pandora premium]}
+  - {key: siriusxm, name: SiriusXM, category: leisure.subscriptions, series: subscription, cadences: [monthly, quarterly, half_yearly, annual], match: [siriusxm, sirius xm, sirius radio, sxm]}
+  - {key: tidal, name: TIDAL, category: leisure.subscriptions, series: subscription, cadences: [monthly], match: [tidal music, tidalmusic, tidal hifi, tidal com]}
+  - {key: iheartradio, name: iHeartRadio, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [iheartradio, iheart radio, iheart]}
+  - {key: soundcloud, name: SoundCloud, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [soundcloud]}
+  - {key: audible, name: Audible, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [audible]}
+  - {key: kindle unlimited, name: Kindle Unlimited, category: leisure.news, series: subscription, cadences: [monthly], match: [kindle unlimited, kindle unltd, amazon kindle unlimited, amazon kindle unltd]}
+  - {key: everand, name: Everand (Scribd), category: leisure.news, series: subscription, cadences: [monthly], match: [everand, scribd]}
+  - {key: patreon, name: Patreon, category: leisure.memberships, series: subscription, cadences: [monthly, annual], match: [patreon]}
+  - {key: substack, name: Substack, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [substack]}
+
+  # Newspapers.
+  - {key: new york times, name: The New York Times, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [nytimes, ny times, new york times, the new york times, nyt digital, nyt games, nyt cooking]}
+  - {key: washington post, name: The Washington Post, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [washington post, the washington post, washpost, wp washpost, wapo]}
+  - {key: wall street journal, name: The Wall Street Journal, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [wall street journal, the wall street journal, wall st journal ~, wsj]}
+  - {key: barrons, name: Barron's, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [barrons, d j barrons, dj barrons]}
+  - {key: marketwatch, name: MarketWatch, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [marketwatch]}
+  - {key: financial times, name: Financial Times, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [financial times, ft com, fin times]}
+  - {key: bloomberg, name: Bloomberg, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [bloomberg]}
+  - {key: usa today, name: USA Today, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [usa today, usatoday]}
+  - {key: los angeles times, name: Los Angeles Times, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [los angeles times, la times, latimes]}
+  - {key: chicago tribune, name: Chicago Tribune, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [chicago tribune, chicagotribune]}
+  - {key: boston globe, name: The Boston Globe, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [boston globe, the boston globe, bostonglobe]}
+  - {key: seattle times, name: The Seattle Times, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [seattle times, the seattle times]}
+  - {key: san francisco chronicle, name: San Francisco Chronicle, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [san francisco chronicle, sf chronicle, sfchronicle]}
+  - {key: star tribune, name: Star Tribune, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [star tribune, startribune]}
+  - {key: philadelphia inquirer, name: The Philadelphia Inquirer, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [philadelphia inquirer, the philadelphia inquirer, phila inquirer]}
+  - {key: the athletic, name: The Athletic, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [the athletic, theathletic]}
+
+  # Magazines.
+  - {key: the economist, name: The Economist, category: leisure.news, series: subscription, cadences: [monthly, quarterly, annual], match: [economist, the economist]}
+  - {key: the atlantic, name: The Atlantic, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [the atlantic, atlantic monthly, theatlantic]}
+  - {key: the new yorker, name: The New Yorker, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [new yorker, the new yorker, newyorker]}
+  - {key: national geographic, name: National Geographic, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [national geographic, natgeo, nat geo]}
+  - {key: consumer reports, name: Consumer Reports, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [consumer reports, consumerreports]}
+  - {key: medium, name: Medium, category: leisure.news, series: subscription, cadences: [monthly, annual], match: [medium corporation, medium monthly, medium annual, medium com]}
+
+  # Games: the plans.
+  - {key: playstation plus, name: PlayStation Plus, category: leisure.games, series: subscription, cadences: [monthly, quarterly, annual], match: [playstation plus, playstationplus, ps plus, sony playstation plus]}
+  - {key: xbox game pass, name: Xbox Game Pass, category: leisure.games, series: subscription, cadences: [monthly], match: [xbox game pass, microsoft xbox game pass, msft xbox game pass, xbox live, microsoft xbox live, microsoft game pass, microsoft ultimate, xbox gamepass]}
+  - {key: nintendo switch online, name: Nintendo Switch Online, category: leisure.games, series: subscription, cadences: [monthly, quarterly, annual], match: [nintendo switch online, nintendo online, nintendo membership]}
+  - {key: ea play, name: EA Play, category: leisure.games, series: subscription, cadences: [monthly, annual], match: [ea play, ea access, ea origin access]}
+  - {key: discord, name: Discord, category: leisure.games, series: subscription, cadences: [monthly, annual], match: [discord]}
+  - {key: twitch, name: Twitch, category: leisure.subscriptions, series: subscription, cadences: [monthly], match: [twitch, twitchinter, twitch interactive]}
+  - {key: humble bundle, name: Humble Bundle, category: leisure.games, series: subscription, cadences: [monthly], match: [humble bundle, humblebundle]}
+
+  # Games: the shops, which sell one game at a time.
+  - {key: playstation, name: PlayStation Store, category: leisure.games, match: [playstation, sony playstation, playstation network, psn]}
+  - {key: xbox, name: Xbox, category: leisure.games, match: [xbox, microsoft xbox, msft xbox]}
+  - {key: nintendo, name: Nintendo, category: leisure.games, match: [nintendo]}
+  - {key: steam, name: Steam, category: leisure.games, match: [steam games, steamgames, steam purchase, steampowered]}
+  - {key: epic games, name: Epic Games, category: leisure.games, match: [epic games, epicgames, epic games store]}
+  - {key: electronic arts, name: Electronic Arts, category: leisure.games, match: [electronic arts, ea origin, ea com]}
+  - {key: blizzard, name: Blizzard Entertainment, category: leisure.games, match: [blizzard, blizzard entertainment, blizzard ent]}
+  - {key: riot games, name: Riot Games, category: leisure.games, match: [riot games, riotgames]}
+  - {key: roblox, name: Roblox, category: leisure.games, match: [roblox]}
