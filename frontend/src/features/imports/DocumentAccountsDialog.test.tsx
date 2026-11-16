@@ -40,6 +40,37 @@ function detected(extra: Partial<DetectedAccount>): DetectedAccount {
   };
 }
 
+const QUEUED_DOCUMENT = {
+  id: "d-1",
+  original_filename: "synthetic-export.csv",
+  kind: "unknown",
+  status: "needs_review",
+  mime_detected: "text/csv",
+  source: "upload",
+  created_at: NOW,
+  period_start: null,
+  period_end: null,
+  previewable: false,
+};
+
+/** The Review queue holding one document whose account is to be chosen. */
+function queueOf(item: Record<string, unknown> & { id: string }) {
+  return json({
+    cards: [
+      {
+        document: QUEUED_DOCUMENT,
+        items: [{ ...item, document: QUEUED_DOCUMENT }],
+        action: "choose_account",
+        action_item_id: item.id,
+        open: 1,
+        notices: 0,
+      },
+    ],
+    loose: [],
+    next_cursor: null,
+  });
+}
+
 describe("document account choices", () => {
   it("creates new accounts from their proposals and skips known ones", () => {
     const found = [
@@ -148,26 +179,21 @@ describe("document account choices", () => {
     const api = mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),
       ...lookupHandlers([account("a-1", "Everyday")]),
-      "GET /api/v1/review": () =>
-        json({
-          items: [
-            {
-              id: "r-1",
-              kind: "unknown_account",
-              state: "open",
-              document_id: "d-1",
-              document: null,
-              reason: "account_not_found",
-              payload: { reason: "account_not_found", statement: 0 },
-              resolution: null,
-              resolved_at: null,
-              resolved_by: null,
-              created_at: NOW,
-              next_step: "choose_account",
-              can_resolve: true,
-            },
-          ],
-          next_cursor: null,
+      "GET /api/v1/review/cards": () =>
+        queueOf({
+          id: "r-1",
+          kind: "unknown_account",
+          state: "open",
+          document_id: "d-1",
+          document: null,
+          reason: "account_not_found",
+          payload: { reason: "account_not_found", statement: 0 },
+          resolution: null,
+          resolved_at: null,
+          resolved_by: null,
+          created_at: NOW,
+          next_step: "choose_account",
+          can_resolve: true,
         }),
       "GET /api/v1/documents/:id/accounts": () =>
         json({
@@ -251,30 +277,25 @@ describe("document account choices", () => {
     const api = mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),
       ...lookupHandlers([account("a-1", "Everyday")]),
-      "GET /api/v1/review": () =>
-        json({
-          items: [
-            {
-              id: "r-1",
-              kind: "unknown_account",
-              state: "open",
-              document_id: "d-1",
-              document: null,
-              reason: "account_not_found",
-              payload: {
-                reason: "account_not_found",
-                statement: 0,
-                investment: true,
-              },
-              resolution: null,
-              resolved_at: null,
-              resolved_by: null,
-              created_at: NOW,
-              next_step: "choose_account",
-              can_resolve: true,
-            },
-          ],
-          next_cursor: null,
+      "GET /api/v1/review/cards": () =>
+        queueOf({
+          id: "r-1",
+          kind: "unknown_account",
+          state: "open",
+          document_id: "d-1",
+          document: null,
+          reason: "account_not_found",
+          payload: {
+            reason: "account_not_found",
+            statement: 0,
+            investment: true,
+          },
+          resolution: null,
+          resolved_at: null,
+          resolved_by: null,
+          created_at: NOW,
+          next_step: "choose_account",
+          can_resolve: true,
         }),
       "GET /api/v1/documents/:id/accounts": () =>
         json({ document_id: "d-1", accounts: [detected({})] }),

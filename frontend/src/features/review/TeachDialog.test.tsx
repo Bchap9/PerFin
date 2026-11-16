@@ -880,33 +880,99 @@ describe("teach dialog", () => {
   });
 
   it("enters the balances of a statement that does not add up", async () => {
+    // The balances are typed in the reconcile view the card opens: the card
+    // itself has no balance form, and nothing is sent to the old correction route.
     const detail = item({
       kind: "low_confidence_field",
       reason: "reconciliation_failed",
       payload: {
         reason: "reconciliation_failed",
         account_id: "a-1",
+        statement: 0,
         opening: "100.00",
         closing: "150.00",
         difference: "-10.00",
       },
       next_step: "correct_fields",
     });
+    const read = {
+      statement: 0,
+      account_id: "a-1",
+      account_name: "Everyday",
+      can_edit: true,
+      causes: [],
+      opening: "100.00",
+      closing: "150.00",
+      previous_closing: null,
+      currency: "USD",
+      total: "40.00",
+      difference: "-10.00",
+      lines_skipped: 0,
+      period_start: "2026-04-01",
+      period_end: "2026-04-30",
+      printed_sign: "ledger",
+      removed: [],
+      rows: [
+        {
+          transaction_id: "t-1",
+          posted_date: "2026-04-07",
+          payee: "Grocer refund",
+          amount: "40.00",
+          origin: "read",
+          edited: false,
+          in_period: true,
+          review_state: "pending",
+          page: 1,
+          bbox: [60, 100, 450, 110],
+        },
+      ],
+      rows_truncated: false,
+      status: "off",
+      verification: "unverified",
+    };
     const api = reviewApi(detail, {
-      "POST /api/v1/review/:id/correct": () => json({ ...detail, state: "resolved" }),
+      "GET /api/v1/documents/:id/reconciliation": () =>
+        json({ document_id: "d-1", statements: [read] }),
+      "POST /api/v1/documents/:id/reconciliation/confirm": () =>
+        json({
+          confirmed: 1,
+          items_closed: 1,
+          snapshot: true,
+          statement: {
+            ...read,
+            closing: "140.00",
+            difference: "0.00",
+            status: "balanced",
+            verification: "reconciled",
+          },
+        }),
     });
     renderApp("/review");
     const user = userEvent.setup();
-    const closing = await screen.findByLabelText("Closing balance");
+    expect(await screen.findByText("ledger.pdf")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Closing balance")).not.toBeInTheDocument();
+    await user.click(
+      await screen.findByRole("button", { name: "Check against the statement" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const closing = await within(dialog).findByLabelText("Closing balance");
     expect(closing).toHaveValue("150.00");
+    const confirm = within(dialog).getByRole("button", {
+      name: "Confirm and record the balance",
+    });
+    expect(confirm).toBeDisabled();
     await user.clear(closing);
     await user.type(closing, "140.00");
-    await user.click(screen.getByRole("button", { name: "Check and accept" }));
+    await user.click(confirm);
     await waitFor(() => {
-      expect(api.callsTo("POST", "/api/v1/review/:id/correct")[0]?.body).toEqual({
-        document: { opening_balance: "100.00", closing_balance: "140.00" },
-        resolve: true,
+      expect(
+        api.callsTo("POST", "/api/v1/documents/:id/reconciliation/confirm")[0]?.body,
+      ).toEqual({
+        statement: 0,
+        opening_balance: "100.00",
+        closing_balance: "140.00",
       });
     });
+    expect(api.callsTo("POST", "/api/v1/review/:id/correct")).toHaveLength(0);
   });
 });
