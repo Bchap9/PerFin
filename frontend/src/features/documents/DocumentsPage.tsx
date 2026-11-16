@@ -11,6 +11,7 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
+import { PageHeader } from "../../components/PageHeader";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { Table } from "../../components/Table";
@@ -76,11 +77,13 @@ export function DocumentsPage() {
   const canWrite = useCanWrite();
   const [deleting, setDeleting] = useState<DocumentRow | null>(null);
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">Document library</h1>
-        <Link to="/documents">Upload files</Link>
-      </div>
+    <div className="ledger-stack">
+      <PageHeader
+        title="Document library"
+        description="Every file PerFin has received, with the words it read."
+        breadcrumbs={[{ to: "/inbox", label: "Inbox" }, { label: "Documents" }]}
+        actions={<Link to="/inbox">Upload files</Link>}
+      />
       <form
         className="ledger-filters"
         role="search"
@@ -151,7 +154,7 @@ export function DocumentsPage() {
         ) : null}
         {query.isSuccess ? (
           <Table<DocumentRow>
-            caption="Documents"
+            caption="Files in the library"
             captionHidden
             rows={rows}
             rowKey={(row) => row.id}
@@ -163,7 +166,7 @@ export function DocumentsPage() {
                 rowHeader: true,
                 cell: (row) => (
                   <span>
-                    <Link to="/documents/$documentId" params={{ documentId: row.id }}>
+                    <Link to="/inbox/documents/$documentId" params={{ documentId: row.id }}>
                       {row.original_filename ?? "Unnamed file"}
                     </Link>
                     {row.snippet !== undefined && row.snippet !== null && row.snippet.length > 0 ? (
@@ -227,6 +230,6 @@ export function DocumentsPage() {
           }}
         />
       )}
-    </section>
+    </div>
   );
 }

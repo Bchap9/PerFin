@@ -2,7 +2,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, renderApp } from "../auth/testing";
 
 const STAMP = "2026-11-03T10:00:00Z";
 
@@ -79,7 +80,7 @@ describe("document library", () => {
             })
           : json({ items: [row("d-1", "march.pdf"), row("d-2", "april.pdf")], next_cursor: null }),
     });
-    renderApp("/documents/library");
+    renderApp("/inbox/documents");
     const user = userEvent.setup();
     expect(await screen.findByText("april.pdf")).toBeInTheDocument();
     await user.type(screen.getByLabelText("Search the text of documents"), "rent");
@@ -100,13 +101,13 @@ describe("document library", () => {
       "GET /api/v1/documents/:id/regions": () => json(REGIONS),
       "GET /api/v1/documents/:id": () => json({ ...DETAIL, downloadable }),
     });
-    const { unmount } = renderApp("/documents/d-1");
+    const { unmount } = renderApp("/inbox/documents/d-1");
     const link = await screen.findByRole("link", { name: "Download original" });
     expect(link).toHaveAttribute("href", "/api/v1/documents/d-1/download");
     expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
     unmount();
     downloadable = false;
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     await waitFor(() => {
       expect(screen.getByText("Your role cannot download the original file.")).toBeInTheDocument();
     });
@@ -123,10 +124,11 @@ describe("document library", () => {
       "DELETE /api/v1/documents/:id": () => new Response(null, { status: 204 }),
       "GET /api/v1/documents": () => json({ items: [], next_cursor: null }),
     });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Delete" }));
-    expect(await screen.findByText(/3 transactions, 1 balance snapshot/)).toBeInTheDocument();
+    const confirm = within(await screen.findByRole("dialog"));
+    expect(await confirm.findByText(/3 transactions, 1 balance snapshot/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete file" }));
     await waitFor(() => {
       expect(api.callsTo("DELETE", "/api/v1/documents/d-1")).toHaveLength(1);
@@ -143,7 +145,7 @@ describe("document library", () => {
       "DELETE /api/v1/documents/:id": () => new Response(null, { status: 204 }),
       "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
     });
-    renderApp("/documents/library");
+    renderApp("/inbox/documents");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Delete march.pdf" }));
     await user.click(await screen.findByLabelText(/The file and everything imported from it/));
@@ -159,9 +161,30 @@ describe("document library", () => {
       "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
       "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
     });
-    renderApp("/documents/library");
+    renderApp("/inbox/documents");
     expect(await screen.findByText("march.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete march.pdf" })).not.toBeInTheDocument();
+  });
+
+  it("the library sits in the Inbox and links each file to its page there", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
+    });
+    renderApp("/inbox/documents");
+    expect(await screen.findByRole("link", { name: "march.pdf" })).toHaveAttribute("href", "/inbox/documents/d-1");
+    expect(screen.getByRole("link", { name: "Upload files" })).toHaveAttribute("href", "/inbox");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
+    });
+    const { container } = renderApp("/inbox/documents");
+    expect(await screen.findByText("march.pdf")).toBeInTheDocument();
+    await expectNoAxeViolations(container);
   });
 });
 
@@ -244,7 +267,7 @@ describe("statement summary", () => {
 
   it("shows what the statement prints about itself, per account", async () => {
     detailApi(SUMMARY);
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const account = await screen.findByRole("region", {
       name: "Individual ending in 0001",
     });
@@ -269,7 +292,7 @@ describe("statement summary", () => {
 
   it("shows no card for a document without a brokerage statement", async () => {
     const api = detailApi({ document_id: "d-1", statements: [] });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     await screen.findByRole("heading", { name: "march.pdf" });
     await waitFor(() => {
       expect(
@@ -281,7 +304,7 @@ describe("statement summary", () => {
 
   it("does not ask for the summary of a document the role cannot change", async () => {
     const api = detailApi(SUMMARY, { can_edit: false });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     await screen.findByRole("heading", { name: "march.pdf" });
     expect(api.callsTo("GET", "/api/v1/documents/:id/summary")).toHaveLength(0);
     expect(screen.queryByText("Statement summary")).not.toBeInTheDocument();
@@ -395,7 +418,7 @@ describe("what a file imported", () => {
 
   it("lists what the file imported with its account and marker", async () => {
     fileApi([imported(), CHECKED], {}, { skipped_lines: 2 });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const card = within(
       await screen.findByRole("region", { name: "Imported from this file" }),
     );
@@ -433,7 +456,7 @@ describe("what a file imported", () => {
         unchecked: false,
       }),
     ]);
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const card = within(
       await screen.findByRole("region", { name: "Imported from this file" }),
     );
@@ -451,7 +474,7 @@ describe("what a file imported", () => {
 
   it("offers the reconcile view on an unchecked statement and not to a viewer", async () => {
     const api = fileApi([imported(), CHECKED]);
-    const { unmount } = renderApp("/documents/d-1");
+    const { unmount } = renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     const card = within(
       await screen.findByRole("region", { name: "Imported from this file" }),
@@ -476,7 +499,7 @@ describe("what a file imported", () => {
     unmount();
 
     fileApi([imported(), CHECKED], { can_edit: false }, {}, "viewer");
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const readOnly = within(
       await screen.findByRole("region", { name: "Imported from this file" }),
     );
@@ -505,7 +528,7 @@ describe("what a file imported", () => {
     });
     try {
       fileApi([imported(), CHECKED]);
-      renderApp("/documents/d-1?row=t-2");
+      renderApp("/inbox/documents/d-1?row=t-2");
       const user = userEvent.setup();
       await user.click(
         await screen.findByRole("button", {
@@ -529,7 +552,7 @@ describe("what a file imported", () => {
 
   it("hides Teach PerFin for a file with no pages", async () => {
     fileApi([], { previewable: false });
-    const { unmount } = renderApp("/documents/d-1");
+    const { unmount } = renderApp("/inbox/documents/d-1");
     expect(
       await screen.findByRole("button", { name: "Process again" }),
     ).toBeInTheDocument();
@@ -543,7 +566,7 @@ describe("what a file imported", () => {
     unmount();
 
     fileApi([], { previewable: true });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     expect(
       await screen.findByRole("button", { name: "Teach PerFin" }),
     ).toBeInTheDocument();
@@ -551,7 +574,7 @@ describe("what a file imported", () => {
 
   it("offers no cash-ledger check or rows link for an investment statement", async () => {
     fileApi([imported({ kind: "investment" })]);
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const card = within(
       await screen.findByRole("region", { name: "Imported from this file" }),
     );
@@ -567,7 +590,7 @@ describe("what a file imported", () => {
 
   it("offers nothing to do with a quarantined file", async () => {
     const api = fileApi([imported()], { quarantined: true, previewable: true });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     await screen.findByRole("heading", { name: "march.pdf" });
     // The delete action is still there, so the actions have been drawn.
     expect(
@@ -588,17 +611,77 @@ describe("what a file imported", () => {
     expect(api.callsTo("GET", "/api/v1/documents/:id/imported")).toHaveLength(0);
   });
 
-  it("links its open questions to the filtered queue", async () => {
+  it("the review link goes to the Inbox with the document", async () => {
     fileApi([imported()], { open_review_items: 3 });
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     expect(
       await screen.findByRole("link", { name: "3 item(s) to review" }),
-    ).toHaveAttribute("href", "/review?document=d-1");
+    ).toHaveAttribute("href", "/inbox?document=d-1");
+  });
+
+  it("the detail names the account it was imported into, with the counts", async () => {
+    fileApi([imported(), CHECKED]);
+    renderApp("/inbox/documents/d-1");
+    const details = within(await screen.findByRole("region", { name: "Details" }));
+    const line = within(await details.findByTestId("imported-into"));
+    expect(line.getByRole("link", { name: "Everyday" })).toHaveAttribute("href", "/accounts/a-1");
+    expect(line.getByRole("link", { name: "Rainy day" })).toHaveAttribute("href", "/accounts/a-2");
+    expect(line.getByText("14 transactions, 1 balance snapshot")).toBeInTheDocument();
+    // One statement was not checked against a balance: said quietly, in words.
+    expect(line.getByText("Not checked against a balance")).toHaveClass("quiet");
+  });
+
+  it("says nothing about an unchecked read when every statement was checked", async () => {
+    fileApi([CHECKED]);
+    renderApp("/inbox/documents/d-1");
+    const line = within(await screen.findByTestId("imported-into"));
+    expect(line.getByRole("link", { name: "Rainy day" })).toBeInTheDocument();
+    expect(line.queryByText("Not checked against a balance")).not.toBeInTheDocument();
+  });
+
+  it("breadcrumbs lead back to the library", async () => {
+    const api = fileApi([imported()]);
+    api.on("GET /api/v1/documents", () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }));
+    const { router } = renderApp("/inbox/documents/d-1");
+    const crumbs = within(await screen.findByRole("navigation", { name: "Breadcrumbs" }));
+    expect(crumbs.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/inbox");
+    expect(crumbs.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/inbox/documents");
+    expect(await crumbs.findByText("march.pdf")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { level: 1, name: "march.pdf" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    await userEvent.setup().click(crumbs.getByRole("link", { name: "Documents" }));
+    await waitFor(() => {
+      expect(currentHref(router)).toBe("/inbox/documents");
+    });
+    expect(await screen.findByRole("heading", { name: "Document library" })).toBeInTheDocument();
+  });
+
+  it("outlines the recognised words as SVG boxes over the page", async () => {
+    fileApi([]);
+    renderApp("/inbox/documents/d-1");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Outline recognised words"));
+    const box = await screen.findByTestId("word-box");
+    expect(box.tagName.toLowerCase()).toBe("rect");
+    expect(box).not.toHaveAttribute("style");
+    expect(box).toHaveAttribute("x", "10");
+    expect(box).toHaveAttribute("y", "10");
+    expect(box).toHaveAttribute("width", "50");
+    expect(box).toHaveAttribute("height", "14");
+    expect(box.closest("svg")).toHaveAttribute("viewBox", "0 0 612 792");
+  });
+
+  it("has no axe violations", async () => {
+    fileApi([imported(), CHECKED]);
+    const { container } = renderApp("/inbox/documents/d-1");
+    await screen.findByTestId("imported-into");
+    expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
+    await expectNoAxeViolations(container);
   });
 
   it("process again posts reprocess", async () => {
     const api = fileApi([imported()]);
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Process again" }),
@@ -616,7 +699,7 @@ describe("what a file imported", () => {
     api.on("POST /api/v1/documents/:id/reprocess", () =>
       json({ title: "The file is still being read", status: 409 }, 409),
     );
-    renderApp("/documents/d-1");
+    renderApp("/inbox/documents/d-1");
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Process again" }),

@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
+import { PageHeader } from "../../components/PageHeader";
+import { QuietNote } from "../../components/QuietNote";
 import { Spinner } from "../../components/Spinner";
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
@@ -39,7 +41,7 @@ import {
   type ImportedStatement,
 } from "./api";
 import { DocumentLinksCard } from "./AttachDialog";
-import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
+import { DeleteDocumentDialog, importedSummary } from "./DeleteDocumentDialog";
 import { PageViewer } from "./PageViewer";
 import { StatementSummaryCard } from "./StatementSummaryCard";
 import { TeachDialog, currentReadings } from "../review/TeachDialog";
@@ -308,6 +310,51 @@ function ImportedCard({ doc, rowId }: { doc: DocumentDetail; rowId: string }) {
   );
 }
 
+/**
+ * The "Imported into" line of the details: each account the file's
+ * statements went to (a link), what was imported in all, and the quiet
+ * marker when a statement was not checked against a balance. Nothing when
+ * no statement names an account.
+ */
+function ImportedInto({ documentId }: { documentId: string }) {
+  // The same query as the "Imported from this file" card: fetched once.
+  const imported = useQuery({
+    queryKey: docKeys.imported(documentId),
+    queryFn: () => getImported(documentId),
+  });
+  const data = imported.data;
+  if (data === undefined || data.statements.length === 0) {
+    return null;
+  }
+  const accounts = new Map<string, string>();
+  for (const statement of data.statements) {
+    if (!accounts.has(statement.account_id)) {
+      accounts.set(statement.account_id, statement.account_name);
+    }
+  }
+  const counts = importedSummary(data).join(", ");
+  const unchecked = data.statements.some((statement) => statement.unchecked);
+  return (
+    <>
+      <dt>Imported into</dt>
+      <dd className="imported-into" data-testid="imported-into">
+        <span className="imported-into__accounts">
+          {[...accounts].map(([accountId, name], index) => (
+            <span key={accountId}>
+              {index === 0 ? null : ", "}
+              <Link to="/accounts/$accountId" params={{ accountId }}>
+                {name}
+              </Link>
+            </span>
+          ))}
+        </span>
+        {counts === "" ? null : <span>{counts}</span>}
+        {unchecked ? <QuietNote>{NOT_CHECKED}</QuietNote> : null}
+      </dd>
+    </>
+  );
+}
+
 export function DocumentDetailPage() {
   const documentId = useParams({
     strict: false,
@@ -347,12 +394,17 @@ export function DocumentDetailPage() {
       });
     },
   });
+  const title = doc?.original_filename ?? "Document";
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">{doc?.original_filename ?? "Document"}</h1>
-        <Link to="/documents/library">Document library</Link>
-      </div>
+    <div className="ledger-stack">
+      <PageHeader
+        title={title}
+        breadcrumbs={[
+          { to: "/inbox", label: "Inbox" },
+          { to: "/inbox/documents", label: "Documents" },
+          { label: title },
+        ]}
+      />
       {detail.isPending ? <Spinner label="Loading document" /> : null}
       {detail.isError ? (
         <p role="alert" className="ledger-error">
@@ -397,6 +449,7 @@ export function DocumentDetailPage() {
               )}
               <dt>Size</dt>
               <dd>{Math.max(1, Math.round(doc.size / 1024))} KiB</dd>
+              {doc.quarantined ? null : <ImportedInto documentId={doc.id} />}
             </dl>
             {doc.error === null ? null : (
               <p className="ledger-error">{doc.error}</p>
@@ -416,7 +469,7 @@ export function DocumentDetailPage() {
                 </span>
               )}
               {doc.open_review_items > 0 ? (
-                <Link to="/review" search={{ document: doc.id }}>
+                <Link to="/inbox" search={{ document: doc.id }}>
                   {doc.open_review_items} item(s) to review
                 </Link>
               ) : null}
@@ -468,7 +521,7 @@ export function DocumentDetailPage() {
                   setDeleting(false);
                 }}
                 onDeleted={() => {
-                  void navigate({ to: "/documents/library" });
+                  void navigate({ to: "/inbox/documents" });
                 }}
               />
             ) : null}
@@ -502,6 +555,6 @@ export function DocumentDetailPage() {
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }

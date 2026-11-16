@@ -32,6 +32,53 @@ type Box = [number, number, number, number];
 /** Below this many page units a drag is a click on a word. */
 const CLICK_SLOP = 3;
 
+/** A box in page units, as the attributes of an SVG `rect` on the overlay. */
+interface PageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(high, Math.max(low, value));
+}
+
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * The rect of a box on the page, clamped to the page with its corners in
+ * order; `null` for a malformed, empty or off-page box (as `boxStyle`).
+ */
+function pageRect(bbox: readonly number[], size: PageSize): PageRect | null {
+  const [x0 = 0, y0 = 0, x1 = 0, y1 = 0] = bbox;
+  if (boxStyle(bbox, size) === null) {
+    return null;
+  }
+  const left = clamp(Math.min(x0, x1), 0, size.width);
+  const top = clamp(Math.min(y0, y1), 0, size.height);
+  const right = clamp(Math.max(x0, x1), 0, size.width);
+  const bottom = clamp(Math.max(y0, y1), 0, size.height);
+  return { x: round(left), y: round(top), width: round(right - left), height: round(bottom - top) };
+}
+
+/** The six numbers of a screen matrix (`SVGGraphicsElement.getScreenCTM()`). */
+type ScreenMatrix = Pick<DOMMatrix, "a" | "b" | "c" | "d" | "e" | "f">;
+
+/** A screen point in page units, through the inverse of the overlay's screen matrix. */
+function fromScreen(matrix: ScreenMatrix, clientX: number, clientY: number): [number, number] | null {
+  const { a, b, c, d, e, f } = matrix;
+  const det = a * d - b * c;
+  if (!Number.isFinite(det) || det === 0) {
+    return null;
+  }
+  const dx = clientX - e;
+  const dy = clientY - f;
+  return [(d * dx - c * dy) / det, (a * dy - b * dx) / det];
+}
+
 export interface PageViewerProps {
   documentId: string;
   /** Highlights to draw; only those on the shown page are positioned. */
@@ -48,10 +95,10 @@ export interface PageViewerProps {
 }
 
 /**
- * A rendered page with highlight boxes laid over it as positioned elements.
- * The image is a cookie-authenticated PNG of the sandbox's render; boxes and
- * word outlines are plain elements placed by percentage (no markup from the
- * document is ever inserted).
+ * A rendered page with highlight boxes laid over it on an SVG overlay. The
+ * image is a cookie-authenticated PNG of the sandbox's render; the overlay's
+ * viewBox is the page in page units, and boxes and word outlines are `rect`
+ * attributes on it (no style attribute, no markup from the document).
  */
 export function PageViewer({
   documentId,
@@ -69,7 +116,7 @@ export function PageViewer({
   const [drag, setDrag] = useState<{ start: [number, number]; end: [number, number] } | null>(
     null,
   );
-  const stage = useRef<HTMLDivElement>(null);
+  const overlay = useRef<SVGSVGElement>(null);
   const info = useQuery({
     queryKey: docKeys.regions(documentId, page),
     queryFn: () => getRegions(documentId, page),
@@ -91,15 +138,12 @@ export function PageViewer({
   const selecting = onSelect !== undefined;
   const lines = selecting ? pageLines(pageWords) : [];
 
+  // The overlay's viewBox is the page, so its screen matrix maps page units
+  // to the screen at any rendered size; its inverse maps the pointer back.
   const toPage = (event: PointerEvent<HTMLDivElement>): [number, number] | null => {
-    const rect = stage.current?.getBoundingClientRect();
-    if (rect === undefined || rect.width <= 0 || rect.height <= 0) {
-      return null;
-    }
-    return [
-      ((event.clientX - rect.left) / rect.width) * size.width,
-      ((event.clientY - rect.top) / rect.height) * size.height,
-    ];
+    const svg = overlay.current;
+    const matrix = svg !== null && typeof svg.getScreenCTM === "function" ? svg.getScreenCTM() : null;
+    return matrix === null ? null : fromScreen(matrix, event.clientX, event.clientY);
   };
   const finish = (start: [number, number], end: [number, number]): void => {
     if (onSelect === undefined) {
@@ -123,10 +167,10 @@ export function PageViewer({
       onSelect(page, box, pageWords);
     }
   };
-  const dragStyle =
+  const dragRect =
     drag === null
       ? null
-      : boxStyle(
+      : pageRect(
           [
             Math.min(drag.start[0], drag.end[0]),
             Math.min(drag.start[1], drag.end[1]),
@@ -179,7 +223,6 @@ export function PageViewer({
         </p>
       ) : (
         <div
-          ref={stage}
           className={selecting ? "page-viewer__stage page-viewer__stage--select" : "page-viewer__stage"}
           onPointerDown={
             selecting
@@ -223,43 +266,52 @@ export function PageViewer({
               setImageFailed(true);
             }}
           />
-          {boxes.map((region, index) => {
-            const style = boxStyle(region.bbox, size);
-            return style === null ? null : (
-              <div
-                key={`${String(region.page)}-${String(index)}`}
-                className={`page-viewer__box page-viewer__box--${region.label}`}
-                data-testid="region-box"
-                role="img"
-                aria-label={LABELS[region.label]}
-                style={style}
-              />
-            );
-          })}
-          {onPage(selections, page).map((selection, index) => {
-            const style = boxStyle(selection.bbox, size);
-            return style === null ? null : (
-              <div
-                key={`selection-${String(index)}`}
-                className="page-viewer__box page-viewer__box--selection"
-                data-testid="selection-box"
-                role="img"
-                aria-label={`Selected: ${selection.label}`}
-                style={style}
-              />
-            );
-          })}
-          {dragStyle === null ? null : (
-            <div className="page-viewer__box page-viewer__box--drag" aria-hidden="true" style={dragStyle} />
-          )}
-          {words
-            ? info.data.words.map((word, index) => {
-                const style = boxStyle(word.bbox, size);
-                return style === null ? null : (
-                  <div key={index} className="page-viewer__word" data-testid="word-box" aria-hidden="true" style={style} />
-                );
-              })
-            : null}
+          <svg
+            ref={overlay}
+            className="page-viewer__overlay"
+            data-testid="page-overlay"
+            viewBox={`0 0 ${String(size.width)} ${String(size.height)}`}
+            preserveAspectRatio="none"
+            focusable="false"
+          >
+            {boxes.map((region, index) => {
+              const rect = pageRect(region.bbox, size);
+              return rect === null ? null : (
+                <rect
+                  key={`${String(region.page)}-${String(index)}`}
+                  className={`page-viewer__box page-viewer__box--${region.label}`}
+                  data-testid="region-box"
+                  role="img"
+                  aria-label={LABELS[region.label]}
+                  {...rect}
+                />
+              );
+            })}
+            {onPage(selections, page).map((selection, index) => {
+              const rect = pageRect(selection.bbox, size);
+              return rect === null ? null : (
+                <rect
+                  key={`selection-${String(index)}`}
+                  className="page-viewer__box page-viewer__box--selection"
+                  data-testid="selection-box"
+                  role="img"
+                  aria-label={`Selected: ${selection.label}`}
+                  {...rect}
+                />
+              );
+            })}
+            {dragRect === null ? null : (
+              <rect className="page-viewer__box page-viewer__box--drag" aria-hidden="true" {...dragRect} />
+            )}
+            {words
+              ? info.data.words.map((word, index) => {
+                  const rect = pageRect(word.bbox, size);
+                  return rect === null ? null : (
+                    <rect key={index} className="page-viewer__word" data-testid="word-box" aria-hidden="true" {...rect} />
+                  );
+                })
+              : null}
+          </svg>
         </div>
       )}
       {info.data.words_truncated && words ? <p className="ledger-muted">Only the first words are outlined.</p> : null}

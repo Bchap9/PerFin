@@ -349,12 +349,13 @@ describe("review tools", () => {
     renderApp("/review");
     const user = userEvent.setup();
     const box = await screen.findByTestId("region-box");
-    expect(box).toHaveStyle({
-      left: "10%",
-      top: "10%",
-      width: "40%",
-      height: "40%",
-    });
+    // An SVG rect in page units over the page (no style attribute, CSP).
+    expect(box.tagName.toLowerCase()).toBe("rect");
+    expect(box).not.toHaveAttribute("style");
+    expect(box).toHaveAttribute("x", "61.2");
+    expect(box).toHaveAttribute("y", "79.2");
+    expect(box).toHaveAttribute("width", "244.8");
+    expect(box).toHaveAttribute("height", "316.8");
     await user.click(
       await screen.findByRole("button", { name: "Use amount 24.10" }),
     );

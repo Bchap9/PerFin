@@ -420,7 +420,7 @@ describe("mapping editor", () => {
       "POST /api/v1/imports/:id/apply-mapping": () =>
         json({ document_id: "d-1", job_id: "j-1", state: "queued" }, 202),
     });
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     const user = userEvent.setup();
     await user.selectOptions(
       await screen.findByLabelText("Column 1 holds"),
@@ -467,7 +467,7 @@ describe("mapping editor", () => {
       "POST /api/v1/imports/:id/apply-mapping": () =>
         json({ document_id: "d-1", job_id: "j-1", state: "queued" }, 202),
     });
-    const { router } = renderApp("/documents/d-1/mapping");
+    const { router } = renderApp("/inbox/documents/d-1/mapping");
     const user = userEvent.setup();
     await user.selectOptions(
       await screen.findByLabelText("Column 1 holds"),
@@ -476,7 +476,7 @@ describe("mapping editor", () => {
     // Leaving without saving goes back to the file too.
     expect(screen.getByRole("link", { name: "Cancel" })).toHaveAttribute(
       "href",
-      "/documents/d-1",
+      "/inbox/documents/d-1",
     );
     await user.selectOptions(screen.getByLabelText("Column 2 holds"), "payee");
     await user.selectOptions(screen.getByLabelText("Column 3 holds"), "amount");
@@ -507,7 +507,7 @@ describe("mapping editor", () => {
       ...lookupHandlers(),
       "GET /api/v1/imports/:id/preview": () => json(preview),
     });
-    const first = renderApp("/documents/d-1/mapping");
+    const first = renderApp("/inbox/documents/d-1/mapping");
     expect(await screen.findByLabelText(/Mapping name/)).toHaveValue(
       "Posted, Description, Amount",
     );
@@ -518,7 +518,7 @@ describe("mapping editor", () => {
       ...PREVIEW,
       tables: [{ ...PREVIEW.tables[0], column_count: 4, rows: [wide] }],
     };
-    const second = renderApp("/documents/d-1/mapping");
+    const second = renderApp("/inbox/documents/d-1/mapping");
     const cut = await screen.findByLabelText(/Mapping name/);
     expect(cut).toHaveValue(wide.slice(0, 3).join(", ").slice(0, 60));
     second.unmount();
@@ -534,7 +534,7 @@ describe("mapping editor", () => {
         },
       ],
     };
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     expect(await screen.findByLabelText(/Mapping name/)).toHaveValue(
       "CSV import",
     );
@@ -546,7 +546,7 @@ describe("mapping editor", () => {
       ...lookupHandlers(),
       "GET /api/v1/imports/:id/preview": () => json(PREVIEW),
     });
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     const user = userEvent.setup();
     await screen.findByLabelText("Column 1 holds");
     await user.click(
@@ -605,7 +605,7 @@ describe("mapping editor", () => {
       "POST /api/v1/imports/:id/apply-mapping": () =>
         json({ document_id: "d-1", job_id: "j-2", state: "queued" }, 202),
     });
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     expect(
       await screen.findByAltText("Page 1 of the document"),
     ).toHaveAttribute("src", "/api/v1/documents/d-1/preview?page=1");
@@ -650,7 +650,7 @@ describe("mapping editor", () => {
           },
         }),
     });
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     expect(await screen.findByLabelText("Column 1 holds")).toHaveValue("date");
     expect(screen.getByLabelText("Column 3 holds")).toHaveValue("amount");
     expect(screen.getByLabelText("Date format")).toHaveValue("DD/MM/YYYY");
@@ -714,7 +714,7 @@ describe("mapping editor", () => {
       "POST /api/v1/imports/:id/apply-mapping": () =>
         json({ document_id: "d-1", job_id: "j-3", state: "queued" }, 202),
     });
-    renderApp("/documents/d-1/mapping");
+    renderApp("/inbox/documents/d-1/mapping");
     expect(await screen.findByLabelText("Column 2 holds")).toHaveValue(
       "account",
     );

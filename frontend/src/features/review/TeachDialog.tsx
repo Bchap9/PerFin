@@ -262,7 +262,7 @@ function Outcome({ out }: { out: TeachOut }) {
         </ul>
       ) : null}
       <p>
-        <Link to="/documents/learned">See what PerFin has learned</Link>
+        <Link to="/settings/learned">See what PerFin has learned</Link>
       </p>
     </div>
   );
