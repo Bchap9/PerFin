@@ -89,6 +89,7 @@ from app.domain.imports.schemas import (
     MappingSpec,
     Sign,
 )
+from app.ingestion.balance_lines import BalanceEnd, balance_line
 from app.ingestion.parsers.accounts import summary_last4
 from app.ingestion.parsers.text import MAX_LINE
 from app.ingestion.sandbox.protocol import Reconciliation, Statement, Table
@@ -748,6 +749,42 @@ def _continuation(row: Sequence[str], spec: MappingSpec) -> str | None:
     return None
 
 
+def _header_names(row: Sequence[str]) -> list[str]:
+    """A row's cells as header names, trailing blanks dropped (a repeated header)."""
+    names = [_header_cell(cell) for cell in row]
+    while names and not names[-1]:
+        names.pop()
+    return names
+
+
+def _balance_row(row: Sequence[str], spec: MappingSpec) -> BalanceEnd | None:
+    """Which balance a row prints when it says nothing else (``app.ingestion.balance_lines``).
+
+    The payee cell (the memo cell when the payee's is empty) is a balance
+    phrase, and the other of the two is empty or a balance phrase too:
+    ``Opening balance fee`` or a memo of its own is a transaction.
+    """
+    payee = _text(row, spec.payee_column)
+    memo = _text(row, spec.memo_column) if spec.memo_column != spec.payee_column else None
+    described, other = (payee, memo) if payee is not None else (memo, None)
+    end = balance_line(described)
+    if end is None or (other is not None and balance_line(other) is None):
+        return None
+    return end
+
+
+def _balance_figure(
+    row: Sequence[str], spec: MappingSpec, printed_negative: frozenset[str]
+) -> Decimal | None:
+    """A balance row's figure: its balance cell when one is mapped and reads, else its amount."""
+    if spec.balance_column is not None:
+        raw = _text(row, spec.balance_column)
+        figure = _amount(raw, spec.decimal_separator) if raw else None
+        if figure is not None:
+            return figure
+    return _row_amount(row, spec, printed_negative)
+
+
 def _read_rows(
     table: Table,
     spec: MappingSpec,
@@ -764,7 +801,12 @@ def _read_rows(
     * a row whose date cell and amount cells are all empty is a note row
       wherever it stands (a holder's name beside an opening balance, a
       section title over two cells);
-    * a row whose date cell says ``Pending`` is a pending row.
+    * a row whose date cell says ``Pending`` is a pending row;
+    * a row that repeats the header row (case and spacing aside) is a note
+      row: an export that prints its header again on every page;
+    * a row whose description is a balance (:func:`_balance_row`) is a note
+      row; the first of an opening kind gives the statement's
+      ``opening_balance`` (its balance cell, else its amount).
 
     A **continuation row** is a row with one filled cell, under the payee
     or the memo header, directly below a transaction row or below another
@@ -775,6 +817,11 @@ def _read_rows(
     was.
     """
     parsed = ParsedStatement(source_format="csv", truncated=table.truncated)
+    header = (
+        _header_names(table.rows[spec.skip_rows])
+        if spec.has_header and spec.skip_rows < len(table.rows)
+        else None
+    )
     balances: list[tuple[int, date, Decimal, Decimal | None]] = []
     #: (position of the transaction, row, text) of each candidate continuation.
     continued: list[tuple[int, int, str]] = []
@@ -792,6 +839,15 @@ def _read_rows(
             else:
                 continued.append((len(parsed.transactions) - 1, index, text))
                 line = index
+            continue
+        if header is not None and _header_names(row) == header:
+            parsed.note_rows.append(index)
+            continue
+        end = _balance_row(row, spec)
+        if end is not None:
+            parsed.note_rows.append(index)
+            if end == "opening" and parsed.opening_balance is None:
+                parsed.opening_balance = _balance_figure(row, spec, printed_negative)
             continue
         if _blank(row, spec.date_column, spec.amount_column, spec.debit_column, spec.credit_column):
             parsed.note_rows.append(index)
