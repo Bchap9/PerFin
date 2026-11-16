@@ -3,12 +3,14 @@
  * Inbox, Needs you (`/inbox`, spec section 4): everything that waits on a
  * person, one card each, in the order that matters (`order.ts`).
  *
- * 1. The upload zone: an Upload button, a drop zone and one row per file sent.
+ * 1. An Upload button at the top, which opens the uploader's file picker.
  * 2. The document cards, then the loose items (`GET /review/cards`).
  * 3. One card per subscription series that is suggested or has open changes.
  * 4. The suggested categories, and under them the rows with no category.
  * 5. Up to three offers to make a rule (not questions, so not counted).
- * 6. Imported recently: where each finished file went.
+ * 6. Add documents: the drop zone and one row per file sent
+ *    (`#inbox-add-documents`, where Home's "Add documents" leads).
+ * 7. Imported recently: where each finished file went.
  *
  * The cards that need an answer are one list, as many as
  * `GET /inbox/summary` counts. `?document=<id>` shows only that document's
@@ -27,7 +29,7 @@ import { Card } from "../../components/Card";
 import { Spinner } from "../../components/Spinner";
 import { queryRoots } from "../../lib/queryKeys";
 import { useInboxSummary } from "../../app/inboxSummary";
-import { useAccounts } from "../accounts/api";
+import { useAccounts, useCanWrite } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { useAction } from "../planning/useAction";
 import { listReviewCards, reviewKeys } from "../review/api";
@@ -51,6 +53,9 @@ import { UploadZone } from "./UploadZone";
 const OFFERS_MAX = 3;
 
 const HIDDEN_KEY = "perfin.inbox.hiddenOffers";
+
+/** The anchor of the uploader (Home's "Add documents" leads there). */
+const ADD_DOCUMENTS = "inbox-add-documents";
 
 /** Offers set aside with "Not now" in this browser session (kept in `sessionStorage`). */
 function readHidden(): ReadonlySet<string> {
@@ -136,6 +141,8 @@ export function InboxPage() {
   const accounts = useAccounts();
   const summary = useInboxSummary();
   useFocusHashCard();
+  const canWrite = useCanWrite();
+  const uploadInput = useRef<HTMLInputElement>(null);
 
   const cards = useQuery({ queryKey: reviewKeys.cards(), queryFn: () => listReviewCards() });
   const suggestedSeries = useQuery({
@@ -253,7 +260,18 @@ export function InboxPage() {
 
   return (
     <div className="inbox">
-      <UploadZone />
+      {canWrite ? (
+        <div className="inbox__bar">
+          <Button
+            variant="primary"
+            onClick={() => {
+              uploadInput.current?.click();
+            }}
+          >
+            Upload
+          </Button>
+        </div>
+      ) : null}
       <div className="inbox__needs">
         {everything ? null : (
           <p className="review-scope">
@@ -298,7 +316,7 @@ export function InboxPage() {
           empty={
             allClear ? (
               <Card className="inbox-clear" title="All clear">
-                <p className="muted">Every document you added is imported. Drop new statements here any time.</p>
+                <p className="muted">Every document you added is imported. Drop new statements below any time.</p>
               </Card>
             ) : null
           }
@@ -331,6 +349,9 @@ export function InboxPage() {
             ))}
           </ul>
         )}
+      </div>
+      <div id={ADD_DOCUMENTS} tabIndex={-1} className="inbox__add">
+        <UploadZone inputRef={uploadInput} />
       </div>
       {everything ? <RecentImports /> : null}
     </div>

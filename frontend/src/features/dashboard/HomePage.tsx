@@ -35,7 +35,7 @@ export function HomePage() {
         actions={
           // A viewer's Inbox has no uploader, so the action would lead nowhere.
           canWrite ? (
-            <Link to="/inbox" className="btn btn--primary btn--md home-add">
+            <Link to="/inbox" hash="inbox-add-documents" className="btn btn--primary btn--md home-add">
               Add documents
             </Link>
           ) : undefined

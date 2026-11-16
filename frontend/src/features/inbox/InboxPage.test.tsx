@@ -477,7 +477,7 @@ describe("Inbox, Needs you", () => {
     renderApp("/inbox");
     expect(await screen.findByRole("heading", { name: "All clear" })).toBeInTheDocument();
     expect(
-      screen.getByText("Every document you added is imported. Drop new statements here any time."),
+      screen.getByText("Every document you added is imported. Drop new statements below any time."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Waiting on you" })).not.toBeInTheDocument();
   });

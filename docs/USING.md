@@ -54,8 +54,8 @@ with Retry, and the others still show.
 The Inbox gathers everything that waits on a person. Its count is on the
 rail.
 
-- **Needs you** (`/inbox`): an Upload button and a drop zone at the top.
-    Then one card per thing to answer, most urgent first:
+- **Needs you** (`/inbox`): an Upload button at the top opens the file
+    picker. Then one card per thing to answer, most urgent first:
 
     1. documents whose money is wrong until someone answers (a statement
        that does not add up, rows to check, a possible copy, a sign
@@ -76,8 +76,10 @@ rail.
 
     Inside the first three groups the oldest document comes first. A card
     you answered stays where it was until you leave the page, and says what
-    happened. Under the cards, **Imported recently** lists the files that
-    finished in the last 14 days, with their account and period.
+    happened. Under the cards, **Add documents** has the account choice
+    and the drop zone (Home's "Add documents" leads there), then
+    **Imported recently** lists the files that finished in the last 14
+    days, with their account and period.
 - **Documents** (`/inbox/documents`): the library of every file, with its
   kind, status, tax year and a full-text search. A document opens at
   `/inbox/documents/<id>`, with its pages, where its rows went, and its

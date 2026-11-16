@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The top of Inbox, Needs you (spec sections 1.3 and 4.3): an Upload button
- * and a drop zone, then one row per file sent from this page.
+ * Add documents on Inbox, Needs you (spec sections 1.3 and 4.3): a drop zone,
+ * then one row per file sent from this page. The page's Upload button opens
+ * the same file picker (`inputRef`).
  *
  * - The drop zone is a `<label>` over an `<input type="file" multiple>`, so a
  *   keyboard and a screen reader reach it like any file field.
  * - Each file uploads with progress (XHR, `imports/api.ts::uploadDocument`).
  * - A finished row links to its document (`/inbox/documents/<id>`). When the
- *   file waits on a person it says "Waiting on you below" and links to its
+ *   file waits on a person it says "Waiting on you above" and links to its
  *   card; once read it says whether it was imported.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useId, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type RefObject } from "react";
 
-import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Field } from "../../components/Field";
 import { Select } from "../../components/Select";
@@ -59,7 +59,7 @@ function DoneText({
     // To the whole Inbox, so the card is on the page even under `?document=`.
     return (
       <Link to="/inbox" hash={documentAnchor(item.documentId)} className="link-action">
-        Waiting on you below
+        Waiting on you above
       </Link>
     );
   }
@@ -76,10 +76,15 @@ function DoneText({
   return <span>Uploaded</span>;
 }
 
-export function UploadZone() {
+/**
+ * `inputRef` is the file input, for an Upload button elsewhere on the page
+ * (the Inbox puts one at the top) to open the same picker.
+ */
+export function UploadZone({ inputRef }: { inputRef?: RefObject<HTMLInputElement> }) {
   const inputId = useId();
   const hintId = useId();
-  const input = useRef<HTMLInputElement>(null);
+  const own = useRef<HTMLInputElement>(null);
+  const input = inputRef ?? own;
   const canWrite = useCanWrite();
   const queryClient = useQueryClient();
   const accounts = useAccounts();
@@ -139,6 +144,16 @@ export function UploadZone() {
     }
   };
 
+  // Files chosen with the page's Upload button: bring their rows into view.
+  const uploads = useRef<HTMLUListElement>(null);
+  const count = items.length;
+  useEffect(() => {
+    const list: { scrollIntoView?: unknown } | null = uploads.current;
+    if (count > 0 && list !== null && typeof list.scrollIntoView === "function") {
+      uploads.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [count]);
+
   const onDrop = (event: DragEvent<HTMLLabelElement>): void => {
     event.preventDefault();
     setDragging(false);
@@ -156,20 +171,7 @@ export function UploadZone() {
   const editable = (accounts.data ?? []).filter((account) => account.can_edit && !account.is_closed);
 
   return (
-    <Card
-      title="Add documents"
-      className="upload-zone-card"
-      actions={
-        <Button
-          variant="primary"
-          onClick={() => {
-            input.current?.click();
-          }}
-        >
-          Upload
-        </Button>
-      }
-    >
+    <Card title="Add documents" className="upload-zone-card">
       <div className="upload-zone-card__body">
         <Field label="Account" hint="Optional. Leave empty and PerFin tries to recognise the account.">
           <Select
@@ -213,7 +215,7 @@ export function UploadZone() {
           />
         </label>
         {items.length > 0 ? (
-          <ul className="upload-zone__items" aria-label="Uploads">
+          <ul ref={uploads} className="upload-zone__items" aria-label="Uploads">
             {items.map((item) => (
               <li key={item.id} className="upload-zone__item">
                 {item.documentId === null ? (

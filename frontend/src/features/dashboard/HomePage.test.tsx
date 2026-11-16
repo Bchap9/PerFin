@@ -211,7 +211,8 @@ describe("Home", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Good morning, Robin Vale" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByText("Your money at a glance.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Add documents" })).toHaveAttribute("href", "/inbox");
+    // To the uploader, which sits under what needs you.
+    expect(screen.getByRole("link", { name: "Add documents" })).toHaveAttribute("href", "/inbox#inbox-add-documents");
   });
 
   it("shows net worth with its change and a sparkline label", async () => {

@@ -230,8 +230,9 @@ describe("upload zone", () => {
     );
     finish(xhrs[0], "d-7");
     const uploads = within(await screen.findByRole("list", { name: "Uploads" }));
-    const below = await uploads.findByRole("link", { name: "Waiting on you below" });
-    expect(below).toHaveAttribute("href", "/inbox#inbox-document-d-7");
+    // The cards are above the uploader.
+    const above = await uploads.findByRole("link", { name: "Waiting on you above" });
+    expect(above).toHaveAttribute("href", "/inbox#inbox-document-d-7");
     // The card it points to carries that anchor.
     const waiting = await screen.findByRole("list", { name: "Waiting on you" });
     expect(waiting.querySelector("#inbox-document-d-7")).not.toBeNull();
@@ -291,6 +292,30 @@ describe("upload zone", () => {
     input.addEventListener("click", opened);
     await user.click(screen.getByRole("button", { name: "Upload" }));
     expect(opened).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts what needs you first, the uploader under it and Upload at the top", async () => {
+    zoneApi();
+    renderApp("/inbox");
+    const clear = await screen.findByRole("region", { name: "All clear" });
+    const zone = screen.getByRole("region", { name: "Add documents" });
+    const recent = await screen.findByRole("region", { name: "Imported recently" });
+    const upload = screen.getByRole("button", { name: "Upload" });
+    const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(before(upload, clear)).toBe(true);
+    expect(before(clear, zone)).toBe(true);
+    expect(before(zone, recent)).toBe(true);
+    // One Upload button: the card keeps its drop zone and "Choose files".
+    expect(screen.getAllByRole("button", { name: "Upload" })).toHaveLength(1);
+  });
+
+  it("the address #inbox-add-documents brings the uploader into focus", async () => {
+    zoneApi();
+    renderApp("/inbox#inbox-add-documents");
+    const zone = await screen.findByRole("region", { name: "Add documents" });
+    await waitFor(() => {
+      expect(zone.parentElement).toHaveFocus();
+    });
   });
 
   it("sends the account chosen for the upload", async () => {
