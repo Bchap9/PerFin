@@ -32,6 +32,7 @@ from app.db.rls import set_context
 from app.domain.documents import repo, service
 from app.domain.documents.blobstore import LocalFSBlobStore, decrypt_stream
 from app.domain.documents.models import (
+    TERMINAL_STATUSES,
     Blob,
     BlobArea,
     Document,
@@ -41,6 +42,7 @@ from app.domain.documents.models import (
     IngestJob,
     IngestStage,
     ReviewItem,
+    ReviewItemState,
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE, IngestDocumentPayload
@@ -52,6 +54,8 @@ from app.ingestion.intake.upload import (
     UploadTooLargeError,
     receive_stream,
     receive_upload,
+    record_stored,
+    store_stream,
 )
 from app.ingestion.sandbox.runner import SandboxError
 from app.workers.registry import REGISTRY, JobContext
@@ -185,23 +189,109 @@ def test_upload_stores_encrypted_blob_document_and_job(
     assert event.payload == {"id": str(document.id), "status": "received"}
 
 
-def test_same_content_twice_is_a_possible_duplicate(
+def test_same_bytes_again_are_skipped_with_a_notice(
     db: Session, store: LocalFSBlobStore, keyring: Keyring
 ) -> None:
-
+    # Rewritten from test_same_content_twice_is_a_possible_duplicate: the copy
+    # no longer waits behind a question, it is skipped and says so.
     owner = make_user(db, role="owner")
     principal = _principal(owner)
     apply_rls_context(db, principal)
     first = _upload(db, principal, store, keyring, csv_bytes(TXNS))
     second = _upload(db, principal, store, keyring, csv_bytes(TXNS))
-    assert second.status is DocumentStatus.NEEDS_REVIEW
+    assert second.status is DocumentStatus.REJECTED
     assert second.duplicate_of == first.document_id
     assert second.job_id is None
+    copy = db.get(Document, second.document_id)
+    assert copy is not None
+    assert (copy.status, copy.error) == (DocumentStatus.REJECTED, "duplicate")
     item = db.execute(
         select(ReviewItem).where(ReviewItem.document_id == second.document_id)
     ).scalar_one()
     assert item.kind is ReviewKind.POSSIBLE_DUPLICATE
-    assert item.payload["duplicate_of"] == str(first.document_id)
+    assert item.state is ReviewItemState.OPEN
+    assert item.payload == {
+        "reason": "same_content_skipped",
+        "duplicate_of": str(first.document_id),
+    }
+    # No job for the copy; the first document and its job are as they were.
+    jobs = db.execute(select(Job).where(Job.type == INGEST_JOB_TYPE)).scalars().all()
+    assert [job.id for job in jobs] == [first.job_id]
+    assert jobs[0].payload == {"document_id": str(first.document_id)}
+    original = db.get(Document, first.document_id)
+    assert original is not None
+    assert (original.status, original.error) == (DocumentStatus.RECEIVED, None)
+    assert (
+        db.execute(select(ReviewItem).where(ReviewItem.document_id == first.document_id)).first()
+        is None
+    )
+    # A third copy is still measured against the first one, not the skipped one.
+    third = _upload(db, principal, store, keyring, csv_bytes(TXNS))
+    assert (third.status, third.duplicate_of) == (DocumentStatus.REJECTED, first.document_id)
+
+
+def test_skipped_copy_does_not_count_as_waiting(
+    db: Session, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    # The queue leaves the notice out of its count through the review lane's
+    # NOTICE_REASONS; here: the copy is terminal and says why, in ids only.
+    owner = make_user(db, role="owner")
+    principal = _principal(owner)
+    apply_rls_context(db, principal)
+    first = _upload(db, principal, store, keyring, csv_bytes(TXNS))
+    second = _upload(db, principal, store, keyring, csv_bytes(TXNS))
+    copy = db.get(Document, second.document_id)
+    assert copy is not None
+    assert copy.status is not DocumentStatus.NEEDS_REVIEW
+    assert copy.status in TERMINAL_STATUSES
+    payloads = [
+        item.payload
+        for item in db.execute(
+            select(ReviewItem).where(ReviewItem.document_id == copy.id)
+        ).scalars()
+    ]
+    assert payloads == [{"reason": "same_content_skipped", "duplicate_of": str(first.document_id)}]
+    audit_row = db.execute(select(AuditLog).where(AuditLog.target_id == str(copy.id))).scalar_one()
+    assert audit_row.action == "document.receive"
+    assert audit_row.after is not None
+    assert audit_row.after["status"] == "rejected"
+    assert audit_row.after["duplicate_of"] == str(first.document_id)
+    assert "statement" not in str(audit_row.after)
+    events = db.execute(select(Event).where(Event.type == "document.created")).scalars().all()
+    assert {"id": str(copy.id), "status": "rejected"} in [event.payload for event in events]
+
+
+def test_held_copy_still_waits_for_its_owner(
+    db: Session, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    # A hold is unchanged: the file waits for its answer and is not skipped.
+    household = make_household(db)
+    set_context(db, household.id)
+    data = csv_bytes(TXNS)
+
+    def record(hold: tuple[ReviewKind, dict[str, object]] | None) -> service.ReceivedDocument:
+        stored = store_stream(store=store, keyring=keyring, chunks=_chunks(data), max_bytes=MAX)
+        return record_stored(
+            db,
+            stored,
+            store=store,
+            household_id=household.id,
+            source=DocumentSource.DROPFOLDER,
+            hold=hold,
+        )
+
+    first = record(None)
+    held = record((ReviewKind.UNKNOWN_OWNER, {"reason": "unknown_owner"}))
+    assert held.status is DocumentStatus.NEEDS_REVIEW
+    assert held.duplicate_of == first.document_id
+    assert held.job_id is None
+    reasons = sorted(
+        item.payload["reason"]
+        for item in db.execute(
+            select(ReviewItem).where(ReviewItem.document_id == held.document_id)
+        ).scalars()
+    )
+    assert reasons == ["same_content", "unknown_owner"]
 
 
 @pytest.mark.parametrize(

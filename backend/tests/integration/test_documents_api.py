@@ -459,6 +459,43 @@ def test_reprocess_requeues_and_closes_open_items(
     assert problem_type(busy) == "document-busy"
 
 
+def test_reprocessing_the_copy_imports_it(
+    home: dict[str, AuthedClient], factories: Factories
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    first = upload(owner, SAMPLE_CSV)
+    assert first.status_code == 202, first.text
+    copy = upload(owner, SAMPLE_CSV)
+    assert copy.status_code == 202, copy.text
+    body = copy.json()
+    assert body["status"] == "rejected"
+    assert body["duplicate_of"] == first.json()["id"]
+    assert body["job_id"] is None
+    copy_id = uuid.UUID(body["id"])
+    with factories.transaction() as db:
+        set_context(db, hh)
+        (item,) = db.execute(select(ReviewItem).where(ReviewItem.document_id == copy_id)).scalars()
+        assert item.state is ReviewItemState.OPEN
+        assert item.payload == {
+            "reason": "same_content_skipped",
+            "duplicate_of": first.json()["id"],
+        }
+    # The undo: the skipped copy is terminal, so it can be sent through the pipeline.
+    response = owner.post(f"{DOCS}/{copy_id}/reprocess")
+    assert response.status_code == 202, response.text
+    again = response.json()
+    assert again["status"] == "received"
+    job = load(factories, hh, Job, uuid.UUID(again["job_id"]))
+    assert job.type == INGEST_JOB_TYPE
+    assert job.payload == {"document_id": str(copy_id)}
+    document = load(factories, hh, Document, copy_id)
+    assert (document.status, document.error) == (DocumentStatus.RECEIVED, None)
+    closed = load(factories, hh, ReviewItem, item.id)
+    assert closed.state is ReviewItemState.DISMISSED
+    assert closed.resolution == {"action": "superseded", "by": "document.reprocess"}
+
+
 def test_link_to_transactions_and_accounts(
     home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
 ) -> None:
@@ -606,6 +643,9 @@ def test_delete_with_data_removes_the_imported_rows(
         "loan_payments": 1,
         "balance_snapshots": 1,
         "child_documents": 1,
+        # No statement record was stored for this hand-made document.
+        "statements": [],
+        "skipped_lines": 0,
     }
 
     response = owner.delete(f"{DOCS}/{document.id}", params={"with_data": "true"})
