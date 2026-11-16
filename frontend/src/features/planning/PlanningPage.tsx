@@ -3,17 +3,37 @@ import "./planning.css";
 
 import type { ReactNode } from "react";
 
+import type { Crumb } from "../../components/Breadcrumbs";
+import { PageHeader } from "../../components/PageHeader";
 import { Spinner } from "../../components/Spinner";
 import { errorMessage } from "../../lib/api/client";
 
-/** Page chrome shared by the planning screens: a heading with actions, then content. */
-export function PlanningPage({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
+/**
+ * Page chrome shared by the planning screens: the page header (title,
+ * optional description, breadcrumbs and actions), then content. The title is
+ * the page's `h1`, or an `h2` inside a section layout (see `PageHeader`).
+ */
+export function PlanningPage({
+  title,
+  actions,
+  children,
+  description,
+  breadcrumbs,
+}: {
+  title: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  description?: string;
+  breadcrumbs?: readonly Crumb[];
+}) {
   return (
-    <section aria-labelledby="page-title" className="planning-stack">
-      <div className="page-header">
-        <h1 id="page-title">{title}</h1>
-        {actions === undefined ? null : <div className="planning-actions">{actions}</div>}
-      </div>
+    <section aria-label={title} className="planning-stack">
+      <PageHeader
+        title={title}
+        {...(description === undefined ? {} : { description })}
+        {...(breadcrumbs === undefined ? {} : { breadcrumbs })}
+        {...(actions === undefined ? {} : { actions })}
+      />
       {children}
     </section>
   );

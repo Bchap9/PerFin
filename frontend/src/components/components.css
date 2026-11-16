@@ -1050,6 +1050,9 @@ a.btn--danger:hover {
 /* ---- Page header and breadcrumbs --------------------------------------------- */
 .page-header.page-header--stacked {
   display: grid;
+  /* The row spans the width, so actions sit at the end (layout.css's flex
+     .page-header sets space-between, which would shrink the grid column). */
+  justify-content: stretch;
   gap: var(--space-2);
 }
 

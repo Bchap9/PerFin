@@ -1,20 +1,28 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Shared by the planning screens (budgets, goals, loans, assets, tax, rules,
+ * reports, the dashboard). The class names are a contract with every page
+ * that imports PlanningPage; the look follows the redesign's panel, row and
+ * figure styles. Every colour is a token.
+ */
 .planning-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: 1.25rem;
 }
 
 .planning-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
 }
 
+/* Two or three panels side by side; one column on a narrow screen. */
 .planning-grid {
   display: grid;
   gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
 }
 
 .planning-form {
@@ -30,6 +38,7 @@
   gap: var(--space-3);
 }
 
+/* A list of rows: a hairline between items, none above the first. */
 .planning-list {
   list-style: none;
   margin: 0;
@@ -44,25 +53,35 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-2) 0.625rem;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
 }
 
+.planning-list__item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* A progress bar drawn with HTML (the SVG ProgressBar is the new form). */
 .bar {
   position: relative;
-  height: 0.6rem;
+  height: 0.5rem;
   border-radius: 999px;
-  background: var(--color-border, #d0d5dd);
+  background: var(--color-surface-sunken);
   overflow: hidden;
 }
 
 .bar__fill {
   display: block;
   height: 100%;
-  background: var(--color-accent, #2457d6);
+  border-radius: 999px;
+  background: var(--color-accent);
 }
 
 .bar__fill--over {
-  background: var(--color-danger, #b42318);
+  background: var(--color-danger);
 }
 
 .bar-row {
@@ -72,32 +91,50 @@
   gap: var(--space-3);
 }
 
+@media (max-width: 719px) {
+  .bar-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .bar-row > .bar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
 .tree-indent {
   display: inline-block;
 }
 
 .muted {
-  color: var(--color-text-muted, #5b6472);
+  color: var(--color-text-muted);
 }
 
 .planning-diff {
   display: inline-block;
 }
 
+/* Headline figures: a small uppercase label over a display-type value. */
 .dashboard-figures {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-5);
+  gap: var(--space-3) var(--space-6);
   margin: 0;
 }
 
 .dashboard-figures dt {
   color: var(--color-text-muted);
-  font-size: 0.875rem;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .dashboard-figures dd {
-  margin: 0;
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-display);
   font-size: 1.375rem;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: var(--num);
 }

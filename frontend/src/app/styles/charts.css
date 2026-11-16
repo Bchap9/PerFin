@@ -56,3 +56,21 @@ text.chart-axis {
   font-size: var(--font-size-xs);
   font-variant-numeric: var(--num);
 }
+
+/* A hovered point: the series fill with a ring in the surface colour. */
+.chart-active-dot {
+  stroke: var(--color-surface);
+  stroke-width: 2;
+}
+
+/* Recharts' default tooltip writes a white box through the CSSOM; the theme
+   wins here so it reads in dark mode too. */
+.chart-tooltip.recharts-default-tooltip {
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised) !important;
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: var(--num);
+}
