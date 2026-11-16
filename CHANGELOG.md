@@ -109,6 +109,26 @@ Stage 4 of four on the way to 1.0.0: the release review.
   `RHAPSODY`; `ITUNES MUSIC` and `ITUNES STORE` (Apple); `THE GAP`; Shell
   with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
   word names too many other businesses (merchant list version 9).
+- **A table's title reads like a card's.** Visible table captions
+  (Holdings, Totals by category, Upcoming days and the others) take the
+  card title's face, size and inset, and span the width on a phone instead
+  of breaking after each word.
+- **Inbox › Documents shows one heading.** The library no longer repeats a
+  Document library title and Inbox / Documents breadcrumbs under the Inbox
+  heading and its tabs; Upload files sits on the Documents card. A single
+  document's page keeps its breadcrumbs.
+- **A property's main action is Add valuation.** A manual asset's page
+  offers Add valuation (its Valuations tab with the value field ready, or
+  the asset details when it has none) in place of Add transaction, which
+  moves to the account's menu.
+- **Upcoming's look-ahead is a small control on the tab row**, shown with
+  the calendar only, instead of a select as wide as the page.
+- **A loan's amount stays on its row's first line on a phone.** A long
+  terms line keeps to one line with an ellipsis; the account's page has it
+  in full.
+- **Suggested categories never group rows by text of fewer than three
+  letters and digits.** Rows printed as `#1`, `-` or nothing each stand
+  alone in the Inbox, so one Accept covers only rows of the same merchant.
 
 ## [1.0.0-rc.11] - 2026-11-16
 
