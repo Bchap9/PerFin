@@ -160,11 +160,15 @@ schema; the api and worker connect as `perfin_app`, which cannot.
 - Until the database is at the migration head, the api answers `/readyz`
   with 503 and is not sent traffic.
 
-During a Helm rolling upgrade the old pods keep serving for a short while
-against the migrated schema. A release whose migration makes that unsafe says
-so in its notes; for such a release, or if you want no overlap at all, scale
-the api and worker to zero before `helm upgrade` (Compose always stops the old
-containers before it starts the new ones).
+During an upgrade the old release keeps serving for a short while against
+the migrated schema. With Helm, the old pods run until the rollout replaces
+them. With Compose, the old `api`, `worker` and `mcp` containers keep running
+while `migrate` runs and until `docker compose up -d` recreates them, usually
+seconds. A release whose migration makes that overlap unsafe says so in its
+notes. For such a release, or if you want no overlap at all, stop the old
+release first: with Compose, run `docker compose stop api worker mcp` before
+`docker compose up -d`; with Helm, scale the api, worker and MCP deployments
+to zero before `helm upgrade`.
 
 **Downgrades are not supported.** `perfin migrate` only moves forward, and an
 older api reports not ready against a newer schema (`/readyz` stays at 503). To go
