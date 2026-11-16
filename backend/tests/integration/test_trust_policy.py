@@ -757,6 +757,9 @@ def test_contradiction_warning_is_never_a_clean_read() -> None:
 
     assert clean_read(_run(), _parsed(UNCHECKED, ("posted_date",))) is False
     assert clean_read(_run(), _parsed(UNCHECKED, ("posted_date", "reconciliation"))) is False
+    # What a taught layout scores a row of a table whose order it guessed
+    # (``table_order_guessed``, test_layout_template): such a sign waits.
+    assert clean_read(_run(), _parsed(UNCHECKED, ("amount", "reconciliation"))) is False
     assert clean_read(_run(), _parsed()) is False
     assert clean_read(_run(), _parsed(UNCHECKED, source_format="ofx")) is False
     assert clean_read(_run(), _parsed(UNCHECKED, source_format="csv")) is False
