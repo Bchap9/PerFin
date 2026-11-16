@@ -10,6 +10,13 @@ import { createContext, useContext, type ReactNode } from "react";
 
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 
+/**
+ * The id of the page's one `h1`. `main` is labelled by it (RootLayout), so a
+ * screen reader names the content after the page; every place that renders a
+ * page's `h1` gives it this id, and only that `h1` has it.
+ */
+export const PAGE_TITLE_ID = "page-title";
+
 /** True inside a layout that already renders the page's `h1` (SectionLayout, SettingsLayout). */
 export const SectionHeadingContext = createContext(false);
 
@@ -28,7 +35,9 @@ export function PageHeader({ title, description, actions, breadcrumbs }: PageHea
       {breadcrumbs === undefined || breadcrumbs.length === 0 ? null : <Breadcrumbs items={breadcrumbs} />}
       <div className="page-header__row">
         <div className="page-header__text">
-          <Heading className="page-header__title">{title}</Heading>
+          <Heading id={inSection ? undefined : PAGE_TITLE_ID} className="page-header__title">
+            {title}
+          </Heading>
           {description === undefined ? null : <p className="page-header__description">{description}</p>}
         </div>
         {actions === undefined ? null : <div className="page-header__actions">{actions}</div>}

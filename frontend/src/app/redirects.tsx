@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createRoute, Link, redirect, useNavigate, useRouterState, type AnyRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 
+import { PAGE_TITLE_ID } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { api, errorMessage, isApiError, unwrap } from "../lib/api/client";
 import { queryRoots } from "../lib/queryKeys";
@@ -83,8 +84,8 @@ export function AccountRedirect({ kind, tab }: { kind: "loan" | "asset"; tab: st
   if (query.isError) {
     const gone = isApiError(query.error) && query.error.status === 404;
     return (
-      <section className="status-page" aria-labelledby="redirect-title">
-        <h1 id="redirect-title">{gone ? `${Noun} not found` : `Could not open the ${noun}`}</h1>
+      <section className="status-page" aria-labelledby={PAGE_TITLE_ID}>
+        <h1 id={PAGE_TITLE_ID}>{gone ? `${Noun} not found` : `Could not open the ${noun}`}</h1>
         <p>{gone ? `This ${noun} no longer exists.` : errorMessage(query.error)}</p>
         <Link to="/accounts" className="btn btn--primary btn--md">
           Go to Accounts

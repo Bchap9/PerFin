@@ -5,7 +5,7 @@ import "./settings.css";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-import { PageHeader, SectionHeadingContext } from "../../components/PageHeader";
+import { PAGE_TITLE_ID, PageHeader, SectionHeadingContext } from "../../components/PageHeader";
 import { formatDateTime } from "../../lib/dates";
 import { StepUpProvider } from "../auth/StepUp";
 import { SettingsNav, useIsInstanceAdmin, visibleSettingsGroups } from "./SettingsNav";
@@ -33,7 +33,9 @@ export function SettingsLayout() {
   return (
     <StepUpProvider>
       <header className="section-header settings-header">
-        <h1 className="section-header__title">Settings</h1>
+        <h1 id={PAGE_TITLE_ID} className="section-header__title">
+          Settings
+        </h1>
       </header>
       <div className={index ? "settings-shell settings-shell--index" : "settings-shell"}>
         {index ? null : <SettingsNav />}

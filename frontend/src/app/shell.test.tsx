@@ -4,6 +4,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { SectionHeadingContext } from "../components/PageHeader";
 import { authedSession, json, mockApi, problem, renderApp } from "../features/auth/testing";
 import { ApiError } from "../lib/api/client";
 import { expectNoAxeViolations } from "../test/axe";
@@ -238,5 +239,32 @@ describe("error handling", () => {
     expect(await screen.findByRole("heading", { name: "Something went wrong" })).toBeInTheDocument();
     expect(screen.queryByText(/render exploded/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("inside a section the error is an h2 under the section's h1, and main stays named after the section", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession() });
+    const root = createRootRoute({
+      component: () => (
+        <main aria-labelledby="page-title">
+          <h1 id="page-title">Plan</h1>
+          <SectionHeadingContext.Provider value={true}>
+            <Outlet />
+          </SectionHeadingContext.Provider>
+        </main>
+      ),
+    });
+    const boom = createRoute({
+      getParentRoute: () => root,
+      path: "/",
+      component: () => {
+        throw new Error("render exploded");
+      },
+      errorComponent: RouteErrorPage,
+    });
+    const router = createRouter({ routeTree: root.addChildren([boom]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByRole("heading", { level: 2, name: "Something went wrong" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("main")).toHaveAccessibleName("Plan");
   });
 });

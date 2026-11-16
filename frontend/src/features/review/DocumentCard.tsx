@@ -1438,8 +1438,10 @@ function CardView({ model }: { model: CardModel }) {
         }}
       />
     ));
-  // Several cards share a heading ("1 thing(s) to settle"), so each region
-  // is named after its file as well: landmarks need distinct names.
+  // Several cards share a heading ("1 thing(s) to settle"), so each card is
+  // named after its file as well. Two cards can still share a name (two
+  // files of the same name, two loose items of one kind), so a card is a
+  // named group in the list, not a landmark: landmarks need distinct names.
   const regionName = `${heading}: ${
     document?.original_filename ?? (asked === undefined ? "no file" : explain(asked).title)
   }`;
@@ -1447,6 +1449,7 @@ function CardView({ model }: { model: CardModel }) {
     <Card
       className="review-card"
       title={heading}
+      role="group"
       aria-labelledby={undefined}
       aria-label={regionName}
       actions={
@@ -1601,12 +1604,16 @@ export function LooseCard({ item }: { item: ReviewItem }) {
   );
 }
 
-/** An item that was resolved or dismissed, as it is kept in the queue's history. */
+/**
+ * An item that was resolved or dismissed, as it is kept in the queue's
+ * history. Many share a title, so each is a group in the list, not a landmark.
+ */
 export function ClosedItem({ item }: { item: ReviewItem }) {
   const explanation = explain(item);
   return (
     <Card
       className="review-card"
+      role="group"
       title={explanation.title}
       actions={
         <Badge tone={item.state === "resolved" ? "success" : "neutral"}>

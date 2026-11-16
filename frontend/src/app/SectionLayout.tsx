@@ -8,7 +8,7 @@
  */
 import { Outlet, useMatches } from "@tanstack/react-router";
 
-import { SectionHeadingContext } from "../components/PageHeader";
+import { PAGE_TITLE_ID, SectionHeadingContext } from "../components/PageHeader";
 import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import { useInboxSummary } from "./inboxSummary";
 import { SECTIONS, type Section, type SectionTab } from "./routeMap";
@@ -48,7 +48,9 @@ function HeaderWithCount({ section }: { section: Section }) {
 function HeaderBody({ section, inboxCount }: { section: Section; inboxCount?: number | undefined }) {
   return (
     <header className="section-header">
-      <h1 className="section-header__title">{section.label}</h1>
+      <h1 id={PAGE_TITLE_ID} className="section-header__title">
+        {section.label}
+      </h1>
       <p className="section-header__description">{section.description}</p>
       {section.tabs.length === 0 ? null : <SectionNav label={section.label} items={section.tabs.map((tab) => navItem(tab, inboxCount))} />}
     </header>

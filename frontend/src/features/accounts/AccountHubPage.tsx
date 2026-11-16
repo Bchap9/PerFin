@@ -23,7 +23,7 @@ import { Button } from "../../components/Button";
 import { EmptyState } from "../../components/EmptyState";
 import { Menu, type MenuItem } from "../../components/Menu";
 import { MoneyText } from "../../components/MoneyText";
-import { PageHeader } from "../../components/PageHeader";
+import { PAGE_TITLE_ID, PageHeader } from "../../components/PageHeader";
 import { Spinner } from "../../components/Spinner";
 import { Stat, StatGroup } from "../../components/Stat";
 import { Tabs } from "../../components/Tabs";
@@ -265,8 +265,8 @@ export function AccountHubPage() {
   }
   if (account.isError) {
     return (
-      <section className="ledger-stack" aria-labelledby="account-missing-title">
-        <h1 id="account-missing-title">Account not found</h1>
+      <section className="ledger-stack" aria-labelledby={PAGE_TITLE_ID}>
+        <h1 id={PAGE_TITLE_ID}>Account not found</h1>
         <p role="alert" className="ledger-error">
           {errorMessage(account.error)}
         </p>

@@ -2,18 +2,19 @@
 import "./auth.css";
 
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { useCallback, useId, type ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
+
+import { PAGE_TITLE_ID } from "../../components/PageHeader";
 
 /** The centred card the sign-in, setup and reset pages share. */
 export function AuthLayout({ title, intro, children }: { title: string; intro?: ReactNode; children: ReactNode }) {
-  const headingId = useId();
   return (
-    <section className="auth-page" aria-labelledby={headingId}>
+    <section className="auth-page" aria-labelledby={PAGE_TITLE_ID}>
       <div className="auth-card">
         <p className="auth-brand" aria-hidden="true">
           PerFin
         </p>
-        <h1 id={headingId} className="auth-title">
+        <h1 id={PAGE_TITLE_ID} className="auth-title">
           {title}
         </h1>
         {intro === undefined ? null : <div className="auth-intro">{intro}</div>}

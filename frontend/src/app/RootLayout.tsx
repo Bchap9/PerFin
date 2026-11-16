@@ -9,12 +9,17 @@
  * - 820 to 1023 px: an icon rail, labels visually hidden but still the names;
  * - under 820 px: the rail's brand and foot become a top bar and its section
  *   links a bottom bar; Settings is reached from the account menu.
+ *
+ * The rail is the page's banner (brand, sections, account), so nothing in the
+ * shell sits outside a landmark, and `main` is named after the page's `h1`
+ * (`PAGE_TITLE_ID`).
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { cx } from "../components/cx";
 import { GearIcon } from "../components/icons";
+import { PAGE_TITLE_ID } from "../components/PageHeader";
 import { AccountMenu } from "../features/auth/AccountMenu";
 import { isBarePath } from "../features/auth/guard";
 import { AiBanner } from "../features/settings/ai/AiBanner";
@@ -35,7 +40,7 @@ function Rail({ pathname }: { pathname: string }) {
   const current = sectionForPath(pathname);
   const inSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   return (
-    <div className="app-rail">
+    <header className="app-rail">
       <Link to="/" className="app-brand" activeProps={{}}>
         Per<span className="app-brand__accent">Fin</span>
       </Link>
@@ -77,7 +82,7 @@ function Rail({ pathname }: { pathname: string }) {
         <SessionIndicator />
         <ThemeToggle />
       </div>
-    </div>
+    </header>
   );
 }
 
@@ -91,7 +96,7 @@ export function RootLayout() {
         Skip to content
       </a>
       {bare ? null : <Rail pathname={pathname} />}
-      <main id="main" className="app-main" tabIndex={-1}>
+      <main id="main" className="app-main" tabIndex={-1} aria-labelledby={PAGE_TITLE_ID}>
         <div className="app-main__inner">
           {bare ? null : <AiBanner />}
           <Outlet />
