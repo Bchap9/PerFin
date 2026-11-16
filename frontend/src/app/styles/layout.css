@@ -381,8 +381,9 @@
     justify-content: center;
     gap: 2px;
     min-height: 3rem;
-    padding: var(--space-1) 2px;
+    padding: var(--space-1) 0;
     font-size: 0.6875rem;
+    letter-spacing: -0.01em;
     text-align: center;
   }
 
