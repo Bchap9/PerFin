@@ -35,7 +35,7 @@ from app.domain.documents.models import Document
 from app.domain.imports.models import ImportTombstone
 from app.domain.review import repo as review_repo
 from app.domain.review.models import ImportHashAlias
-from app.domain.transactions import service
+from app.domain.transactions import categories, service
 from app.domain.transactions.import_hash import import_hash
 from app.domain.transactions.models import (
     ReviewState,
@@ -53,7 +53,7 @@ from tests.fixtures.households import (
     household_events,
     problem_type,
 )
-from tests.fixtures.ledger import LedgerFactories
+from tests.fixtures.ledger import LedgerFactories, make_scheduled_transaction
 
 pytestmark = pytest.mark.integration
 
@@ -1061,3 +1061,162 @@ def test_dates_far_apart_paginate(world: World) -> None:
         if not cursor:
             break
     assert seen == expected
+
+
+# ---------------------------------------------------------------------------
+# How a category was decided: the stored facts and the four filters
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_falls_back_to_the_group_then_to_nothing(world: World) -> None:
+    """A household without a leaf gets the group's category; without the group, nothing."""
+    hh, ledger = world.household_id, world.ledger
+    food = ledger.category(hh, name="Food and dining", system_key="food")
+    groceries = ledger.category(hh, name="Groceries", parent=food, system_key="food.groceries")
+    ledger.category(hh, name="Their own category")  # no key: never a target of a guess
+    ledger.category(world.foreign_acct.household_id, name="Leisure", system_key="leisure")
+    with world.factories.transaction() as db:
+        set_context(db, hh)
+        by_key = categories.category_ids_by_key(db, hh)
+    assert by_key == {"food": food.id, "food.groceries": groceries.id}
+    assert categories.resolve(by_key, "food.groceries") == groceries.id
+    assert categories.resolve(by_key, "food.fast_food") == food.id  # the group
+    assert categories.resolve(by_key, "food") == food.id
+    assert categories.resolve(by_key, "leisure.games") is None  # another household's group
+    assert categories.resolve(by_key, "leisure") is None
+    assert categories.resolve({}, "food.groceries") is None
+    assert categories.TAXONOMY_VERSION >= 1
+
+
+def test_filter_by_category_source(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    category = ledger.category(hh, name="Groceries")
+    person = ledger.transaction(acct, category=category, category_source="person")
+    listed = ledger.transaction(acct, category=category, category_source="dictionary")
+    cleared = ledger.transaction(acct, category_source="person")  # cleared by hand
+    undecided = ledger.transaction(acct)
+
+    def ids(**params: Any) -> set[str]:
+        return set(_ids(world.owner.get(TXN, params=params)))
+
+    assert ids(category_source="person") == {str(person.id), str(cleared.id)}
+    assert ids(category_source="dictionary") == {str(listed.id)}
+    assert ids(category_source="keyword") == set()
+    assert ids(category_source="person", uncategorized="true") == {str(cleared.id)}
+    assert str(undecided.id) in ids()
+    assert world.owner.get(TXN, params={"category_source": "maybe"}).status_code == 422
+
+
+def test_filter_suggested_only(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    category = ledger.category(hh, name="Shopping")
+    suggested = ledger.transaction(acct, suggested_category_id=category.id)
+    decided = ledger.transaction(acct, category=category, category_source="dictionary")
+    undecided = ledger.transaction(acct)
+
+    def ids(**params: Any) -> set[str]:
+        return set(_ids(world.owner.get(TXN, params=params)))
+
+    assert ids(suggested="true") == {str(suggested.id)}
+    assert ids(suggested="false") == {str(decided.id), str(undecided.id)}
+    assert ids() == {str(suggested.id), str(decided.id), str(undecided.id)}
+
+
+def test_filter_by_merchant_key(world: World) -> None:
+    ledger, acct = world.ledger, world.edit_acct
+    one = ledger.transaction(acct, merchant_key="corner grocer")
+    two = ledger.transaction(acct, merchant_key="corner grocer", amount="-3.00")
+    other = ledger.transaction(acct, merchant_key="harbor fuel")
+    ledger.transaction(acct, merchant_key="corner grocery")  # a longer key is another merchant
+    ledger.transaction(acct)
+    hidden = ledger.transaction(world.hidden_acct, merchant_key="lantern books")
+    ledger.transaction(world.foreign_acct, merchant_key="corner grocer")
+
+    def ids(client: AuthedClient, key: str) -> set[str]:
+        return set(_ids(client.get(TXN, params={"merchant": key})))
+
+    assert ids(world.owner, "corner grocer") == {str(one.id), str(two.id)}
+    assert ids(world.owner, "harbor fuel") == {str(other.id)}
+    assert ids(world.owner, "corner") == set()  # the whole key, never a prefix
+    assert ids(world.owner, "lantern books") == {str(hidden.id)}
+    # A key that only exists on an account the caller cannot see: an empty page, never 403.
+    assert ids(world.member, "lantern books") == set()
+    assert ids(world.outsider, "harbor fuel") == set()
+    for bad in ("Corner Grocer", "corner  grocer", " corner", "corner%", "a" * 65):
+        assert world.owner.get(TXN, params={"merchant": bad}).status_code == 422, bad
+
+
+def test_filter_by_subscription(world: World) -> None:
+    ledger = world.ledger
+    series = ledger.run(make_scheduled_transaction, world.edit_acct)
+    other_series = ledger.run(make_scheduled_transaction, world.edit_acct)
+    hidden_series = ledger.run(make_scheduled_transaction, world.hidden_acct)
+    first = ledger.transaction(world.edit_acct, scheduled_transaction_id=series.id)
+    second = ledger.transaction(world.edit_acct, scheduled_transaction_id=series.id)
+    ledger.transaction(world.edit_acct, scheduled_transaction_id=other_series.id)
+    ledger.transaction(world.edit_acct)
+    hidden = ledger.transaction(world.hidden_acct, scheduled_transaction_id=hidden_series.id)
+
+    def ids(client: AuthedClient, schedule_id: uuid.UUID) -> set[str]:
+        return set(_ids(client.get(TXN, params={"subscription": str(schedule_id)})))
+
+    assert ids(world.owner, series.id) == {str(first.id), str(second.id)}
+    assert ids(world.owner, hidden_series.id) == {str(hidden.id)}
+    assert ids(world.member, hidden_series.id) == set()
+    assert ids(world.outsider, series.id) == set()
+    assert ids(world.owner, uuid.uuid4()) == set()
+    assert world.owner.get(TXN, params={"subscription": "not-an-id"}).status_code == 422
+
+
+def test_provenance_fields_are_returned(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    category = ledger.category(hh, name="Groceries")
+    rule = ledger.rule(hh)
+    series = ledger.run(make_scheduled_transaction, acct)
+    guessed = ledger.transaction(
+        acct,
+        category=category,
+        merchant_key="corner grocer",
+        category_source="dictionary",
+        category_confidence=Decimal("0.9"),
+        scheduled_transaction_id=series.id,
+    )
+    by_rule = ledger.transaction(
+        acct,
+        category=category,
+        category_source="rule",
+        category_confidence=Decimal(1),
+        category_rule_id=rule.id,
+    )
+    suggested = ledger.transaction(
+        acct, merchant_key="harbor fuel", suggested_category_id=category.id
+    )
+    plain = ledger.transaction(acct)
+
+    body = world.viewer.get(f"{TXN}/{guessed.id}").json()
+    assert body["merchant_key"] == "corner grocer"
+    assert body["category_source"] == "dictionary"
+    assert body["category_confidence"] == "0.90"
+    assert body["subscription_id"] == str(series.id)
+    assert body["category_rule_id"] is None
+    assert body["suggested_category_id"] is None
+    # The display name is computed when a row is read (lane L fills it); it is declared.
+    assert "merchant" in body
+
+    listed = {item["id"]: item for item in world.owner.get(TXN).json()["items"]}
+    assert listed[str(by_rule.id)]["category_source"] == "rule"
+    assert listed[str(by_rule.id)]["category_confidence"] == "1.00"
+    assert listed[str(by_rule.id)]["category_rule_id"] == str(rule.id)
+    assert listed[str(suggested.id)]["suggested_category_id"] == str(category.id)
+    assert listed[str(suggested.id)]["category_id"] is None
+    assert listed[str(suggested.id)]["category_source"] is None
+    for name in (
+        "merchant_key",
+        "merchant",
+        "category_source",
+        "category_confidence",
+        "category_rule_id",
+        "suggested_category_id",
+        "subscription_id",
+    ):
+        assert listed[str(plain.id)][name] is None, name

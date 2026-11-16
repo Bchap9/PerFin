@@ -18,6 +18,7 @@ the tax vault, editable per household.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -25,6 +26,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.transactions.models import Category, CategoryKind, TaxTreatment
+
+#: Edition of the default set. A household records the edition it was last
+#: brought up to (``categorisation.state``); :func:`add_new_defaults` adds
+#: what later editions introduced.
+TAXONOMY_VERSION: Final = 1
 
 _E, _I, _T, _X = (
     CategoryKind.EXPENSE,
@@ -235,3 +241,43 @@ def seed_default_categories(db: Session, household_id: uuid.UUID) -> int:
             added += 1
     db.flush()
     return added
+
+
+def add_new_defaults(db: Session, household_id: uuid.UUID, since: int) -> int:
+    """Add the defaults introduced after edition ``since``; return how many.
+
+    Edition 1 is the only one so far, so there is nothing to add.
+    """
+    del db, household_id, since
+    return 0
+
+
+def category_ids_by_key(db: Session, household_id: uuid.UUID) -> dict[str, uuid.UUID]:
+    """``system_key`` to category id, for the keyed categories the household has.
+
+    A household that renamed or moved a default still has its key; one that
+    deleted it does not. Must run in that household's RLS context.
+    """
+    return {
+        key: category_id
+        for key, category_id in db.execute(
+            select(Category.system_key, Category.id).where(
+                Category.household_id == household_id, Category.system_key.is_not(None)
+            )
+        )
+        if key is not None
+    }
+
+
+def resolve(by_key: Mapping[str, uuid.UUID], key: str) -> uuid.UUID | None:
+    """The household's category for a default ``key``.
+
+    The category that carries ``key``; else the one that carries its group's
+    key (``food.fast_food`` falls back to ``food``); else ``None``: a
+    household with its own tree gets no guess for keys it does not have.
+    """
+    found = by_key.get(key)
+    if found is not None:
+        return found
+    group, dot, _ = key.partition(".")
+    return by_key.get(group) if dot else None

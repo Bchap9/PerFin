@@ -55,7 +55,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlalchemy import ColumnElement, select, true
 from sqlalchemy.orm import Session
@@ -90,6 +90,7 @@ from app.domain.transactions.schemas import (
     BulkAction,
     BulkItemResult,
     BulkResult,
+    CategorySource,
     SplitOut,
     SplitSet,
     TransactionCreate,
@@ -256,6 +257,14 @@ def to_out(db: Session, principal: Principal, rows: Sequence[Transaction]) -> li
                 splits=[_split_out(s, row.currency) for s in splits.get(row.id, [])],
                 created_at=row.created_at,
                 updated_at=row.updated_at,
+                merchant_key=row.merchant_key,
+                category_source=cast("CategorySource | None", row.category_source),
+                category_confidence=(
+                    None if row.category_confidence is None else f"{row.category_confidence:.2f}"
+                ),
+                category_rule_id=row.category_rule_id,
+                suggested_category_id=row.suggested_category_id,
+                subscription_id=row.scheduled_transaction_id,
             )
         )
     return out
@@ -743,6 +752,12 @@ def bulk(
 ) -> BulkResult:
     """Apply ``data.action`` to every id the caller may edit (each authorised alone)."""
     household_id = _household(principal)
+    if data.action == "accept_suggestions":
+        # Declared in the API first; without this the action would fall through
+        # to the last branch below (delete).
+        raise ProblemError(
+            409, "not-ready", "Not available yet", "Accepting suggestions is not available yet."
+        )
     if data.action == "categorise":
         _check_refs(db, household_id, category_ids=[data.category_id])
     if data.tag_ids:

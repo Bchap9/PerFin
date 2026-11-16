@@ -4,6 +4,12 @@
 Money is ``{"amount": "12.34", "currency": "USD"}`` (``app.core.money``);
 schedule amounts are in the account's currency (``422 currency-mismatch``
 otherwise). Confidence and regularity are decimal strings in ``0..1``.
+
+A recurring series is a subscription, a bill, income or something else
+(:data:`SeriesKind`) and stands somewhere (:data:`SeriesStatus`); each of the
+two says who set it (:data:`Decider`). ``/subscriptions`` is the view of the
+series of kind ``subscription`` and ``bill``: what they cost per month and
+year, what changed (:data:`EventKind`) and a person's decision about one.
 """
 
 from __future__ import annotations
@@ -27,6 +33,29 @@ DEFAULT_CALENDAR_DAYS: Final = 30
 MAX_CALENDAR_DAYS: Final = 366
 #: Most account filters per request (as the reports).
 MAX_FILTER_VALUES: Final = 50
+#: Most charges one series' detail lists (newest first).
+MAX_CHARGES: Final = 60
+#: Page size bounds of the subscription events list.
+DEFAULT_EVENTS: Final = 50
+MAX_EVENTS: Final = 200
+#: Most event ids one "seen" request may name.
+MAX_SEEN_IDS: Final = 200
+
+#: ``app.domain.transactions.models``: ``SERIES_KINDS``, ``SERIES_STATUSES``, ``DECIDERS``.
+SeriesKind = Literal["subscription", "bill", "income", "other"]
+SeriesStatus = Literal["suggested", "active", "confirmed", "paused", "ended", "dismissed"]
+Decider = Literal["detector", "person"]
+#: ``app.domain.recurring.models.EVENT_KINDS``.
+EventKind = Literal[
+    "new",
+    "price_changed",
+    "missed",
+    "ended",
+    "charged_after_end",
+    "renewal_due",
+    "trial_converted",
+]
+EventState = Literal["open", "seen"]
 
 _CONTROL_RE: Final = re.compile(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 
@@ -42,6 +71,12 @@ def _clean_name(value: str) -> str:
 
 ScheduleName = Annotated[str, Field(min_length=1, max_length=NAME_MAX), AfterValidator(_clean_name)]
 IntervalCount = Annotated[int, Field(ge=1, le=366)]
+
+
+def _unique_ids(values: list[uuid.UUID]) -> list[uuid.UUID]:
+    if len(set(values)) != len(values):
+        raise ValueError("ids must be unique")
+    return values
 
 
 class _In(BaseModel):
@@ -68,7 +103,12 @@ class ScheduleCreate(_In):
 
 
 class ScheduleUpdate(_In):
-    """Fields to change; absent fields are left alone, ``null`` clears payee/category."""
+    """Fields to change; absent fields are left alone, ``null`` clears payee/category.
+
+    ``kind`` is the person's word on what the series is; detection does not
+    change it afterwards. ``active: false`` pauses the series, ``active:
+    true`` confirms it.
+    """
 
     name: ScheduleName | None = None
     cadence: Cadence | None = None
@@ -79,6 +119,7 @@ class ScheduleUpdate(_In):
     payee_id: uuid.UUID | None = None
     category_id: uuid.UUID | None = None
     active: bool | None = None
+    kind: SeriesKind | None = None
 
 
 class ScheduleOut(_Output):
@@ -95,6 +136,11 @@ class ScheduleOut(_Output):
     origin: ScheduleOrigin
     active: bool
     last_seen_on: date | None
+    kind: SeriesKind
+    status: SeriesStatus
+    status_source: Decider
+    #: The name to show for the series' merchant, when it has one.
+    merchant: str | None
 
 
 class ScheduleList(_Output):
@@ -174,3 +220,140 @@ class CashflowCalendar(_Output):
     bills: Money
     net: Money
     unconverted: list[uuid.UUID]
+
+
+# ---------------------------------------------------------------------------
+# Subscriptions and bills
+# ---------------------------------------------------------------------------
+
+
+class PriceChange(_Output):
+    """The latest price change of a series. ``pending``: seen on one charge
+    only so far (the next charge at the new price confirms it)."""
+
+    previous: Money
+    current: Money
+    on: date
+    pending: bool
+
+
+class SubscriptionOut(_Output):
+    """A recurring series of kind ``subscription`` or ``bill``.
+
+    ``amount`` is the latest charge (the middle of the range before one was
+    seen); ``monthly_cost`` and ``yearly_cost`` spread it over the cadence, in
+    the account's currency. ``overdue``: the expected charge did not arrive,
+    judged against the account's latest row and never against today.
+    ``open_events``: changes nobody has looked at yet.
+    """
+
+    id: uuid.UUID
+    account_id: uuid.UUID
+    name: str
+    merchant: str | None
+    kind: SeriesKind
+    kind_source: Decider
+    status: SeriesStatus
+    status_source: Decider
+    origin: ScheduleOrigin
+    cadence: Cadence
+    interval_count: int
+    amount: Money
+    amount_min: Money
+    amount_max: Money
+    monthly_cost: Money
+    yearly_cost: Money
+    next_due: date | None
+    overdue: bool
+    first_seen_on: date | None
+    last_seen_on: date | None
+    occurrences: int
+    confidence: str | None
+    category_id: uuid.UUID | None
+    payee_id: uuid.UUID | None
+    price_change: PriceChange | None
+    open_events: int
+
+
+class SubscriptionTotals(_Output):
+    """What the active and confirmed series of one kind cost, in ``currency``
+    (the household's). ``unconverted``: series left out for want of a rate."""
+
+    currency: str
+    monthly: Money
+    yearly: Money
+    count: int
+    unconverted: list[uuid.UUID]
+
+
+class SubscriptionList(_Output):
+    """``GET /subscriptions``. ``needs_look``: suggested series plus series
+    with an open change."""
+
+    as_of: date
+    subscriptions: SubscriptionTotals
+    bills: SubscriptionTotals
+    items: list[SubscriptionOut]
+    needs_look: int
+
+
+class SubscriptionCharge(_Output):
+    transaction_id: uuid.UUID
+    posted_date: date
+    amount: Money
+
+
+class SubscriptionEventOut(_Output):
+    """One change of one series; ``name`` is the series' name."""
+
+    id: uuid.UUID
+    schedule_id: uuid.UUID
+    name: str
+    kind: EventKind
+    occurred_on: date
+    amount_before: Money | None
+    amount_after: Money | None
+    transaction_id: uuid.UUID | None
+    state: EventState
+
+
+class SubscriptionDetail(_Output):
+    """One series with its charges (newest first, at most 60) and its changes."""
+
+    subscription: SubscriptionOut
+    charges: list[SubscriptionCharge] = Field(max_length=MAX_CHARGES)
+    events: list[SubscriptionEventOut]
+
+
+class SubscriptionEventPage(_Output):
+    """One page of changes, newest first; ``open`` counts every open one."""
+
+    items: list[SubscriptionEventOut]
+    next_cursor: uuid.UUID | None
+    open: int
+
+
+class SubscriptionDecision(_In):
+    """A person's decision about a series; detection never undoes it.
+
+    ``confirm`` (it is one), ``dismiss`` (it is not: it never comes back),
+    ``pause`` / ``resume``, ``end`` (it stopped) and ``reopen`` (an ended or
+    dismissed one is one after all). ``kind`` also says which of the two it is.
+    """
+
+    decision: Literal["confirm", "dismiss", "pause", "resume", "end", "reopen"]
+    kind: Literal["subscription", "bill"] | None = None
+
+
+class EventsSeen(_In):
+    """Mark changes as seen; ids the caller cannot see are ignored."""
+
+    ids: Annotated[
+        list[uuid.UUID],
+        Field(min_length=1, max_length=MAX_SEEN_IDS),
+        AfterValidator(_unique_ids),
+    ]
+
+
+class EventsSeenOut(_Output):
+    seen: int

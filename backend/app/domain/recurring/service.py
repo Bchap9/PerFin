@@ -55,7 +55,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -88,12 +88,15 @@ from app.domain.recurring.schemas import (
     CandidateList,
     CandidateOut,
     CashflowCalendar,
+    Decider,
     DetectIn,
     DetectResult,
     ScheduleCreate,
     ScheduleList,
     ScheduleOut,
     ScheduleUpdate,
+    SeriesKind,
+    SeriesStatus,
 )
 from app.domain.taxonomy import repo as taxonomy_repo
 from app.domain.transactions.models import (
@@ -175,6 +178,10 @@ def schedule_out(row: ScheduledTransaction) -> ScheduleOut:
         origin=row.origin,
         active=row.active,
         last_seen_on=row.last_seen_on,
+        kind=cast("SeriesKind", row.kind),
+        status=cast("SeriesStatus", row.status),
+        status_source=cast("Decider", row.status_source),
+        merchant=None,
     )
 
 

@@ -263,7 +263,10 @@ export function serializeRuleBody(draft: RuleDraft): Schemas["RuleBody"] {
 // ---- parsing -----------------------------------------------------------------
 
 function leafDraft(doc: ConditionDoc): ConditionDraft | null {
-  const draft = newCondition(doc.type === "not" || doc.type === "all" || doc.type === "any" ? "payee" : doc.type);
+  // "merchant" has no leaf in the builder yet: such a rule falls through to `null` below.
+  const draft = newCondition(
+    doc.type === "not" || doc.type === "all" || doc.type === "any" || doc.type === "merchant" ? "payee" : doc.type,
+  );
   switch (doc.type) {
     case "payee":
     case "memo":

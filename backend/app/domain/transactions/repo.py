@@ -61,6 +61,14 @@ class TransactionFilters:
     transfer: bool | None = None
     #: Only rows imported from (or added for) this document.
     document_id: uuid.UUID | None = None
+    #: Only rows whose category was decided this way (``CATEGORY_SOURCES``).
+    category_source: str | None = None
+    #: ``True``: only rows that carry a suggestion; ``False``: only rows that do not.
+    suggested: bool | None = None
+    #: Only rows of this merchant (the whole key, never a prefix).
+    merchant_key: str | None = None
+    #: Only the charges of this recurring series.
+    schedule_id: uuid.UUID | None = None
     extra: Sequence[ColumnElement[bool]] = field(default_factory=tuple)
 
 
@@ -115,6 +123,16 @@ def filter_clauses(household_id: uuid.UUID, f: TransactionFilters) -> list[Colum
         clauses.append(Transaction.transfer_group_id.is_(None))
     if f.document_id is not None:
         clauses.append(Transaction.source_document_id == f.document_id)
+    if f.category_source is not None:
+        clauses.append(Transaction.category_source == f.category_source)
+    if f.suggested is True:
+        clauses.append(Transaction.suggested_category_id.is_not(None))
+    elif f.suggested is False:
+        clauses.append(Transaction.suggested_category_id.is_(None))
+    if f.merchant_key is not None:
+        clauses.append(Transaction.merchant_key == f.merchant_key)
+    if f.schedule_id is not None:
+        clauses.append(Transaction.scheduled_transaction_id == f.schedule_id)
     if f.q:
         pattern = like_pattern(f.q)
         clauses.append(

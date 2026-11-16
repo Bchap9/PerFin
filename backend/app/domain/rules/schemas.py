@@ -31,6 +31,9 @@ Conditions (a tree; ``type`` is the discriminator):
 * ``date``: ``date_from`` / ``date_to`` (inclusive) on the posted date.
 * ``category_is``: the category (or the category of any split) is one of
   ``category_ids``; ``category_unset``: no category and no splits.
+* ``merchant``: the transaction's merchant key equals ``key`` (the whole
+  key, never a prefix). This is what "always categorise this merchant as..."
+  writes.
 * Combinators ``all`` (every child; an empty list matches everything),
   ``any`` (at least one child) and ``not``. At most
   :data:`CONDITION_DEPTH_MAX` levels and :data:`CONDITION_NODES_MAX` nodes.
@@ -69,7 +72,7 @@ from pydantic import (
 
 from app.core.money import CurrencyCode, Money, parse_amount
 from app.domain.transactions.models import MEMO_MAX, NAME_MAX, NOTES_MAX, ReviewState
-from app.domain.transactions.schemas import MAX_LIMIT, TransactionOut
+from app.domain.transactions.schemas import MAX_LIMIT, MerchantKey, TransactionOut
 
 #: Most rules per household (each transaction is evaluated against all of them).
 RULES_MAX: Final = 500
@@ -94,6 +97,8 @@ REFERENCES_MAX: Final = 2000
 
 #: Job type of a re-run of the rules over existing transactions (ARCHITECTURE.md).
 RUN_RULES_JOB_TYPE: Final = "run_rules"
+#: Most transaction ids in the sample of a merchant-rule preview.
+PREVIEW_SAMPLE_MAX: Final = 20
 #: Stand-in for an account the reader cannot see (conditions shown to members/viewers).
 HIDDEN_ACCOUNT: Final = uuid.UUID(int=0)
 #: Id of an unsaved rule in a dry run.
@@ -254,6 +259,13 @@ class CategoryUnsetCondition(_Doc):
     type: Literal["category_unset"] = "category_unset"
 
 
+class MerchantCondition(_Doc):
+    """The transaction's merchant key is exactly ``key``."""
+
+    type: Literal["merchant"] = "merchant"
+    key: MerchantKey
+
+
 class AllCondition(_Doc):
     type: Literal["all"] = "all"
     conditions: list[Condition] = Field(default_factory=list, max_length=CONDITION_NODES_MAX)
@@ -280,6 +292,7 @@ Condition = Annotated[
     | DateCondition
     | CategoryIsCondition
     | CategoryUnsetCondition
+    | MerchantCondition
     | AllCondition
     | AnyCondition
     | NotCondition,
@@ -519,6 +532,22 @@ class RunRulesJob(_Scope):
     requested_by: uuid.UUID | None = None
 
 
+class MerchantRulePreviewIn(_In):
+    """``POST /rules/merchant/preview``: the row the person is looking at and the
+    category they want every charge of its merchant to get."""
+
+    transaction_id: uuid.UUID
+    category_id: uuid.UUID
+
+
+class MerchantRuleIn(MerchantRulePreviewIn):
+    """``POST /rules/merchant``. ``apply_to_existing`` also re-categorises the
+    merchant's existing rows on the accounts the caller may edit (as a job);
+    a category a person chose is never changed."""
+
+    apply_to_existing: bool = False
+
+
 class Reference(_In):
     """The name of a referenced object, so an export can be imported elsewhere.
 
@@ -650,6 +679,54 @@ class RuleTestResult(BaseModel):
     next_cursor: str | None
     scanned: int
     matched: int
+
+
+class MerchantRulePreview(BaseModel):
+    """What "always categorise this merchant as..." would do, counted on the server.
+
+    ``teachable`` is false, with a ``reason``, when no rule can be made from
+    the row: it names no merchant, it is not a purchase (a transfer, a card
+    payment, a payment to a person...) or it is split. The counts are over
+    every row of the merchant on the accounts the caller may edit:
+    ``uncategorised`` (no category; suggestions included), ``guessed`` (a
+    guess with another category, which would change), ``decided`` (a person,
+    the file, a payee default, another rule or an earlier release decided:
+    these never change) and ``same_category`` (already there).
+    ``existing_rule_id``: the merchant already has a rule, which would be
+    changed. ``shadowed_by``: an earlier rule already categorises the row, so
+    saving is refused. ``sample`` holds at most 20 of the affected rows.
+    """
+
+    merchant_key: str | None
+    merchant: str | None
+    teachable: bool
+    reason: Literal["no_merchant", "not_a_purchase", "split"] | None
+    uncategorised: int
+    guessed: int
+    decided: int
+    same_category: int
+    existing_rule_id: uuid.UUID | None
+    shadowed_by: uuid.UUID | None
+    sample: list[uuid.UUID] = Field(max_length=PREVIEW_SAMPLE_MAX)
+
+
+class MerchantRuleOut(BaseModel):
+    """The merchant's rule. ``replaced``: it existed and its category was changed
+    from ``previous_category_id``. ``job_id``: the job applying it to existing rows."""
+
+    rule: RuleOut
+    replaced: bool
+    previous_category_id: uuid.UUID | None
+    job_id: uuid.UUID | None
+
+
+class RuleRevertOut(BaseModel):
+    """``POST /rules/{id}/revert``: the rule is gone and ``reverted`` rows it had
+    categorised are undecided again; ``job_id`` is the job that guesses for them."""
+
+    rule_id: uuid.UUID
+    reverted: int
+    job_id: uuid.UUID | None
 
 
 class JobAccepted(BaseModel):

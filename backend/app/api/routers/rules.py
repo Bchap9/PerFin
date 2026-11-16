@@ -10,6 +10,13 @@
   history, paginated, that never writes.
 * ``POST /rules/apply``: owner or admin; queues a ``run_rules`` job and
   answers ``202`` with its id (poll ``GET /jobs/{id}``).
+* ``POST /rules/merchant/preview`` and ``POST /rules/merchant``
+  (``Idempotency-Key`` honoured): member or above; "always categorise this
+  merchant as...", made from a transaction the caller can see
+  (``app.domain.rules.merchant``).
+* ``POST /rules/{id}/revert``: member or above for a merchant rule, owner or
+  admin for any other (``403 rule-not-revertible``); deletes the rule and
+  returns the rows it categorised to undecided.
 
 Tokens need ``transactions:read`` / ``transactions:write``.
 """
@@ -26,9 +33,13 @@ from app.auth.deps import DbSession
 from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
-from app.domain.rules import service
+from app.domain.rules import merchant, service
 from app.domain.rules.schemas import (
     JobAccepted,
+    MerchantRuleIn,
+    MerchantRuleOut,
+    MerchantRulePreview,
+    MerchantRulePreviewIn,
     RuleApply,
     RuleCreate,
     RuleExport,
@@ -36,6 +47,7 @@ from app.domain.rules.schemas import (
     RuleList,
     RuleOut,
     RuleReorder,
+    RuleRevertOut,
     RuleTest,
     RuleTestResult,
     RuleUpdate,
@@ -45,6 +57,7 @@ router = APIRouter(tags=["rules"])
 
 Reader = Annotated[Principal, Depends(scoped_role("transactions:read", HouseholdRole.VIEWER))]
 Manager = Annotated[Principal, Depends(scoped_role("transactions:write", HouseholdRole.ADMIN))]
+Member = Annotated[Principal, Depends(scoped_role("transactions:write", HouseholdRole.MEMBER))]
 
 
 def require_rule_manager(rule_id: uuid.UUID, db: DbSession, principal: Manager) -> Principal:
@@ -53,7 +66,14 @@ def require_rule_manager(rule_id: uuid.UUID, db: DbSession, principal: Manager) 
     return principal
 
 
+def require_rule_member(rule_id: uuid.UUID, db: DbSession, principal: Member) -> Principal:
+    """:data:`Member`, then the rule must be this household's (``404`` first)."""
+    service.require_rule(db, principal, rule_id)
+    return principal
+
+
 RuleManager = Annotated[Principal, Depends(require_rule_manager)]
+RuleMember = Annotated[Principal, Depends(require_rule_member)]
 
 
 @router.get("/rules", response_model=RuleList, summary="Rules in evaluation order")
@@ -165,6 +185,43 @@ def post_rules_apply(
     )
 
 
+# Declared above ``/rules/{rule_id}``: "merchant" is not a rule id.
+@router.post(
+    "/rules/merchant/preview",
+    response_model=MerchantRulePreview,
+    responses=PROBLEMS,
+    summary="What 'always categorise this merchant as...' would change (writes nothing)",
+)
+def post_merchant_rule_preview(
+    body: MerchantRulePreviewIn, db: DbSession, principal: Member
+) -> MerchantRulePreview:
+    return merchant.preview(db, principal, body)
+
+
+@router.post(
+    "/rules/merchant",
+    response_model=MerchantRuleOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=PROBLEMS,
+    summary="Always categorise a merchant as a category (member or above)",
+)
+def post_merchant_rule(
+    body: MerchantRuleIn,
+    request: Request,
+    db: DbSession,
+    principal: Member,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    return idempotent(
+        db,
+        principal,
+        idempotency_key,
+        scope="POST /rules/merchant",
+        payload=payload_of(body),
+        run=lambda: merchant.create(db, principal, body, request=request),
+    )
+
+
 @router.get("/rules/{rule_id}", response_model=RuleOut, responses=PROBLEMS, summary="One rule")
 def get_rule(rule_id: uuid.UUID, db: DbSession, principal: Reader) -> RuleOut:
     return service.get_rule(db, principal, rule_id)
@@ -193,3 +250,15 @@ def delete_rule(
 ) -> Response:
     service.delete_rule(db, principal, rule_id, request=request)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/rules/{rule_id}/revert",
+    response_model=RuleRevertOut,
+    responses=PROBLEMS,
+    summary="Delete a rule and undo the categories it set",
+)
+def post_rule_revert(
+    rule_id: uuid.UUID, request: Request, db: DbSession, principal: RuleMember
+) -> RuleRevertOut:
+    return merchant.revert(db, principal, rule_id, request=request)

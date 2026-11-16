@@ -192,6 +192,10 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # A notification channel of the matrix household (a webhook to an
         # address that never resolves, so a test send goes nowhere).
         "notification_channel": ParamKind("notification_channel", "notification-channel-not-found"),
+        # What the matrix household's corrections say about one merchant (a
+        # fresh merchant key each time, so every caller forgets its own;
+        # household-wide).
+        "merchant_memory": ParamKind("merchant_memory", "memory-not-found"),
     }
 )
 OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
@@ -210,6 +214,7 @@ HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     | {"tax_year", "tax_checklist_item", "tax_export"}
     | {"ai_client"}
     | {"notification_channel"}
+    | {"merchant_memory"}
 )
 
 
@@ -337,6 +342,7 @@ LOAN = {"loan_id": "loan"}
 TAXY = {"year": "tax_year"}
 ASSET = {"asset_id": "manual_asset"}
 SCHED = {"schedule_id": "scheduled_transaction"}
+MEMORY = {"memory_id": "merchant_memory"}
 AIC = {"client_id": "ai_client"}
 NCH = {"channel_id": "notification_channel"}
 #: A member's grants on one account (the path names a fresh member).
@@ -530,6 +536,20 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"GET {API}/rules/{{rule_id}}": scoped("transactions:read", role=V, params=RULE),
         f"PATCH {API}/rules/{{rule_id}}": scoped("transactions:write", role=A, params=RULE),
         f"DELETE {API}/rules/{{rule_id}}": scoped("transactions:write", role=A, params=RULE),
+        # "Always categorise this merchant as...": a member may preview, make
+        # and revert a merchant rule (the service refuses a member who reverts
+        # any other rule: ``403 rule-not-revertible``).
+        f"POST {API}/rules/merchant/preview": scoped("transactions:write", role=M),
+        f"POST {API}/rules/merchant": scoped("transactions:write", role=M),
+        f"POST {API}/rules/{{rule_id}}/revert": scoped("transactions:write", role=M, params=RULE),
+        # --- categorisation: any role reads the summary and what was learned,
+        # a member forgets a merchant, an admin asks for a refresh ----------
+        f"GET {API}/categorisation/summary": scoped("transactions:read", role=V),
+        f"GET {API}/categorisation/learned": scoped("transactions:read", role=V),
+        f"DELETE {API}/categorisation/learned/{{memory_id}}": scoped(
+            "transactions:write", role=M, params=MEMORY
+        ),
+        f"POST {API}/categorisation/refresh": scoped("transactions:write", role=A),
         # --- full export and import (owner/admin, browser session; creating
         # and downloading need step-up; outcomes only for the requester) -----
         f"POST {API}/export": session(role=A, step_up=True),
@@ -660,6 +680,17 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
             "transactions:write", role=M, params=SCHED
         ),
         f"DELETE {API}/recurring/{{schedule_id}}": scoped(
+            "transactions:write", role=M, params=SCHED
+        ),
+        # --- subscriptions and bills: reads follow account visibility; a
+        # decision needs a member who may edit the series' account ----------
+        f"GET {API}/subscriptions": scoped("transactions:read", role=V),
+        f"GET {API}/subscriptions/events": scoped("transactions:read", role=V),
+        f"POST {API}/subscriptions/events/seen": scoped("transactions:write", role=M),
+        f"GET {API}/subscriptions/{{schedule_id}}": scoped(
+            "transactions:read", role=V, params=SCHED
+        ),
+        f"POST {API}/subscriptions/{{schedule_id}}/decision": scoped(
             "transactions:write", role=M, params=SCHED
         ),
         f"GET {API}/cashflow/calendar": scoped("transactions:read", role=V),
