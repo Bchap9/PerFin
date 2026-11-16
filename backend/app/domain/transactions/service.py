@@ -115,6 +115,8 @@ from app.domain.transactions.schemas import (
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
 
+    from app.domain.categorisation.memory import Direction
+
 #: Household setting: count ``review_state = pending`` transactions in reports.
 INCLUDE_PENDING_SETTING: Final = "reports.include_pending_review"
 #: Free-text columns: only their names reach the audit trail.
@@ -542,6 +544,20 @@ def _categorise_new(
         )
 
 
+def _counted_under(row: Transaction) -> tuple[str, Direction] | None:
+    """The merchant key and direction a person's choice on ``row`` counts under.
+
+    None when the row teaches nothing: it names no merchant, or its line is
+    of a kind that is never remembered (``engine.person_decided``).
+    """
+    from app.domain.categorisation import cleanup, memory
+
+    key = row.merchant_key
+    if not key or cleanup.clean(row.raw_payee).kind not in cleanup.TEACHABLE:
+        return None
+    return key, memory.direction_of(row.amount)
+
+
 _SIMPLE_FIELDS: Final = (
     "posted_date",
     "effective_date",
@@ -570,12 +586,20 @@ def update_transaction(
     category was decided before and after. A changed ``raw_payee`` names
     another merchant: the key is recomputed and, on a row nobody decided, the
     guess is made again; a decided row keeps its category.
+
+    The memory counts rows, each under its merchant and the direction of its
+    money. When either changes here (another description, an amount of the
+    other sign), the decision this row stood for is taken back where it was
+    counted and, if the row still carries a person's category, counted where
+    the row is now (nowhere when its line teaches nothing any more). Another
+    row's decision for the new merchant is never touched.
     """
-    from app.domain.categorisation import engine
+    from app.domain.categorisation import engine, memory
 
     household_id = row.household_id
     given = data.model_fields_set
     category_before, source_before = row.category_id, row.category_source
+    counted_before = _counted_under(row)
     split = repo.has_splits(db, household_id, row.id)
     if "category_id" in given and data.category_id is not None and split:
         raise _split_conflict()
@@ -618,18 +642,29 @@ def update_transaction(
         if repo.set_tags(db, row, data.tag_ids):
             before["tag_ids"], after["tag_ids"] = old_tags, sorted(data.tag_ids)
     renamed = "raw_payee" in after
-    if renamed and "category_id" in after:
-        # Both at once: the choice is learned for the merchant the row names now.
+    if renamed:
+        # The row names another merchant from here on (a choice made in the
+        # same request is learned for that one).
         row.merchant_key = engine.identify(row.raw_payee).key
+    counted_now = _counted_under(row)
+    moved = counted_now != counted_before
+    #: The category this row counted for before, when a person had chosen it.
+    taught = category_before if source_before == engine.PERSON_SOURCE else None
+    if moved and taught is not None and counted_before is not None:
+        # Under the key and direction it was recorded with, not the new ones.
+        memory.withdraw(db, household_id, *counted_before, taught)
     if "category_id" in after:
         engine.person_decided(
             db,
             row,
-            before_category_id=category_before,
-            before_source=source_before,
+            # Already taken back above: nothing of this row is counted where it is now.
+            before_category_id=None if moved else category_before,
+            before_source=None if moved else source_before,
             at=clock.utcnow(),
         )
         before["category_source"], after["category_source"] = source_before, row.category_source
+    elif moved and taught is not None and counted_now is not None:
+        memory.record(db, household_id, *counted_now, taught, at=clock.utcnow())
     if after:
         row.updated_at = clock.utcnow()
         db.flush()
@@ -744,6 +779,9 @@ def set_splits(
 
     A split is the person's decision about the row (its lines carry the
     categories), and so is removing every split, with a category or without.
+    A request that changes nothing (no splits before, none now, the category
+    the row already has) is not one: the row, its suggestion and its
+    ``updated_at`` stay as they are.
     """
     from app.domain.categorisation import engine
 
@@ -760,6 +798,10 @@ def set_splits(
         if total != row.amount:
             raise split_sum_mismatch(row.amount, total, row.currency)
     old = repo.splits_for(db, household_id, [row.id]).get(row.id, [])
+    if not old and not data.splits and data.category_id == row.category_id:
+        # Nothing to remove and the same category: no change, so no decision
+        # (as a PATCH with the category the row already has).
+        return row
     category_before, source_before = row.category_id, row.category_source
     before = {
         "category_id": row.category_id,

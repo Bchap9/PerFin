@@ -15,6 +15,10 @@ invented; none is a line of a statement.
   (``updated_at == created_at``), so a later reading of the document may
   still replace them.
 * The file's category beats a rule, and a rule beats the dictionary.
+* A payee is found behind a processor (``PAYPAL *STREAMBOX``); a line
+  between people, or one that names a second payee further along, gets no
+  payee and no category from one.
+* A store that sells everything arrives as a suggestion, counted as one.
 * A second import of the same rows leaves a person's choice alone.
 * A re-read removes a row that only ever carried a guess (at import, or
   from a later second look) and keeps, and lists, one whose category a
@@ -75,6 +79,10 @@ MARKET = Merchant(key="pennywhistle market", name="Pennywhistle Market", categor
 CINEMA = Merchant(key="lamplight cinema", name="Lamplight Cinema", category="leisure.cinema")
 #: Not in the dictionary until a test puts it there (a newer dictionary).
 TOOL_HIRE = Merchant(key="holloway tool hire", name="Holloway Tool Hire", category="leisure.cinema")
+#: A store that sells everything: its category is only ever a suggestion.
+BAZAAR = Merchant(
+    key="marrowfield bazaar", name="Marrowfield Bazaar", category="food.groceries", mixed=True
+)
 
 #: Day of the month, amount, descriptor: six bare lines, two of known merchants.
 Entry = tuple[int, str, str]
@@ -387,6 +395,85 @@ def test_a_row_takes_its_payees_default_before_the_dictionary_answers(env: Env) 
     assert summary["categorised"] == {"payee": 1}
     assert summary["payee_categorised"] == 1
     assert row.updated_at == row.created_at
+
+
+def test_a_payee_is_found_behind_a_processor(env: Env) -> None:
+    films = env.ledger.category(env.household_id, name="Films at home")
+    env.ledger.payee(env.household_id, name="PayPal")
+    streambox = env.ledger.payee(env.household_id, name="Streambox", default_category=films)
+    account = env.ledger.account(env.household_id, currency="USD")
+    entries: list[Entry] = [
+        (3, "-11.99", "PAYPAL *STREAMBOX"),
+        (4, "-11.99", "PAYPAL *STREAMBOX 4029357733 CA"),
+    ]
+
+    _, summary = env.ingest(_csv(entries), account, "behind.csv")
+
+    rows = env.transactions(account)
+    for line in ("PAYPAL *STREAMBOX", "PAYPAL *STREAMBOX 4029357733 CA"):
+        row = rows[line]
+        assert (row.payee_id, row.category_id, row.category_source) == (
+            streambox.id,
+            films.id,
+            "payee",
+        )
+        assert row.category_confidence == Decimal("0.95")
+        assert row.updated_at == row.created_at
+    assert summary["categorised"] == {"payee": 2}
+    assert summary["payee_categorised"] == 2
+
+
+def test_a_line_naming_two_payees_gets_neither_whatever_its_core_says(env: Env) -> None:
+    fees = env.ledger.category(env.household_id, name="App fees")
+    oil = env.ledger.category(env.household_id, name="Heating oil")
+    env.ledger.payee(env.household_id, name="Venmo", default_category=fees)
+    env.ledger.payee(env.household_id, name="Marta Lindqvist")
+    env.ledger.payee(env.household_id, name="Lantern Fuel", default_category=oil)
+    env.ledger.payee(env.household_id, name="Oakfield Rentals")
+    env.ledger.payee(env.household_id, name="PayPal")
+    account = env.ledger.account(env.household_id, currency="USD")
+    entries: list[Entry] = [
+        # Between people: the core is the app, which is not who was paid.
+        (3, "-40.00", "VENMO PAYMENT 1027 MARTA LINDQVIST"),
+        # The second payee stands past the sixth word, where the core ends.
+        (5, "-212.00", "Lantern Fuel weekly delivery charge for Oakfield Rentals"),
+        (6, "-212.00", "PAYPAL *LANTERN FUEL WEEKLY DELIVERY CHARGE FOR OAKFIELD RENTALS"),
+        (8, "-212.00", "Lantern Fuel at Oakfield Rentals"),
+    ]
+
+    _, summary = env.ingest(_csv(entries), account, "two-payees.csv")
+
+    rows = env.transactions(account)
+    assert len(rows) == len(entries)
+    found = [(row.payee_id, row.category_id, row.category_source) for row in rows.values()]
+    assert found == [(None, None, None)] * len(entries)
+    assert summary["categorised"] == {}
+    assert (summary["payee_categorised"], summary["suggested"]) == (0, 0)
+
+
+def test_a_store_that_sells_everything_arrives_as_a_suggestion(
+    env: Env, known: dict[str, Merchant]
+) -> None:
+    groceries = env.keyed("food.groceries")
+    known[BAZAAR.key] = BAZAAR
+    account = env.ledger.account(env.household_id, currency="USD")
+    entries: list[Entry] = [
+        (2, "-48.10", "PENNYWHISTLE MARKET"),
+        (7, "-36.20", "MARROWFIELD BAZAAR"),
+    ]
+
+    _, summary = env.ingest(_csv(entries), account, "mixed.csv")
+
+    rows = env.transactions(account)
+    offered = rows["MARROWFIELD BAZAAR"]
+    assert offered.merchant_key == BAZAAR.key
+    assert (offered.category_id, offered.suggested_category_id) == (None, groceries.id)
+    assert (offered.category_source, offered.category_confidence) == ("dictionary", Decimal("0.60"))
+    assert offered.updated_at == offered.created_at
+    assert _decided(rows["PENNYWHISTLE MARKET"]) == (groceries.id, "dictionary")
+    # A suggestion is counted as one and never among the facts.
+    assert summary["suggested"] == 1
+    assert summary["categorised"] == {"dictionary": 1}
 
 
 # ---------------------------------------------------------------------------

@@ -292,7 +292,7 @@ from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
 from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
-from app.domain.categorisation import cleanup, engine
+from app.domain.categorisation import engine
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
     Document,
@@ -1540,9 +1540,7 @@ def _commit_statement(
             currency=account.currency,
             payee_id=(
                 # Behind a processor the payee is found in the descriptor's core.
-                payees.match(txn.raw_payee, core=cleanup.clean(txn.raw_payee).core)
-                if payees is not None
-                else None
+                payees.match_descriptor(txn.raw_payee) if payees is not None else None
             ),
             category_id=category_id,
             raw_payee=txn.raw_payee[:PAYEE_MAX] if txn.raw_payee else None,

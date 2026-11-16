@@ -1425,7 +1425,8 @@ def test_accept_suggestions_takes_the_suggested_category(world: World) -> None:
     # Accepting is the person's choice: it teaches like any other.
     assert _learned(world) == {(SHOP_KEY, "out", first.id): 1}
     audits = household_audit(world.factories, hh, "transaction.bulk_accept_suggestions")
-    assert sorted(a.target_id for a in audits) == sorted([str(one.id), str(two.id)])
+    assert {a.target_id for a in audits} == {str(one.id), str(two.id)}
+    assert len(audits) == 2
     assert {(a.after or {}).get("category_source") for a in audits} == {"person"}
     events = household_events(world.factories, hh, "transaction.bulk_updated")
     assert [(e.payload["action"], e.payload["count"]) for e in events] == [
@@ -1564,6 +1565,146 @@ def test_changing_the_description_recomputes_the_key_and_keeps_a_decided_categor
     # Another field leaves the key alone.
     body = world.member.patch(f"{TXN}/{both.id}", json={"memo": "a note"}).json()
     assert body["merchant_key"] == new_key
+
+
+#: A second invented shop, and a line between people (never taught).
+KILN = "Fernhollow Kiln"
+KILN_KEY = "fernhollow kiln"
+BETWEEN_PEOPLE = "VENMO PAYMENT 4410 ELSPETH"
+
+
+def _choose(world: World, row: Transaction, **change: Any) -> None:
+    response = world.member.patch(f"{TXN}/{row.id}", json=change)
+    assert response.status_code == 200, response.text
+
+
+def test_renaming_a_persons_row_moves_its_decision_and_nobody_elses(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    first, second = ledger.category(hh), ledger.category(hh)
+    moved = ledger.transaction(acct, raw_payee=SHOP, merchant_key=SHOP_KEY)
+    stays = ledger.transaction(acct, raw_payee=KILN, merchant_key=KILN_KEY)
+    for row in (moved, stays):
+        _choose(world, row, category_id=str(first.id))
+    assert _learned(world) == {(SHOP_KEY, "out", first.id): 1, (KILN_KEY, "out", first.id): 1}
+
+    # The row names the other shop now: its decision goes with it.
+    _choose(world, moved, raw_payee=KILN)
+    assert _stored(world, moved.id).merchant_key == KILN_KEY
+    assert _provenance(world, moved.id) == (first.id, "person", Decimal(1), None, None)
+    assert _learned(world) == {(KILN_KEY, "out", first.id): 2}
+
+    # Recategorised afterwards: only its own decision moves; the other row's stays.
+    _choose(world, moved, category_id=str(second.id))
+    assert _learned(world) == {(KILN_KEY, "out", first.id): 1, (KILN_KEY, "out", second.id): 1}
+    assert _provenance(world, stays.id) == (first.id, "person", Decimal(1), None, None)
+
+
+def test_a_new_description_and_category_at_once_leave_no_entry_behind(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    first, second = ledger.category(hh), ledger.category(hh)
+    moved = ledger.transaction(acct, raw_payee=SHOP, merchant_key=SHOP_KEY)
+    stays = ledger.transaction(acct, raw_payee=KILN, merchant_key=KILN_KEY)
+    for row in (moved, stays):
+        _choose(world, row, category_id=str(first.id))
+
+    _choose(world, moved, raw_payee=KILN, category_id=str(second.id))
+
+    # Nothing is left for the shop no row names; the other row's decision stands.
+    assert _learned(world) == {(KILN_KEY, "out", first.id): 1, (KILN_KEY, "out", second.id): 1}
+    # The household chose two categories for the kiln: the next row is no fact.
+    bare = world.member.post(TXN, json=_create_body(acct, raw_payee=KILN)).json()
+    assert (bare["category_id"], bare["merchant_key"]) == (None, KILN_KEY)
+    again = world.member.post(TXN, json=_create_body(acct, raw_payee=SHOP)).json()
+    assert (again["category_id"], again["category_source"]) == (None, None)
+
+
+def test_turning_the_sign_round_moves_a_persons_decision_to_the_other_direction(
+    world: World,
+) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    first, second = ledger.category(hh), ledger.category(hh)
+    row = ledger.transaction(acct, amount="-12.50", raw_payee=SHOP, merchant_key=SHOP_KEY)
+    _choose(world, row, category_id=str(first.id))
+    assert _learned(world) == {(SHOP_KEY, "out", first.id): 1}
+
+    # Another amount of the same sign changes nothing in the memory.
+    _choose(world, row, amount={"amount": "-13.00", "currency": "USD"})
+    assert _learned(world) == {(SHOP_KEY, "out", first.id): 1}
+
+    _choose(world, row, amount={"amount": "13.00", "currency": "USD"})
+    assert _learned(world) == {(SHOP_KEY, "in", first.id): 1}
+
+    _choose(world, row, amount={"amount": "-13.00", "currency": "USD"}, category_id=str(second.id))
+    assert _learned(world) == {(SHOP_KEY, "out", second.id): 1}
+
+
+def test_renaming_a_persons_row_to_a_line_that_teaches_nothing_takes_its_decision_back(
+    world: World,
+) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    category, other = ledger.category(hh), ledger.category(hh)
+    assert engine.identify(BETWEEN_PEOPLE).kind == "p2p"
+    row = ledger.transaction(acct, raw_payee=SHOP, merchant_key=SHOP_KEY)
+    _choose(world, row, category_id=str(category.id))
+
+    _choose(world, row, raw_payee=BETWEEN_PEOPLE)
+    assert _provenance(world, row.id) == (category.id, "person", Decimal(1), None, None)
+    assert _learned(world) == {}
+
+    # Back to a shop: the choice the row still carries counts for that shop.
+    _choose(world, row, raw_payee=KILN)
+    assert _learned(world) == {(KILN_KEY, "out", category.id): 1}
+
+    # A guessed row that is renamed taught nothing and teaches nothing.
+    guessed = ledger.transaction(
+        acct,
+        raw_payee=SHOP,
+        merchant_key=SHOP_KEY,
+        category=other,
+        category_source="legacy",
+    )
+    _choose(world, guessed, raw_payee=KILN)
+    assert _learned(world) == {(KILN_KEY, "out", category.id): 1}
+
+
+def test_an_empty_split_request_that_changes_nothing_is_no_decision(world: World) -> None:
+    hh, ledger, acct = world.household_id, world.ledger, world.edit_acct
+    category = ledger.category(hh)
+    undecided = ledger.transaction(acct, raw_payee=SHOP, merchant_key=SHOP_KEY)
+    suggested = ledger.transaction(acct, suggested_category_id=category.id)
+    guessed = ledger.transaction(
+        acct,
+        raw_payee=SHOP,
+        merchant_key=SHOP_KEY,
+        category=category,
+        category_source="dictionary",
+        category_confidence=Decimal("0.90"),
+    )
+    before = {row.id: _stored(world, row.id).updated_at for row in (undecided, suggested, guessed)}
+
+    for row, body in (
+        (undecided, {"splits": []}),
+        (suggested, {"splits": []}),
+        (guessed, {"splits": [], "category_id": str(category.id)}),
+    ):
+        response = world.member.post(f"{TXN}/{row.id}/split", json=body)
+        assert response.status_code == 200, response.text
+
+    assert _provenance(world, undecided.id) == (None, None, None, None, None)
+    assert _provenance(world, suggested.id) == (None, None, None, category.id, None)
+    assert _provenance(world, guessed.id) == (
+        category.id,
+        "dictionary",
+        Decimal("0.90"),
+        None,
+        None,
+    )
+    assert {i: _stored(world, i).updated_at for i in before} == before
+    assert household_audit(world.factories, hh, "transaction.split") == []
+    assert _learned(world) == {}
+    # Clearing a guessed row's category this way is a change, and so a decision.
+    body = world.member.post(f"{TXN}/{guessed.id}/split", json={"splits": []}).json()
+    assert (body["category_id"], body["category_source"]) == (None, "person")
 
 
 def test_the_merchant_name_is_returned(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
