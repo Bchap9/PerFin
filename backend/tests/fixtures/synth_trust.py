@@ -19,6 +19,14 @@ account number and the same six dated rows with signed amounts.
   dated notice line whose amount cell is not an amount, which the parser
   counts as skipped. (An undated line is a continuation of the description
   above it and is never counted, so the notice carries a date.)
+* :func:`closing_that_disagrees`: an opening and a closing balance and no
+  running balance column; the closing balance is :data:`OFF` more than the
+  rows make it. The statement does not add up and nothing says which row is
+  wrong: every row is in doubt for that reason only.
+* :func:`stray_row_against_the_balances`: an opening and a closing balance
+  that agree with the six rows, no running balance column, plus the row
+  dated before the period (:data:`STRAY`). It is off by exactly that row,
+  which alone is in doubt, and the row's date is a doubt of its own.
 
 :data:`ROWS` are the six rows; :func:`expected` is what the ledger holds for
 a builder's statement.
@@ -62,6 +70,8 @@ STRAY: Final[Row] = (PERIOD_START - timedelta(days=40), Decimal("-81.15"), "Mapl
 UNREAD_PAYEE: Final = "Adjustment under enquiry"
 UNREAD_AMOUNT: Final = "see branch"
 CLOSING: Final = OPENING + sum((amount for _, amount, _ in ROWS), Decimal(0))
+#: How far the printed closing balance of :func:`closing_that_disagrees` is off.
+OFF: Final = Decimal("100.00")
 
 _DATE_X: Final = 72
 _DESC_X: Final = 150
@@ -87,12 +97,15 @@ def _pdf(
     *,
     balances: bool = False,
     unread_after: int | None = None,
+    running: bool = True,
+    closing: Decimal = CLOSING,
 ) -> bytes:
     """One page: heading, period, account, a table of ``rows``.
 
-    ``balances`` prints the opening and closing balances and a running
-    balance column; ``unread_after`` prints the unreadable dated line after
-    that many rows.
+    ``balances`` prints the opening and closing balances (``closing`` is
+    the closing balance printed) and, with ``running``, a running balance
+    column; ``unread_after`` prints the unreadable dated line after that
+    many rows.
     """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
@@ -104,13 +117,13 @@ def _pdf(
     c.drawString(72, 700, f"Account number: ****{LAST4}")
     if balances:
         c.drawString(72, 684, f"Opening balance: {_money(OPENING)}")
-        c.drawString(300, 684, f"Closing balance: {_money(CLOSING)}")
+        c.drawString(300, 684, f"Closing balance: {_money(closing)}")
     top = 652
     c.setFont(BOLD, 9)
     c.drawString(_DATE_X, top, "Date")
     c.drawString(_DESC_X, top, "Description")
     c.drawRightString(_AMOUNT_X, top, "Amount")
-    if balances:
+    if balances and running:
         c.drawRightString(_BALANCE_X, top, "Balance")
     c.setFont(FONT, 9)
     y = top - 16
@@ -125,7 +138,7 @@ def _pdf(
         c.drawString(_DATE_X, y, _us(posted))
         c.drawString(_DESC_X, y, payee)
         c.drawRightString(_AMOUNT_X, y, _money(amount))
-        if balances:
+        if balances and running:
             c.drawRightString(_BALANCE_X, y, _money(balance))
         y -= 14
     c.setFont(FONT, 7)
@@ -153,3 +166,13 @@ def no_balances_with_an_unread_line() -> bytes:
 def balanced_with_an_unread_line() -> bytes:
     """Balances that agree with the six rows, plus one dated line nobody can read."""
     return _pdf(ROWS, balances=True, unread_after=3)
+
+
+def closing_that_disagrees() -> bytes:
+    """Opening and closing balances, no running balance; the closing is off."""
+    return _pdf(ROWS, balances=True, running=False, closing=CLOSING + OFF)
+
+
+def stray_row_against_the_balances() -> bytes:
+    """Balances of the six rows, no running balance, plus the row before the period."""
+    return _pdf([STRAY, *ROWS], balances=True, running=False)

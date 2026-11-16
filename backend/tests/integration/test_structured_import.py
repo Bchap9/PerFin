@@ -820,6 +820,63 @@ def test_near_duplicates_go_to_review(env: Env) -> None:
     assert flagged[0].raw_payee == "Initech Payroll"
 
 
+def test_one_near_duplicate_keeps_its_item(env: Env) -> None:
+    stmt = sample_statement(46)
+    account = env.checking(stmt)
+    target = stmt.transactions[0]
+    manual = env.ledger.transaction(
+        account, amount=target.amount, posted_date=target.posted, raw_payee="Typed by hand"
+    )
+    document_id = env.ingest(ofx_sgml_bytes(stmt))
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.POSSIBLE_DUPLICATE
+    (flagged,) = [r for r in env.transactions(account) if r.review_state is ReviewState.PENDING]
+    # One near duplicate: the item per row, as before.
+    assert item.payload == {
+        "reason": "near_match",
+        "account_id": str(account.id),
+        "transaction_id": str(flagged.id),
+        "candidates": [str(manual.id)],
+    }
+
+
+def test_several_near_duplicates_are_one_item(env: Env) -> None:
+    stmt = sample_statement(47)
+    account = env.checking(stmt)
+    # Three statement rows no two of which share a date and an amount.
+    targets: list[Any] = []
+    for txn in stmt.transactions:
+        if all((txn.posted, txn.amount) != (t.posted, t.amount) for t in targets):
+            targets.append(txn)
+        if len(targets) == 3:
+            break
+    assert len(targets) == 3
+    typed = [
+        env.ledger.transaction(
+            account, amount=t.amount, posted_date=t.posted, raw_payee="Typed by hand"
+        )
+        for t in targets
+    ]
+    document_id = env.ingest(ofx_sgml_bytes(stmt))
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.POSSIBLE_DUPLICATE
+    payload = item.payload
+    assert (payload["reason"], payload["count"], payload["statement"]) == ("near_matches", 3, 0)
+    assert payload["account_id"] == str(account.id)
+    assert set(payload) == {"reason", "account_id", "statement", "count", "rows"}
+    flagged = {
+        str(r.id): r for r in env.transactions(account) if r.review_state is ReviewState.PENDING
+    }
+    assert len(flagged) == 3
+    assert {r["transaction_id"] for r in payload["rows"]} == set(flagged)
+    by_day = {(t.posted_date, t.amount): str(t.id) for t in typed}
+    for entry in payload["rows"]:
+        row = flagged[entry["transaction_id"]]
+        assert entry["candidates"] == [by_day[(row.posted_date, row.amount)]]
+
+
 # ---------------------------------------------------------------------------
 # Accounts
 # ---------------------------------------------------------------------------

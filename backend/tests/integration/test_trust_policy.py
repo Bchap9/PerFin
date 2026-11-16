@@ -17,6 +17,11 @@ PDFs come from ``tests/fixtures/synth_trust.py`` (an invented bank).
 * What a record says: ``reconciled`` when the statement's own balances
   agreed, ``unverified`` otherwise (a statement that does not add up, a CSV).
 * :func:`clean_read` itself, on hand-built statements.
+* One finding per cause: rows in doubt only because their statement does not
+  add up are named by the reconciliation item alone; a row with a doubt of
+  its own (a date outside the period) is still listed, with that field; a
+  statement whose balances agree while its summary's totals do not says so
+  (``cause``); two or more near duplicates of one statement are one item.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from app.domain.transactions.models import ReviewState
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.structured import ParsedStatement, ParsedTransaction
 from app.ingestion.sandbox.protocol import Reconciliation
+from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures import synth_trust as trust
 from tests.fixtures.imports import run_jobs
@@ -253,6 +259,111 @@ def test_csv_statement_is_unverified_without_a_marker_item(env: Env) -> None:
     assert env.document(document_id).status is DocumentStatus.PROCESSED
     # The marker is for documents (PDF, image) only.
     assert _summary(env, document_id)["unverified_statements"] == 0
+
+
+# ---------------------------------------------------------------------------
+# One finding per cause
+# ---------------------------------------------------------------------------
+
+
+def test_rows_in_doubt_only_for_reconciliation_are_not_listed_twice(env: Env) -> None:
+    account = _account(env)
+    document_id = env.ingest(trust.closing_that_disagrees())
+
+    rows = env.transactions(account)
+    assert _ledger(env, account) == _six(trust.expected())
+    # Every row still waits: the statement does not add up.
+    assert [r.review_state for r in rows] == [ReviewState.PENDING] * 6
+    (item,) = env.open_reviews(document_id)
+    assert (item.kind, item.payload["reason"]) == (
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        "reconciliation_failed",
+    )
+    assert item.payload["difference"] == f"{-trust.OFF:f}"
+    assert (item.payload["rows_in_doubt"], item.payload["rows_total"]) == (6, 6)
+    assert (item.payload["statement"], item.payload["lines_skipped"]) == (0, 0)
+    # Task 24 fills the reference; nothing stands in for it, and a
+    # difference that is not zero has no other cause to name.
+    assert "statement_ref" not in item.payload
+    assert "cause" not in item.payload
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+    assert _summary(env, document_id)["low_confidence"] == 0
+
+
+def test_a_guessed_date_is_still_listed(env: Env) -> None:
+    account = _account(env)
+    document_id = env.ingest(trust.stray_row_against_the_balances())
+
+    rows = env.transactions(account)
+    stray = next(r for r in rows if r.posted_date == trust.STRAY[0])
+    # The statement is off by exactly this row: it alone is in doubt.
+    assert [r.id for r in rows if r.review_state is ReviewState.PENDING] == [stray.id]
+    items = env.open_reviews(document_id)
+    assert sorted(str(i.payload["reason"]) for i in items) == [
+        "low_confidence",
+        "reconciliation_failed",
+    ]
+    low = next(i for i in items if i.payload["reason"] == "low_confidence")
+    assert (low.payload["count"], low.payload["fields"]) == (1, ["posted_date"])
+    (entry,) = low.payload["transactions"]
+    assert (entry["transaction_id"], entry["fields"]) == (str(stray.id), ["posted_date"])
+    failed = next(i for i in items if i.payload["reason"] == "reconciliation_failed")
+    assert (failed.payload["rows_in_doubt"], failed.payload["rows_total"]) == (1, 7)
+    assert failed.payload["difference"] == f"{trust.STRAY[1]:f}"
+    assert _summary(env, document_id)["low_confidence"] == 1
+
+
+def test_totals_agree_but_the_summary_does_not_names_its_cause(env: Env) -> None:
+    base = card.card_statement()
+    stmt = card.CardStatement(
+        statement_date=base.statement_date,
+        previous_balance=base.previous_balance,
+        rows=base.rows,
+        summary_shift=Decimal("100.00"),
+    )
+    account = env.ledger.account(
+        env.household_id, number_last4=stmt.last4, type="credit_card", currency="CAD"
+    )
+    document_id = env.ingest(card.card_pdf(stmt))
+
+    rows = env.transactions(account)
+    assert rows
+    assert all(r.review_state is ReviewState.PENDING for r in rows)
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "reconciliation_failed"
+    # Previous + rows = new holds; the summary's own totals do not.
+    assert Decimal(item.payload["difference"]) == 0
+    assert item.payload["cause"] == "summary_totals_mismatch"
+    assert (item.payload["statement"], item.payload["lines_skipped"]) == (0, 0)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+
+
+def test_several_near_duplicates_of_a_clean_read_are_one_item(env: Env) -> None:
+    account = _account(env)
+    typed = [
+        env.ledger.transaction(account, amount=amount, posted_date=day, raw_payee="Typed by hand")
+        for day, amount, _ in trust.ROWS[1:4]
+    ]
+    document_id = env.ingest(trust.no_balances_statement())
+
+    imported = [r for r in env.transactions(account) if r.id not in {t.id for t in typed}]
+    assert len(imported) == 6
+    pending = sorted(
+        (r for r in imported if r.review_state is ReviewState.PENDING),
+        key=lambda r: r.posted_date,
+    )
+    assert [r.posted_date for r in pending] == [day for day, _, _ in trust.ROWS[1:4]]
+    (item,) = env.open_reviews(document_id)
+    assert (item.kind, item.payload["reason"]) == (ReviewKind.POSSIBLE_DUPLICATE, "near_matches")
+    assert (item.payload["count"], item.payload["statement"]) == (3, 0)
+    assert item.payload["account_id"] == str(account.id)
+    assert {r["transaction_id"]: r["candidates"] for r in item.payload["rows"]} == {
+        str(row.id): [str(mine.id)] for row, mine in zip(pending, typed, strict=True)
+    }
+    assert "transaction_id" not in item.payload
+    assert _summary(env, document_id)["possible_duplicates"] == 3
 
 
 # ---------------------------------------------------------------------------

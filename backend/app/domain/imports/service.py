@@ -121,7 +121,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      match, can be answered one after the other.
    * Deduplication (``app.ingestion.match.dedupe``): exact ``import_hash``
      matches are skipped, near matches (same date and amount) are imported as
-     ``review_state = pending`` with a ``possible_duplicate`` review item.
+     ``review_state = pending`` with a ``possible_duplicate`` review item:
+     ``near_match`` for the one near match of a statement, one
+     ``near_matches`` item listing them all (``count``, ``rows``) for two or
+     more.
    * The household's rules run on the new transactions
      (``app.domain.rules.service.apply_rules_to``; categories that came from
      the file, QIF ``L``, are protected). The closing balance (OFX
@@ -136,6 +139,13 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+     One finding per cause: a row whose only doubt is that its statement did
+     not reconcile (``reconciliation``) waits with the others but is named
+     by the reconciliation item alone, never listed again in the
+     ``low_confidence`` item. That item also carries the statement's index,
+     the lines the parser skipped (``lines_skipped``) and, when the balances
+     agree with the rows and the document's own summary or a section total
+     does not, which of them (``cause``).
      The exception is a **clean read** (:func:`clean_read`): a statement
      that prints nothing to check against (reconciliation ``unavailable``),
      whose rows carry no other doubt and whose document the parser neither
@@ -305,6 +315,7 @@ from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     ExtractResult,
     InvestmentStatement,
+    Reconciliation,
     Table,
 )
 
@@ -338,7 +349,11 @@ SUGGESTED_NAME_MAX: Final = 120
 CONTRADICTION_WARNINGS: Final = frozenset(
     {"summary_totals_mismatch", "section_total_mismatch", "rows_outside_account"}
 )
+#: The same, in the order a ``reconciliation_failed`` item names its ``cause``.
+_CAUSE_ORDER: Final = ("summary_totals_mismatch", "section_total_mismatch", "rows_outside_account")
 #: The one doubt a clean read may carry on a row: nothing to check it against.
+#: On any row it is the statement's doubt, not the row's: the reconciliation
+#: item speaks for it and the ``low_confidence`` item leaves it out.
 UNCHECKED_FIELD: Final = "reconciliation"
 
 
@@ -940,13 +955,32 @@ def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
     return not run.parse_skipped and not CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
 
 
+def _contradiction(run: _Run, check: Reconciliation) -> str | None:
+    """Why a statement whose balances agree with its rows still failed its check.
+
+    A ``mismatch`` with no difference (opening + rows = closing, or no
+    difference could be worked out) on a document the parser warned about
+    (:data:`CONTRADICTION_WARNINGS`): the first such warning in
+    :data:`_CAUSE_ORDER`. None when the difference itself is the finding.
+    """
+    if check.status != "mismatch" or check.difference:
+        return None
+    return next((name for name in _CAUSE_ORDER if name in run.parse_warnings), None)
+
+
 def _row_problems(
-    run: _Run, parsed: ParsedStatement, account: Account, *, clean: bool = False
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    clean: bool = False,
+    statement_index: int | None = None,
 ) -> None:
     # Footers and pending rows are not problems: ``rows_skipped`` is raised
     # for the rows that should have read (``parsed.skipped_rows``) only.
     # ``clean``: a clean read (:func:`clean_read`) is not asked about: its
     # record says ``unverified`` instead of a ``reconciliation_unavailable`` item.
+    # ``statement_index``: the statement's index in the document (None: a table).
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
@@ -991,16 +1025,28 @@ def _row_problems(
         # checked and something else is in doubt); its rows are imported
         # pending and no snapshot is written.
         check = parsed.reconciliation
+        payload: dict[str, Any] = {
+            "reason": (
+                "reconciliation_failed"
+                if check.status == "mismatch"
+                else "reconciliation_unavailable"
+            ),
+            "field": "reconciliation",
+            "account_id": str(account.id),
+            # Which statement of the document, and how many lines of the
+            # document no reader could read (a likely place for a missing row).
+            "statement": statement_index,
+            "lines_skipped": run.parse_skipped,
+        }
+        cause = _contradiction(run, check)
+        if cause is not None:
+            # The balances agree with the rows; the statement's own summary
+            # or a section total does not.
+            payload["cause"] = cause
         run.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
-                "reason": (
-                    "reconciliation_failed"
-                    if check.status == "mismatch"
-                    else "reconciliation_unavailable"
-                ),
-                "field": "reconciliation",
-                "account_id": str(account.id),
+                **payload,
                 "parser": parsed.parser,
                 "opening": _decimal_text(check.opening),
                 "closing": _decimal_text(check.closing),
@@ -1027,17 +1073,73 @@ def _confidence(value: float | None) -> Decimal | None:
     return Decimal(str(round(value, 4))) if value is not None else None
 
 
+def _own_doubts(txn: ParsedTransaction) -> list[str]:
+    """The fields of a row in doubt for a reason of the row's own."""
+    return [name for name in txn.low_confidence if name != UNCHECKED_FIELD]
+
+
+def _near_duplicates_review(
+    run: _Run,
+    account: Account,
+    near: Sequence[tuple[Transaction, Sequence[uuid.UUID]]],
+    *,
+    statement_index: int | None,
+) -> None:
+    """The ``possible_duplicate`` finding for a statement's near duplicates.
+
+    One row: a ``near_match`` item, as always. Two or more: one
+    ``near_matches`` item listing them (at most :data:`IDS_MAX`; ``count``
+    is all of them), so a statement entered by hand first is one question
+    instead of one per row.
+    """
+    if not near:
+        return
+    if len(near) == 1:
+        row, candidates = near[0]
+        run.review(
+            ReviewKind.POSSIBLE_DUPLICATE,
+            {
+                "reason": "near_match",
+                "account_id": str(account.id),
+                "transaction_id": str(row.id),
+                "candidates": [str(c) for c in candidates],
+            },
+        )
+        return
+    run.review(
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {
+            "reason": "near_matches",
+            "account_id": str(account.id),
+            "statement": statement_index,
+            "count": len(near),
+            "rows": [
+                {"transaction_id": str(row.id), "candidates": [str(c) for c in candidates]}
+                for row, candidates in near[:IDS_MAX]
+            ],
+        },
+    )
+
+
 def _low_confidence_review(
     run: _Run,
     parsed: ParsedStatement,
     account: Account,
     low: list[tuple[Transaction, ParsedTransaction]],
 ) -> None:
-    """One ``low_confidence_field`` item for the rows a document parser was unsure of."""
+    """One ``low_confidence_field`` item for the rows a document parser was unsure of.
+
+    Only rows with a doubt of their own: ``reconciliation`` on a row says its
+    *statement* did not add up or could not be checked, which the
+    ``reconciliation_failed``/``reconciliation_unavailable`` item already
+    says once, with the figures. Such a row still waits (``pending``); it is
+    not listed a second time here, and the field is left out of ``fields``.
+    """
+    low = [(row, txn) for row, txn in low if _own_doubts(txn)]
     if not low:
         return
     run.low_confidence += len(low)
-    fields = sorted({name for _, txn in low for name in txn.low_confidence})
+    fields = sorted({name for _, txn in low for name in _own_doubts(txn)})
     run.review(
         ReviewKind.LOW_CONFIDENCE_FIELD,
         {
@@ -1049,7 +1151,7 @@ def _low_confidence_review(
             "transactions": [
                 {
                     "transaction_id": str(row.id),
-                    "fields": list(txn.low_confidence),
+                    "fields": _own_doubts(txn),
                     "confidence": txn.confidence,
                     "page": txn.page,
                 }
@@ -1107,7 +1209,7 @@ def _commit_statement(
         )
     # A row left out for its currency is a doubt of its own: not a clean read.
     clean = not foreign and clean_read(run, parsed)
-    _row_problems(run, parsed, account, clean=clean)
+    _row_problems(run, parsed, account, clean=clean, statement_index=statement_index)
     plan = dedupe(
         db,
         run.household_id,
@@ -1177,17 +1279,12 @@ def _commit_statement(
                 row.category_id = defaults[row.payee_id]
                 run.payee_categorised += 1
     positions = {index: position for position, index in enumerate(plan.to_insert)}
-    for index, candidates in plan.near.items():
-        position = positions[index]
-        run.review(
-            ReviewKind.POSSIBLE_DUPLICATE,
-            {
-                "reason": "near_match",
-                "account_id": str(account.id),
-                "transaction_id": str(created[position][0].id),
-                "candidates": [str(c) for c in candidates],
-            },
-        )
+    _near_duplicates_review(
+        run,
+        account,
+        [(created[positions[index]][0], candidates) for index, candidates in plan.near.items()],
+        statement_index=statement_index,
+    )
     run.imported += len(created)
     run.possible_duplicates += len(plan.near)
     _low_confidence_review(

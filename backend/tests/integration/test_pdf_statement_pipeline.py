@@ -360,10 +360,12 @@ def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:
     assert failed.payload["account_id"] == str(account.id)
     low = next(i for i in items if i.payload.get("reason") == "low_confidence")
     assert low.payload["count"] == 1
-    assert "reconciliation" in low.payload["fields"]
+    # The row's own doubt (the running balance beside it contradicts its
+    # amount); that the statement does not add up is said once, above.
+    assert low.payload["fields"] == ["amount"]
     (entry,) = low.payload["transactions"]
     assert entry["transaction_id"] == str(forged.id)
-    assert "amount" in entry["fields"]
+    assert entry["fields"] == ["amount"]
     assert entry["page"] == 1
 
 
