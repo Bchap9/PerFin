@@ -11,6 +11,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "../../components/Button";
+import { CategoryPicker } from "../../components/CategoryPicker";
 import { Dialog } from "../../components/Dialog";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
@@ -378,9 +379,9 @@ export function TransactionDialog({ transaction, defaultAccountId, onClose }: Tr
           error={errors.get("category")}
           hint={split ? "This transaction is split; its categories are on the split lines." : undefined}
         >
-          <Select
+          <CategoryPicker
             placeholder={split ? `Split (${String(transaction.splits.length)})` : "Uncategorised"}
-            options={(categories.data ?? []).map((category) => ({ value: category.id, label: category.name }))}
+            categories={categories.data ?? []}
             value={split ? "" : form.categoryId}
             disabled={split}
             onChange={(event) => {

@@ -386,6 +386,38 @@ premises. See AI_ACCESS.md.
       release has been signed or published yet: the workflow runs only when
       a `v*` tag is pushed)
 
+The road from the release candidates to `v1.0.0` (owner's decision,
+2026-11-12) is four stages, each with its own design note and plan:
+
+- [x] Stage 1, import reliability (`v1.0.0-rc.9`; INGESTION.md,
+      CHANGELOG.md).
+- [x] Stage 2, categorisation and subscriptions (`v1.0.0-rc.10`;
+      [CATEGORISATION.md](CATEGORISATION.md)): a bundled merchant
+      dictionary of 1,427 US merchants and payee clean-up that run on the
+      host with no model and no lookup; every category records how it was
+      decided, an unsure guess is a suggestion and a person's choice is
+      never overwritten by a guess; learning from corrections as a counted
+      table; "always categorise this merchant as..." with a server-side
+      preview and an exact undo, for members too; a Subscriptions view
+      with habits and transfers kept out, decisions that stick, a clock
+      that follows the imported data and four notification kinds for
+      changes; migration `0014`; archive format 3. The targets of the
+      design note are tests
+      (`backend/tests/unit/test_categorisation_quality.py`,
+      `backend/tests/integration/test_subscription_quality.py`). Measured
+      on synthetic data only: the labelled descriptors and the planted
+      ledger are invented, and nothing was measured on a real household's
+      statements inside the repository. Not built, by decision: a category
+      model, merchants outside the United States, merchant category codes,
+      automatic payees, logos, a merchant editor, guesses for split lines.
+- [ ] Stage 3, the UI redesign: new navigation and the Inbox; the
+      Subscriptions view moves under Plan (it is a working screen in
+      today's layout, built from components that can be rehoused); a
+      report by merchant and a dashboard card for subscription changes;
+      `CategoryPicker` in the rule editor, the budget and the calendar
+      forms.
+- [ ] Stage 4, the release review.
+
 Release verification for v1.0.0 (2026-11-04): the ten steps in
 `docs/RELEASE_CHECKLIST.md` (image build, bootstrap, MFA and step-up,
 statement imports, drop folder, MCP with the identity denylist, Compose

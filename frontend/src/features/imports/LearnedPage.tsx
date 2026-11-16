@@ -8,6 +8,12 @@
  * phrases only, nothing of the statement). A layout or mapping learned from a wrong
  * answer would misread every later file of its kind, so each can be removed
  * here; the next file is then read the ordinary way and can be taught again.
+ *
+ * Above them, the same for categories: how the transactions got theirs
+ * (`GET /categorisation/summary`, with "Check again" for owners and admins)
+ * and what the household's own choices taught, merchant by merchant
+ * (`GET/DELETE /categorisation/learned`). Forgetting an entry changes no
+ * transaction; it only stops that memory from deciding the next one.
  */
 import "../accounts/ledger.css";
 
@@ -27,7 +33,11 @@ import { errorMessage } from "../../lib/api/client";
 import { formatDate } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
+import { canManageMembers, useAuthSession } from "../auth/session";
+import { forgetLearned, listLearned, refreshCategorisation, type LearnedCategory } from "../categories/api";
 import { useAction } from "../planning/useAction";
+import { JobProgress } from "../rules/JobProgress";
+import { txKeys, useCategories, useCategorisationSummary } from "../transactions/api";
 import {
   deleteLayout,
   deleteMapping,
@@ -42,7 +52,10 @@ import {
   type LearnedWording,
   type Mapping,
 } from "./api";
-import { kindLabel, layoutReads, mappingReads, wordingMeans } from "./learned";
+import { kindLabel, layoutReads, mappingReads, openText, sourceCountLines, timesText, wordingMeans } from "./learned";
+
+/** Under the transactions root: a change to the ledger can change what was learned. */
+const learnedCategoriesKey = [...queryRoots.transactions, "learned-categories"] as const;
 
 const NAME_MAX = 200;
 
@@ -462,8 +475,176 @@ function MappingsCard({ canWrite }: { canWrite: boolean }) {
   );
 }
 
+function HowCategorisedCard({ canRefresh }: { canRefresh: boolean }) {
+  const summary = useCategorisationSummary();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const refresh = useAction(refreshCategorisation);
+  const data = summary.data;
+  const lines = data === undefined ? [] : sourceCountLines(data.by_source);
+  const open = data === undefined ? null : openText(data.uncategorised, data.suggestions);
+  return (
+    <Card
+      title="How transactions got their category"
+      actions={
+        canRefresh ? (
+          <Button
+            size="sm"
+            loading={refresh.busy}
+            onClick={() => {
+              void refresh.run().then((done) => {
+                if (done !== undefined) {
+                  setJobId(done.value.job_id);
+                }
+              });
+            }}
+          >
+            Check again
+          </Button>
+        ) : undefined
+      }
+    >
+      <p className="ledger-muted">
+        Counted over the accounts you can see. A category you chose, one from the file, a rule or a payee is never changed by a
+        guess. Checking again looks only at transactions nobody decided.
+      </p>
+      {summary.isPending ? <Spinner label="Loading the counts" /> : null}
+      {summary.isError ? (
+        <p role="alert" className="ledger-error">
+          {errorMessage(summary.error)}
+        </p>
+      ) : null}
+      {data === undefined ? null : (
+        <>
+          {lines.length === 0 ? (
+            <p>No transactions yet.</p>
+          ) : (
+            <ul aria-label="Transactions by how their category was decided">
+              {lines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+          {open === null ? null : <p>{open}</p>}
+          <p>
+            Merchant list version {data.dictionary_version}, with {data.dictionary_merchants}{" "}
+            {data.dictionary_merchants === 1 ? "merchant" : "merchants"}.
+          </p>
+          {data.up_to_date ? null : (
+            <p>
+              <Badge tone="warning">Not up to date yet</Badge>{" "}
+              <span className="ledger-muted">
+                Some transactions were last looked at with an older merchant list. PerFin catches up by itself within the hour.
+              </span>
+            </p>
+          )}
+        </>
+      )}
+      {refresh.error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {refresh.error}
+        </p>
+      )}
+      {jobId === null ? null : <JobProgress jobId={jobId} />}
+    </Card>
+  );
+}
+
+function ForgetLearnedButton({ entry }: { entry: LearnedCategory }) {
+  const forget = useAction(() => forgetLearned(entry.id), {
+    invalidate: [learnedCategoriesKey, txKeys.summary],
+    success: "Forgotten",
+  });
+  return (
+    <>
+      <Button
+        size="sm"
+        loading={forget.busy}
+        aria-label={`Forget what was learned about ${entry.merchant}`}
+        onClick={() => {
+          void forget.run();
+        }}
+      >
+        Forget
+      </Button>
+      {forget.error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {forget.error}
+        </p>
+      )}
+    </>
+  );
+}
+
+function LearnedCategoriesCard({ canWrite }: { canWrite: boolean }) {
+  const learned = useQuery({ queryKey: learnedCategoriesKey, queryFn: listLearned });
+  const categories = useCategories();
+  const categoryName = (id: string): string => {
+    if (categories.data === undefined) {
+      return "";
+    }
+    return categories.data.find((category) => category.id === id)?.name ?? "A category that no longer exists";
+  };
+  return (
+    <Card title="Categories learned from you">
+      <p className="ledger-muted">
+        Each time you choose a category for a transaction, PerFin counts it for that merchant and uses the most chosen one for
+        the merchant&rsquo;s next transactions. Forgetting an entry changes no transaction.
+      </p>
+      {learned.isPending ? <Spinner label="Loading what was learned" /> : null}
+      {learned.isError ? (
+        <p role="alert" className="ledger-error">
+          {errorMessage(learned.error)}
+        </p>
+      ) : null}
+      {learned.isSuccess ? (
+        <Table<LearnedCategory>
+          caption="Categories learned from you"
+          captionHidden
+          rows={learned.data}
+          rowKey={(row) => row.id}
+          empty="Nothing learned yet. Choose a category for a transaction and its merchant appears here."
+          columns={[
+            {
+              id: "merchant",
+              header: "Merchant",
+              rowHeader: true,
+              cell: (row) => row.merchant,
+            },
+            { id: "direction", header: "Money", cell: (row) => (row.direction === "in" ? "In" : "Out") },
+            { id: "category", header: "Category", cell: (row) => categoryName(row.category_id) },
+            { id: "times", header: "Chosen", cell: (row) => timesText(row.decisions, row.total) },
+            { id: "last", header: "Last time", cell: (row) => day(row.last_decided_at) },
+            {
+              id: "actions",
+              header: <span className="visually-hidden">Actions</span>,
+              cell: (row: LearnedCategory) => (
+                <span className="ledger-actions">
+                  {row.rule_id === null ? null : (
+                    <Link to="/rules/$ruleId" params={{ ruleId: row.rule_id }} aria-label={`The rule for ${row.merchant}`}>
+                      Has a rule
+                    </Link>
+                  )}
+                  {canWrite && row.offer_rule && row.rule_id === null && row.example_transaction_id !== null ? (
+                    <Link to="/transactions" search={{ always: row.example_transaction_id }} aria-label={`Make ${row.merchant} a rule`}>
+                      Make it a rule
+                    </Link>
+                  ) : null}
+                  {canWrite ? <ForgetLearnedButton entry={row} /> : null}
+                </span>
+              ),
+            },
+          ]}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
 export function LearnedPage() {
   const canWrite = useCanWrite();
+  const { session } = useAuthSession();
+  // The server lets owners and admins start a refresh; forgetting an entry is a member's.
+  const canRefresh = canManageMembers(session?.household?.role);
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -491,11 +672,14 @@ export function LearnedPage() {
             suggested and you confirmed.
           </li>
           <li>
-            <strong>Categories</strong> through <Link to="/rules">rules</Link>.
+            <strong>Categories</strong> through your <Link to="/rules">rules</Link>, what PerFin learned from the categories you
+            chose, and the merchant list that ships with PerFin.
           </li>
         </ul>
         <p className="ledger-muted">Everything here is yours to remove. Nothing below is shared outside this household.</p>
       </Card>
+      <HowCategorisedCard canRefresh={canRefresh} />
+      <LearnedCategoriesCard canWrite={canWrite} />
       <LayoutsCard canWrite={canWrite} />
       <WordingCard canWrite={canWrite} />
       <MappingsCard canWrite={canWrite} />

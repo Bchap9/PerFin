@@ -4,14 +4,17 @@
 * ``GET /transactions``: filters ``account``, ``date_from``/``date_to``,
   ``category``, ``uncategorized``, ``payee``, ``tag``, ``review_state``,
   ``status``, ``transfer``, ``document`` (the rows a document produced; one
-  the caller cannot see gives an empty page) and ``q`` (a case-insensitive
-  substring of the payee text, payee name, memo or notes; no query
-  language); keyset cursor
+  the caller cannot see gives an empty page), ``category_source`` (how the
+  category was decided), ``suggested`` (rows that carry a suggestion, or
+  that do not), ``merchant`` (a whole merchant key), ``subscription`` (the
+  charges of one recurring series; one the caller cannot see gives an empty
+  page) and ``q`` (a case-insensitive substring of the payee text, payee
+  name, memo or notes; no query language); keyset cursor
   pagination (``cursor``, ``limit`` at most 500), newest first.
 * ``POST /transactions``: a manual transaction (``Idempotency-Key`` honoured).
 * ``GET/PATCH/DELETE /transactions/{id}``, ``POST /transactions/{id}/split``.
-* ``POST /transactions/bulk``: categorise / tag / untag / delete / confirm
-  many; every id is authorised on its own.
+* ``POST /transactions/bulk``: categorise / tag / untag / delete / confirm /
+  accept suggestions for many; every id is authorised on its own.
 * Transfers: ``GET /transactions/{id}/transfer-candidates``, ``POST`` and
   ``DELETE /transactions/{id}/transfer`` (link / unlink by hand) and
   ``POST /transactions/transfers/auto-pair`` (run the matcher over the
@@ -50,6 +53,8 @@ from app.domain.transactions.schemas import (
     AutoPairResult,
     BulkAction,
     BulkResult,
+    CategorySource,
+    MerchantKey,
     SplitSet,
     TransactionCreate,
     TransactionOut,
@@ -150,6 +155,10 @@ def list_transactions(
     status_: Annotated[list[TransactionStatus] | None, Query(alias="status", max_length=3)] = None,
     transfer: bool | None = None,
     document: uuid.UUID | None = None,
+    category_source: CategorySource | None = None,
+    suggested: bool | None = None,
+    merchant: Annotated[MerchantKey | None, Query()] = None,
+    subscription: uuid.UUID | None = None,
     q: Annotated[str | None, Query(min_length=1, max_length=Q_MAX)] = None,
     cursor: Annotated[str | None, Query(max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
@@ -167,6 +176,10 @@ def list_transactions(
         q=q.strip() or None if q is not None else None,
         transfer=transfer,
         document_id=document,
+        category_source=category_source,
+        suggested=suggested,
+        merchant_key=merchant,
+        schedule_id=subscription,
     )
     return service.list_transactions(db, principal, filters, cursor=cursor, limit=limit)
 
@@ -198,7 +211,7 @@ def post_transaction(
     "/transactions/bulk",
     response_model=BulkResult,
     responses=_PROBLEMS,
-    summary="Categorise, tag, untag, delete or confirm many transactions",
+    summary="Categorise, tag, untag, delete, confirm or accept suggestions for many transactions",
 )
 def post_bulk(body: BulkAction, request: Request, db: DbSession, principal: Writer) -> BulkResult:
     return service.bulk(db, principal, body, request=request)

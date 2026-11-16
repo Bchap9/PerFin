@@ -35,6 +35,7 @@ PerFin/
 │   │   │   ├── households/
 │   │   │   ├── accounts/
 │   │   │   ├── transactions/   incl. rules engine, transfers, dedupe
+│   │   │   ├── categorisation/ payee clean-up, the bundled merchant dictionary (data/), what was learned, the engine
 │   │   │   ├── budgets/
 │   │   │   ├── investments/
 │   │   │   ├── loans/

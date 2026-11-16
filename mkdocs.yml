@@ -79,6 +79,7 @@ nav:
       - Data model: DATA_MODEL.md
       - Authentication: AUTH.md
       - Ingestion: INGESTION.md
+      - Categories and subscriptions: CATEGORISATION.md
       - Local model hints: ML.md
       - AI access: AI_ACCESS.md
       - API: API.md

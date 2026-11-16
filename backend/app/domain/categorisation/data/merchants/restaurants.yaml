@@ -1,0 +1,229 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Places to eat and drink: fast food, coffee and snacks, table service, and
+# meals brought to the door. Format and sources: ../README.md. One entry a
+# line here: the lists are long.
+#
+# Clean-up drops a possessive, so "WENDY'S" arrives as `wendy` and
+# "CHILI'S" as `chili`: the first is written, the second is not, because a
+# chain whose bare name is an everyday word ("Chili's", "Friendly's",
+# "Checkers", "Noodles") is matched only by a form that is the chain's own.
+# A stem that is also a first name or a surname (`wendy`, `mcdonald`,
+# `denny`) is written with ` =`: it is the chain only when it is the whole
+# core, never the start of "Wendy's Flowers" or "McDonald Family Dental".
+# DoorDash and Grubhub are prefixes in clean-up (`DD *`, `GRUBHUB*`): the
+# engine names the platform as who was paid, by the entries below, which
+# match only the forms a statement prints without the prefix.
+merchants:
+  # Burgers, chicken, sandwiches, tacos: counter service.
+  - {key: mcdonalds, name: McDonald's, category: food.fast_food, match: [mcdonalds, mcdonald =]}
+  - {key: burger king, name: Burger King, category: food.fast_food, match: [burger king, burgerking]}
+  - {key: wendys, name: Wendy's, category: food.fast_food, match: [wendys =, wendy =]}
+  - {key: taco bell, name: Taco Bell, category: food.fast_food, match: [taco bell, tacobell]}
+  - {key: kfc, name: KFC, category: food.fast_food, match: [kfc, kentucky fried chicken]}
+  - {key: subway, name: Subway, category: food.fast_food, match: [subway =, subway restaurant, subway sandwiches, subway sandwich]}
+  - {key: chick fil a, name: Chick-fil-A, category: food.fast_food, match: [chick fil a, chickfila]}
+  - {key: popeyes, name: Popeyes, category: food.fast_food, match: [popeyes, popeye =, popeye louisiana, popeye chicken]}
+  - {key: arbys, name: Arby's, category: food.fast_food, match: [arbys, arby =]}
+  - {key: sonic drive in, name: Sonic Drive-In, category: food.fast_food, match: [sonic drive in, sonic drive]}
+  - {key: jack in the box, name: Jack in the Box, category: food.fast_food, match: [jack in the box]}
+  - {key: in n out burger, name: In-N-Out Burger, category: food.fast_food, match: [in n out]}
+  - {key: whataburger, name: Whataburger, category: food.fast_food, match: [whataburger]}
+  - {key: five guys, name: Five Guys, category: food.fast_food, match: [five guys, 5guys]}
+  - {key: shake shack, name: Shake Shack, category: food.fast_food, match: [shake shack, shakeshack]}
+  - {key: culvers, name: Culver's, category: food.fast_food, match: [culvers =, culver =, culvers of, culver of]}
+  - {key: dairy queen, name: Dairy Queen, category: food.fast_food, match: [dairy queen, dq grill, dq]}
+  - {key: hardees, name: Hardee's, category: food.fast_food, match: [hardees, hardee =]}
+  - {key: carls jr, name: Carl's Jr., category: food.fast_food, match: [carls jr, carl jr]}
+  - {key: white castle, name: White Castle, category: food.fast_food, match: [white castle]}
+  - {key: checkers and rallys, name: Checkers & Rally's, category: food.fast_food, match: [checkers drive in, checkers drive, rallys =, rally hamburgers, rallys hamburgers]}
+  - {key: steak n shake, name: Steak 'n Shake, category: food.fast_food, match: [steak n shake, steaknshake]}
+  - {key: zaxbys, name: Zaxby's, category: food.fast_food, match: [zaxbys, zaxby]}
+  - {key: raising canes, name: Raising Cane's, category: food.fast_food, match: [raising cane, raising canes]}
+  - {key: bojangles, name: Bojangles, category: food.fast_food, match: [bojangles, bojangle]}
+  - {key: churchs chicken, name: Church's Texas Chicken, category: food.fast_food, match: [churchs chicken, church chicken, churchs texas chicken, church texas chicken]}
+  - {key: el pollo loco, name: El Pollo Loco, category: food.fast_food, match: [el pollo loco]}
+  - {key: del taco, name: Del Taco, category: food.fast_food, match: [del taco]}
+  - {key: taco johns, name: Taco John's, category: food.fast_food, match: [taco johns, taco john]}
+  - {key: taco cabana, name: Taco Cabana, category: food.fast_food, match: [taco cabana]}
+  - {key: taco bueno, name: Taco Bueno, category: food.fast_food, match: [taco bueno]}
+  - {key: wingstop, name: Wingstop, category: food.fast_food, match: [wingstop]}
+  - {key: panda express, name: Panda Express, category: food.fast_food, match: [panda express]}
+  - {key: chipotle, name: Chipotle, category: food.fast_food, match: [chipotle]}
+  - {key: qdoba, name: QDOBA, category: food.fast_food, match: [qdoba]}
+  - {key: moes southwest grill, name: Moe's Southwest Grill, category: food.fast_food, match: [moes southwest, moe southwest, moes sw grill, moe sw grill]}
+  - {key: baja fresh, name: Baja Fresh, category: food.fast_food, match: [baja fresh]}
+  - {key: rubios, name: Rubio's Coastal Grill, category: food.fast_food, match: [rubios =, rubio coastal]}
+  - {key: panera bread, name: Panera Bread, category: food.fast_food, match: [panera]}
+  - {key: jimmy johns, name: Jimmy John's, category: food.fast_food, match: [jimmy johns, jimmy john]}
+  - {key: jersey mikes, name: Jersey Mike's, category: food.fast_food, match: [jersey mikes, jersey mike]}
+  - {key: firehouse subs, name: Firehouse Subs, category: food.fast_food, match: [firehouse subs]}
+  - {key: potbelly, name: Potbelly, category: food.fast_food, match: [potbelly]}
+  - {key: quiznos, name: Quiznos, category: food.fast_food, match: [quiznos]}
+  - {key: which wich, name: Which Wich, category: food.fast_food, match: [which wich]}
+  - {key: schlotzskys, name: Schlotzsky's, category: food.fast_food, match: [schlotzskys, schlotzsky]}
+  - {key: mcalisters deli, name: McAlister's Deli, category: food.fast_food, match: [mcalisters =, mcalister =, mcalisters deli, mcalister deli]}
+  - {key: jasons deli, name: Jason's Deli, category: food.fast_food, match: [jasons deli, jason deli]}
+  - {key: charleys cheesesteaks, name: Charleys Cheesesteaks, category: food.fast_food, match: [charleys philly, charleys cheesesteaks]}
+  - {key: sweetgreen, name: sweetgreen, category: food.fast_food, match: [sweetgreen]}
+  - {key: cava, name: CAVA, category: food.fast_food, match: [cava =, cava grill, cava mezze]}
+  - {key: noodles and company, name: Noodles & Company, category: food.fast_food, match: [noodles and company, noodles company, noodles co]}
+  - {key: freddys, name: Freddy's Frozen Custard & Steakburgers, category: food.fast_food, match: [freddys =, freddy frozen custard, freddys frozen, freddys steakburgers]}
+  - {key: smashburger, name: Smashburger, category: food.fast_food, match: [smashburger]}
+  - {key: the habit burger, name: The Habit Burger Grill, category: food.fast_food, match: [habit burger, the habit burger]}
+  - {key: cook out, name: Cook Out, category: food.fast_food, match: [cook out, cookout =]}
+  - {key: captain ds, name: Captain D's, category: food.fast_food, match: [captain d, captain ds]}
+  - {key: long john silvers, name: Long John Silver's, category: food.fast_food, match: [long john silver, long john silvers]}
+  - {key: portillos, name: Portillo's, category: food.fast_food, match: [portillos, portillo =, portillos hot, portillo hot]}
+  - {key: jollibee, name: Jollibee, category: food.fast_food, match: [jollibee]}
+  - {key: pollo tropical, name: Pollo Tropical, category: food.fast_food, match: [pollo tropical]}
+  - {key: pollo campero, name: Pollo Campero, category: food.fast_food, match: [pollo campero]}
+  - {key: wienerschnitzel, name: Wienerschnitzel, category: food.fast_food, match: [wienerschnitzel]}
+  - {key: nathans famous, name: Nathan's Famous, category: food.fast_food, match: [nathans famous, nathan famous]}
+  - {key: torchys tacos, name: Torchy's Tacos, category: food.fast_food, match: [torchys tacos, torchy tacos]}
+  - {key: velvet taco, name: Velvet Taco, category: food.fast_food, match: [velvet taco]}
+
+  # Pizza chains.
+  - {key: pizza hut, name: Pizza Hut, category: food.fast_food, match: [pizza hut, pizzahut]}
+  - {key: dominos, name: Domino's, category: food.fast_food, match: [dominos, domino =, domino pizza]}
+  - {key: papa johns, name: Papa Johns, category: food.fast_food, match: [papa johns, papa john]}
+  - {key: little caesars, name: Little Caesars, category: food.fast_food, match: [little caesars, little caesar]}
+  - {key: papa murphys, name: Papa Murphy's, category: food.fast_food, match: [papa murphys, papa murphy]}
+  - {key: marcos pizza, name: Marco's Pizza, category: food.fast_food, match: [marcos pizza, marco pizza]}
+  - {key: hungry howies, name: Hungry Howie's, category: food.fast_food, match: [hungry howies, hungry howie]}
+  - {key: jets pizza, name: Jet's Pizza, category: food.fast_food, match: [jets pizza, jet pizza]}
+  - {key: round table pizza, name: Round Table Pizza, category: food.fast_food, match: [round table pizza]}
+  - {key: blaze pizza, name: Blaze Pizza, category: food.fast_food, match: [blaze pizza]}
+  - {key: mod pizza, name: MOD Pizza, category: food.fast_food, match: [mod pizza]}
+  - {key: cicis, name: Cicis Pizza, category: food.fast_food, match: [cicis, cici pizza]}
+  - {key: sbarro, name: Sbarro, category: food.fast_food, match: [sbarro]}
+
+  # Coffee, doughnuts, ice cream and other snacks.
+  - {key: starbucks, name: Starbucks, category: food.coffee, match: [starbucks]}
+  - {key: dunkin, name: Dunkin', category: food.coffee, match: [dunkin]}
+  - {key: dutch bros, name: Dutch Bros Coffee, category: food.coffee, match: [dutch bros]}
+  - {key: peets coffee, name: Peet's Coffee, category: food.coffee, match: [peets, peet =, peet coffee]}
+  - {key: tim hortons, name: Tim Hortons, category: food.coffee, match: [tim hortons, tim horton]}
+  - {key: caribou coffee, name: Caribou Coffee, category: food.coffee, match: [caribou coffee]}
+  - {key: the coffee bean, name: The Coffee Bean & Tea Leaf, category: food.coffee, match: [coffee bean, the coffee bean]}
+  - {key: biggby coffee, name: Biggby Coffee, category: food.coffee, match: [biggby]}
+  - {key: scooters coffee, name: Scooter's Coffee, category: food.coffee, match: [scooters coffee, scooter coffee]}
+  - {key: philz coffee, name: Philz Coffee, category: food.coffee, match: [philz]}
+  - {key: blue bottle coffee, name: Blue Bottle Coffee, category: food.coffee, match: [blue bottle]}
+  - {key: la colombe, name: La Colombe, category: food.coffee, match: [la colombe]}
+  - {key: 7 brew, name: 7 Brew Coffee, category: food.coffee, match: [7 brew]}
+  - {key: the human bean, name: The Human Bean, category: food.coffee, match: [the human bean, human bean]}
+  - {key: krispy kreme, name: Krispy Kreme, category: food.coffee, match: [krispy kreme]}
+  - {key: shipley do nuts, name: Shipley Do-Nuts, category: food.coffee, match: [shipley do nuts, shipley donuts]}
+  - {key: duck donuts, name: Duck Donuts, category: food.coffee, match: [duck donuts]}
+  - {key: einstein bros bagels, name: Einstein Bros. Bagels, category: food.coffee, match: [einstein bros, einstein bagels]}
+  - {key: brueggers bagels, name: Bruegger's Bagels, category: food.coffee, match: [brueggers, bruegger =, bruegger bagels, bruegger bagel]}
+  - {key: paris baguette, name: Paris Baguette, category: food.coffee, match: [paris baguette]}
+  - {key: tous les jours, name: Tous les Jours, category: food.coffee, match: [tous les jours]}
+  - {key: baskin robbins, name: Baskin-Robbins, category: food.coffee, match: [baskin robbins, baskin =]}
+  - {key: cold stone creamery, name: Cold Stone Creamery, category: food.coffee, match: [cold stone]}
+  - {key: ben and jerrys, name: Ben & Jerry's, category: food.coffee, match: [ben jerry, ben jerrys, ben and jerrys]}
+  - {key: haagen dazs, name: Haagen-Dazs, category: food.coffee, match: [haagen dazs, haagendazs]}
+  - {key: marble slab creamery, name: Marble Slab Creamery, category: food.coffee, match: [marble slab]}
+  - {key: carvel, name: Carvel, category: food.coffee, match: [carvel]}
+  - {key: ritas italian ice, name: Rita's Italian Ice, category: food.coffee, match: [ritas italian ice, rita italian ice]}
+  - {key: dippin dots, name: Dippin' Dots, category: food.coffee, match: [dippin dots]}
+  - {key: menchies, name: Menchie's Frozen Yogurt, category: food.coffee, match: [menchies, menchie =]}
+  - {key: yogurtland, name: Yogurtland, category: food.coffee, match: [yogurtland]}
+  - {key: pinkberry, name: Pinkberry, category: food.coffee, match: [pinkberry]}
+  - {key: sweetfrog, name: sweetFrog, category: food.coffee, match: [sweetfrog, sweet frog]}
+  - {key: crumbl, name: Crumbl, category: food.coffee, match: [crumbl]}
+  - {key: insomnia cookies, name: Insomnia Cookies, category: food.coffee, match: [insomnia cookies]}
+  - {key: nothing bundt cakes, name: Nothing Bundt Cakes, category: food.coffee, match: [nothing bundt]}
+  - {key: great american cookies, name: Great American Cookies, category: food.coffee, match: [great american cookie, great american cookies]}
+  - {key: mrs fields, name: Mrs. Fields, category: food.coffee, match: [mrs fields]}
+  - {key: auntie annes, name: Auntie Anne's, category: food.coffee, match: [auntie anne, auntie annes]}
+  - {key: wetzels pretzels, name: Wetzel's Pretzels, category: food.coffee, match: [wetzel pretzels, wetzels pretzels]}
+  - {key: cinnabon, name: Cinnabon, category: food.coffee, match: [cinnabon]}
+  - {key: jamba, name: Jamba, category: food.coffee, match: [jamba]}
+  - {key: smoothie king, name: Smoothie King, category: food.coffee, match: [smoothie king]}
+  - {key: tropical smoothie cafe, name: Tropical Smoothie Cafe, category: food.coffee, match: [tropical smoothie]}
+  - {key: kung fu tea, name: Kung Fu Tea, category: food.coffee, match: [kung fu tea]}
+  - {key: gong cha, name: Gong cha, category: food.coffee, match: [gong cha]}
+  - {key: sharetea, name: Sharetea, category: food.coffee, match: [sharetea]}
+
+  # Table service.
+  - {key: olive garden, name: Olive Garden, category: food.restaurants, match: [olive garden]}
+  - {key: red lobster, name: Red Lobster, category: food.restaurants, match: [red lobster]}
+  - {key: applebees, name: Applebee's, category: food.restaurants, match: [applebees, applebee =, applebee grill, applebee neighborhood]}
+  - {key: chilis, name: Chili's, category: food.restaurants, match: [chilis, chili =, chili grill]}
+  - {key: tgi fridays, name: TGI Fridays, category: food.restaurants, match: [tgi fridays, tgi friday, tgif]}
+  - {key: outback steakhouse, name: Outback Steakhouse, category: food.restaurants, match: [outback steakhouse, outback =]}
+  - {key: texas roadhouse, name: Texas Roadhouse, category: food.restaurants, match: [texas roadhouse]}
+  - {key: longhorn steakhouse, name: LongHorn Steakhouse, category: food.restaurants, match: [longhorn steak, longhorn steakhouse]}
+  - {key: cracker barrel, name: Cracker Barrel, category: food.restaurants, match: [cracker barrel]}
+  - {key: ihop, name: IHOP, category: food.restaurants, match: [ihop]}
+  - {key: dennys, name: Denny's, category: food.restaurants, match: [dennys =, denny =, dennys restaurant, denny restaurant]}
+  - {key: waffle house, name: Waffle House, category: food.restaurants, match: [waffle house]}
+  - {key: the cheesecake factory, name: The Cheesecake Factory, category: food.restaurants, match: [cheesecake factory, the cheesecake factory]}
+  - {key: buffalo wild wings, name: Buffalo Wild Wings, category: food.restaurants, match: [buffalo wild wings, buffalo wild wngs, bww]}
+  - {key: red robin, name: Red Robin, category: food.restaurants, match: [red robin]}
+  - {key: ruby tuesday, name: Ruby Tuesday, category: food.restaurants, match: [ruby tuesday]}
+  - {key: bjs restaurant, name: BJ's Restaurant & Brewhouse, category: food.restaurants, match: [bjs restaurant, bjs restaurants, bj restaurant, bj restaurants]}
+  - {key: pf changs, name: P.F. Chang's, category: food.restaurants, match: [p f chang, pf chang, pf changs]}
+  - {key: benihana, name: Benihana, category: food.restaurants, match: [benihana]}
+  - {key: bonefish grill, name: Bonefish Grill, category: food.restaurants, match: [bonefish grill]}
+  - {key: carrabbas, name: Carrabba's Italian Grill, category: food.restaurants, match: [carrabbas, carrabba =, carrabba italian]}
+  - {key: maggianos, name: Maggiano's Little Italy, category: food.restaurants, match: [maggianos, maggiano =, maggiano little]}
+  - {key: california pizza kitchen, name: California Pizza Kitchen, category: food.restaurants, match: [california pizza kitchen, cpk]}
+  - {key: hooters, name: Hooters, category: food.restaurants, match: [hooters]}
+  - {key: golden corral, name: Golden Corral, category: food.restaurants, match: [golden corral]}
+  - {key: bob evans, name: Bob Evans, category: food.restaurants, match: [bob evans]}
+  - {key: perkins, name: Perkins Restaurant & Bakery, category: food.restaurants, match: [perkins restaurant, perkins family]}
+  - {key: village inn, name: Village Inn, category: food.restaurants, match: [village inn restaurant, village inn pancake]}
+  - {key: first watch, name: First Watch, category: food.restaurants, match: [first watch]}
+  - {key: black bear diner, name: Black Bear Diner, category: food.restaurants, match: [black bear diner]}
+  - {key: mimis cafe, name: Mimi's Cafe, category: food.restaurants, match: [mimis cafe, mimi cafe]}
+  - {key: yard house, name: Yard House, category: food.restaurants, match: [yard house]}
+  - {key: cheddars, name: Cheddar's Scratch Kitchen, category: food.restaurants, match: [cheddars =, cheddar scratch]}
+  - {key: logans roadhouse, name: Logan's Roadhouse, category: food.restaurants, match: [logans roadhouse, logan roadhouse]}
+  - {key: saltgrass, name: Saltgrass Steak House, category: food.restaurants, match: [saltgrass]}
+  - {key: ruths chris, name: Ruth's Chris Steak House, category: food.restaurants, match: [ruths chris, ruth chris]}
+  - {key: capital grille, name: The Capital Grille, category: food.restaurants, match: [capital grille, the capital grille]}
+  - {key: mortons, name: Morton's The Steakhouse, category: food.restaurants, match: [mortons the steakhouse, morton the steakhouse, mortons steakhouse]}
+  - {key: flemings, name: Fleming's Prime Steakhouse, category: food.restaurants, match: [flemings =, fleming prime]}
+  - {key: seasons 52, name: Seasons 52, category: food.restaurants, match: [seasons 52]}
+  - {key: bahama breeze, name: Bahama Breeze, category: food.restaurants, match: [bahama breeze]}
+  - {key: chuys, name: Chuy's, category: food.restaurants, match: [chuys =, chuy =]}
+  - {key: on the border, name: On The Border, category: food.restaurants, match: [on the border]}
+  - {key: uno pizzeria, name: Uno Pizzeria & Grill, category: food.restaurants, match: [uno pizzeria, uno chicago]}
+  - {key: old chicago, name: Old Chicago, category: food.restaurants, match: [old chicago]}
+  - {key: rainforest cafe, name: Rainforest Cafe, category: food.restaurants, match: [rainforest cafe]}
+  - {key: hard rock cafe, name: Hard Rock Cafe, category: food.restaurants, match: [hard rock cafe]}
+  - {key: famous daves, name: Famous Dave's, category: food.restaurants, match: [famous daves, famous dave]}
+  - {key: dickeys barbecue pit, name: Dickey's Barbecue Pit, category: food.restaurants, match: [dickeys =, dickey barbecue, dickey bbq, dickeys barbecue, dickeys bbq]}
+  - {key: sonnys bbq, name: Sonny's BBQ, category: food.restaurants, match: [sonnys bbq, sonny bbq]}
+  - {key: smokey bones, name: Smokey Bones, category: food.restaurants, match: [smokey bones]}
+  - {key: friendlys, name: Friendly's, category: food.restaurants, match: [friendlys =, friendlys restaurant, friendlys ice]}
+  - {key: shoneys, name: Shoney's, category: food.restaurants, match: [shoneys, shoney =]}
+  - {key: huddle house, name: Huddle House, category: food.restaurants, match: [huddle house]}
+  - {key: nandos, name: Nando's Peri-Peri, category: food.restaurants, match: [nandos, nando peri]}
+  - {key: kona grill, name: Kona Grill, category: food.restaurants, match: [kona grill]}
+  - {key: pappadeaux, name: Pappadeaux Seafood Kitchen, category: food.restaurants, match: [pappadeaux]}
+  - {key: pappasitos, name: Pappasito's Cantina, category: food.restaurants, match: [pappasitos, pappasito]}
+  - {key: joes crab shack, name: Joe's Crab Shack, category: food.restaurants, match: [joes crab shack, joe crab shack]}
+  - {key: bubba gump, name: Bubba Gump Shrimp Co., category: food.restaurants, match: [bubba gump]}
+  - {key: mellow mushroom, name: Mellow Mushroom, category: food.restaurants, match: [mellow mushroom]}
+  - {key: marie callenders, name: Marie Callender's, category: food.restaurants, match: [marie callender, marie callenders]}
+  - {key: coopers hawk, name: Cooper's Hawk Winery & Restaurants, category: food.restaurants, match: [coopers hawk, cooper hawk]}
+  - {key: texas de brazil, name: Texas de Brazil, category: food.restaurants, match: [texas de brazil]}
+  - {key: fogo de chao, name: Fogo de Chao, category: food.restaurants, match: [fogo de chao]}
+  - {key: the melting pot, name: The Melting Pot, category: food.restaurants, match: [melting pot, the melting pot]}
+  - {key: millers ale house, name: Miller's Ale House, category: food.restaurants, match: [millers ale house, miller ale house]}
+  - {key: another broken egg, name: Another Broken Egg Cafe, category: food.restaurants, match: [another broken egg]}
+
+  # Meals brought to the door.
+  - {key: uber eats, name: Uber Eats, category: food.delivery, match: [uber eats, ubereats]}
+  - {key: doordash, name: DoorDash, category: food.delivery, match: [doordash inc, doordash order]}
+  - {key: grubhub, name: Grubhub, category: food.delivery, match: [grubhub holdings, grubhubfood]}
+  - {key: postmates, name: Postmates, category: food.delivery, match: [postmates]}
+  - {key: caviar, name: Caviar, category: food.delivery, match: [trycaviar]}
+  - {key: seamless, name: Seamless, category: food.delivery, match: [seamlss]}
+  - {key: gopuff, name: Gopuff, category: food.delivery, match: [gopuff]}
+  - {key: ezcater, name: ezCater, category: food.delivery, match: [ezcater]}
+  - {key: chownow, name: ChowNow, category: food.delivery, match: [chownow]}
+  - {key: slice, name: Slice, category: food.delivery, match: [slicelife]}

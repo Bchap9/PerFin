@@ -64,7 +64,16 @@ grant routes. Not built yet among the Phase 2 families: `GET/PATCH
 and `documents.viewer_download` have their defaults and no API) and `GET
 /audit`. Phases 5-6 (v0.5, v0.6) add `/securities`, `/investments/*`,
 `/fx-rates`, `/loans`, `/assets`, `/networth`, `/recurring`,
-`/cashflow/calendar`, `/tax-years` and `/tax-category-map` (notes below);
+`/cashflow/calendar`, `/tax-years` and `/tax-category-map` (notes below).
+1.0.0-rc.10 adds twelve routes for categorisation and subscriptions:
+`/categorisation/summary`, `/categorisation/learned` (list, forget),
+`/categorisation/refresh`, `/rules/merchant/preview`, `/rules/merchant`,
+`/rules/{id}/revert`, `/subscriptions` (list, one), `/subscriptions/events`
+(list, seen) and `/subscriptions/{id}/decision`; four filters and seven
+fields on transactions; the bulk action `accept_suggestions`; and a
+changed `DELETE /recurring/{id}` for a detected series ("Rules and
+provenance", "Categorisation notes", "Recurring notes" below;
+CATEGORISATION.md);
 the Phase 7+ routes in the list are not built yet. The Phase 2 routes, and
 the Phase 5-6 routes for brokerage, loan and tax-form uploads, holdings,
 performance, loan payments, schedules and simulation, manual assets, net
@@ -125,10 +134,11 @@ GET             /accounts/{id}/grants           who has a grant (owner/admin)
 GET             /households/{id}/members/{user_id}/grants   a member's grants
 PUT/DELETE      /households/{id}/members/{user_id}/grants/{account_id}  (owner/admin, step-up)
 
-GET/POST        /transactions                  filters: account, date range, category, payee, tag, review_state, document, q
+GET/POST        /transactions                  filters: account, date range, category, payee, tag, review_state, document, q,
+                                               category_source, suggested, merchant, subscription
 GET/PATCH/DELETE /transactions/{id}
 POST            /transactions/{id}/split
-POST            /transactions/bulk              categorise/tag/untag/delete/confirm many
+POST            /transactions/bulk              categorise/tag/untag/delete/confirm/accept suggestions for many
 GET             /transactions/{id}/transfer-candidates   possible other legs of a transfer
 POST/DELETE     /transactions/{id}/transfer     link with another leg / unlink
 POST            /transactions/transfers/auto-pair        run the transfer matcher
@@ -144,6 +154,13 @@ POST            /rules/test                     dry-run a rule against history (
 POST            /rules/apply                    re-run all rules (job; 202 + job id)
 GET             /rules/export                   portable JSON (ids plus referenced names)
 POST            /rules/import                   append or replace from an export
+POST            /rules/merchant/preview         what "always categorise this merchant as..." would change (no writes)
+POST            /rules/merchant                 make or change the merchant's rule (member or above)
+POST            /rules/{id}/revert              delete a rule and undo the categories it set
+GET             /categorisation/summary         how my transactions got their categories
+GET             /categorisation/learned         what PerFin learned from the household's corrections
+DELETE          /categorisation/learned/{id}    forget one learned entry (member or above)
+POST            /categorisation/refresh         look again at what nobody decided (job; owner/admin)
 GET             /jobs/{id}                      state of a job of my household
 
 GET/POST/PATCH/DELETE /budgets
@@ -186,8 +203,13 @@ GET             /networth/projection?months=&basis_months=   linear trend and sa
 GET/POST        /recurring                      recurring transactions (detected and manual)
 GET             /recurring/candidates           detection dry run (nothing stored)
 POST            /recurring/detect               detect and store (member or above)
-GET/PATCH/DELETE /recurring/{id}
+GET/PATCH/DELETE /recurring/{id}                DELETE dismisses a detected series, deletes a manual one
 GET             /cashflow/calendar?days=&account=   expected income and bills, day by day
+GET             /subscriptions                  subscription and bill series with monthly and yearly cost
+GET             /subscriptions/events           what changed (new, price, missed, ended, renewal)
+POST            /subscriptions/events/seen      mark changes as seen (member or above)
+GET             /subscriptions/{id}             one series with its charges and changes
+POST            /subscriptions/{id}/decision    confirm/dismiss/pause/resume/end/reopen (member or above)
 
 POST            /documents                     multipart upload (streamed) -> 202
 GET             /documents                     filters: kind, status, account, tax_year, q (full text)
@@ -899,7 +921,8 @@ household only, and for members and viewers only those whose payload
 `account_id`/`account_ids` names a visible account (or none), whose
 `all_account_ids` (goals) are all visible, that are addressed to them
 (`user_id`), and whose document (`document.*` `id`, `review.*`
-`document_id`) is visible; `transaction.*`, `balance.*` and `goal.*` events
+`document_id`) is visible; `transaction.*`, `balance.*`, `goal.*` and
+`subscription.*` events
 that name no account are not sent to them, and `document.deleted` without an
 account only to the uploader. `Last-Event-ID` (or
 `?last_event_id=`) resumes after that event within the 7-day event
@@ -1007,7 +1030,14 @@ account visibility; a document the caller cannot see gives an empty page)
 and `q`
 (1-100 characters: a case-insensitive substring of the payee text, the
 payee's name, memo or notes; `%`, `_` and `\` are literal characters, there
-is no query language). A `category` matches the transaction's category or
+is no query language). Four more filters come with category provenance
+(CATEGORISATION.md): `category_source` (`person`, `file`, `rule`, `payee`,
+`learned`, `dictionary`, `keyword` or `legacy`: how the category was
+decided), `suggested` (`true`: rows that carry a suggestion; `false`: rows
+that do not), `merchant` (a whole merchant key, `422` unless it has the
+key's form; never a prefix) and `subscription` (the id of a recurring
+series: the charges linked to it; a series the caller cannot see gives an
+empty page). A `category` matches the transaction's category or
 any of its splits'. Results are newest first (`posted_date`, then id) with a
 keyset cursor: `{"items", "next_cursor"}`, `limit` 1-500 (default 100); rows
 added or removed while a client pages never shift later pages; a malformed
@@ -1016,8 +1046,19 @@ cursor is `422 invalid-cursor`. A transaction is `{"id", "account_id",
 "payee_id", "category_id", "raw_payee", "memo", "notes", "status",
 "review_state", "confidence", "transfer": {"group_id", "counterpart_id"} |
 null, "source_document_id", "tag_ids", "splits": [{"id", "category_id",
-"amount", "memo", "tax_flag"}], "created_at", "updated_at"}`;
-`counterpart_id` is null when the other leg is on an account the caller
+"amount", "memo", "tax_flag"}], "created_at", "updated_at",
+"merchant_key", "merchant", "category_source", "category_confidence",
+"category_rule_id", "suggested_category_id", "subscription_id"}`.
+`merchant_key` is the stored identity of who was paid and `merchant` the
+name to show for it (the dictionary's name, else the key in title case;
+computed on read); both are null for a line that names nobody.
+`category_source` says how the category was decided (null: nobody
+decided; on a row that only carries a suggestion it is the suggestion's
+source and the category is null), `category_confidence` is
+decimal text with two places (`"0.90"`), `category_rule_id` names the rule
+for source `rule`, `suggested_category_id` is set only while `category_id`
+is null, and `subscription_id` is the recurring series the charge belongs
+to. `counterpart_id` is null when the other leg is on an account the caller
 cannot see. `POST /transactions` (`Idempotency-Key` honoured) takes
 `account_id`, `posted_date`, `amount` (`{"amount": "<decimal string>",
 "currency"}`, the account's currency or `422 currency-mismatch`) and
@@ -1027,24 +1068,40 @@ that document, a line the reader missed, entered in the reconcile view:
 the document must be one the caller may change, `404 document-not-found`
 when hidden, foreign or missing, `403 forbidden` when read-only; the row
 has no `import_hash`); manual transactions start with `review_state`
-`none` and then go through the household's enabled rules in the same
-request (the response shows their effect); rules never overwrite the
-category, payee, notes or tags given in the request. `PATCH` takes the same fields (not `account_id`) plus
+`none` and then go through categorisation in the same request (the
+response shows the effect): the merchant key is computed, the household's
+enabled rules run, and a row still without a category gets a guess or a
+suggestion. Rules and guesses never overwrite the category, payee, notes
+or tags given in the request; a category given in the request is the
+person's choice (`category_source: "person"`). `PATCH` takes the same fields (not `account_id`) plus
 `review_state`; an absent field is unchanged, `null` clears an optional one,
-`tag_ids` replaces the tag set. `POST /transactions/{id}/split` takes
+`tag_ids` replaces the tag set. Setting or clearing `category_id` (here or
+in bulk), splitting and removing splits are a person's decision: the row
+becomes `category_source: "person"` with confidence `1.00`, its suggestion
+and rule id are dropped, and the household's memory counts the row for its
+merchant (not for a line between people, a transfer, a card payment, cash,
+a cheque, a fee, interest or a deposit, and not for a row without a
+merchant key). Setting the category a row already has changes nothing. A
+changed `raw_payee` recomputes the merchant key; a decided row keeps its
+category. `POST /transactions/{id}/split` takes
 `{"splits": [{"amount", "category_id"?, "memo"?, "tax_flag"?}, ...]}` with
 either no lines (remove the splits; optional `category_id` for the
 transaction) or at least two whose amounts, in the transaction's currency,
 add up exactly to its amount (`422 split-sum-mismatch`); a split
 transaction's category is null and its amount and category cannot be
 patched (`409 transaction-split`). `POST /transactions/bulk` takes
-`{"action": "categorise" | "tag" | "untag" | "delete" | "confirm", "ids"
+`{"action": "categorise" | "tag" | "untag" | "delete" | "confirm" |
+"accept_suggestions", "ids"
 (1-500, unique), "category_id"? (categorise; null clears), "tag_ids"? (tag,
 untag)}` and authorises every id on its own: the answer lists
 `{"id", "result": "updated" | "deleted" | "unchanged" | "skipped" |
 "not_found", "reason"?}` per id (`skipped` with reason `split` for split
 transactions in a categorise), and ids the caller may not edit are
-`not_found` and untouched. Transfers are two transactions sharing a
+`not_found` and untouched. `accept_suggestions` makes each row's
+`suggested_category_id` its category as the person's choice (`person`,
+`1.00`); a row without a suggestion is `skipped` with reason
+`suggestion-missing`, a split row `skipped` with reason `split`; audit
+`transaction.bulk_accept_suggestions`. Transfers are two transactions sharing a
 `group_id`: `POST /transactions/{id}/transfer` (`{"counterpart_id"}`) links
 two legs on different accounts the caller may edit, of opposite sign and,
 in one currency, equal and opposite amounts (`422 transfer-invalid`; `409
@@ -1078,7 +1135,14 @@ when a document read again replaces rows of its earlier reading
 the server-side payload `{"document_id", "account_id", "count", "ids"}`
 (at most 50 ids). Rows removed this way leave no tombstone and are
 audited as `import.replace` (`account_id`, `replaced`, `kept`,
-`transaction_ids`, `kept_ids`; ids and counts only).
+`transaction_ids`, `kept_ids`; ids and counts only). A categorisation
+pass that wrote at least one category or suggestion (an import, a new
+manual row, a refresh) emits one `transaction.categorised` event with the
+server-side payload `{"account_ids", "count"}` and is audited as
+`transaction.categorise` (`count`, `by_source`, `suggested`): counts
+only, never a description, a merchant key or a name. The audit rows of
+`transaction.update`, `transaction.split` and the bulk actions say how the
+category was decided before and after.
 
 Rules notes (`app.domain.rules`, router `rules`; document format and
 evaluation semantics in DATA_MODEL.md "Ledger"): any household role reads
@@ -1117,6 +1181,92 @@ returns `{"format": "perfin-rules", "version": 1, "rules": [...],
 id that is not this household's is resolved by its referenced name (case
 and spacing ignored; payees by their normalised name), else `422
 rule-reference-unresolved` and nothing is imported.
+
+Rules and provenance (migration `0014`; CATEGORISATION.md). A category a
+rule sets is stored with `category_source: "rule"`, confidence `1.00` and
+the rule's id, and drops a pending suggestion. The `run_rules` job never
+re-categorises a row whose source is `person` (the row is still tagged,
+flagged and noted), and `POST /rules/test` lists that action under
+`skipped` instead of as a change. A new condition `{"type": "merchant",
+"key": "<merchant key>"}` is true when the transaction's stored merchant
+key is exactly `key`.
+
+Merchant rules ("always categorise this merchant as...") are ordinary
+rules with exactly that one condition and one `set_category` action; they
+count towards the 500. Unlike every other rule write they need only
+**member** (and a transaction the caller can see):
+
+- `POST /rules/merchant/preview` `{"transaction_id", "category_id"}`
+  writes nothing and answers `{"merchant_key", "merchant", "teachable",
+  "reason": "no_merchant" | "not_a_purchase" | "split" | null,
+  "uncategorised", "guessed", "decided", "same_category",
+  "existing_rule_id", "shadowed_by", "sample"}`. The four counts are over
+  every row of the merchant on the accounts the caller may **edit**, not
+  capped: no category (suggestions included), a guess with another
+  category (would change), decided by a person, the file, a payee default,
+  another rule or an earlier release (never changes), and already in that
+  category. `sample` holds at most 20 ids. `existing_rule_id`: the
+  merchant's rule, which saving would change. `shadowed_by`: an earlier
+  rule that decides the row first.
+- `POST /rules/merchant` takes the same body plus `apply_to_existing`
+  (default `false`) and answers `201 {"rule", "replaced",
+  "previous_category_id", "job_id"}`. The rule is appended last (`409
+  rule-limit` at the cap) or, when the merchant has an enabled rule, its
+  category is changed (`replaced: true`). `422 merchant-not-teachable`
+  when the row names no merchant, is not a purchase (a transfer, a card
+  payment, a payment to a person...) or is split; `409 rule-shadowed`
+  (the problem names the rule's id) when an earlier rule sets the row's
+  category or stops the run before the merchant rule is reached. The row
+  it was made from becomes the person's own choice when the caller may
+  edit it. With `apply_to_existing`, `job_id` is a `run_rules` job for
+  that one rule over the editable accounts that hold the merchant, queued
+  with `guesses_only` in its payload: it changes undecided rows, guesses
+  and what the rule set itself, and leaves every category a person, a
+  file, a payee default, an earlier release or another rule decided, so
+  it changes what the preview counted. (The same rule named in `POST
+  /rules/apply` is applied as any other rule.) Audit `rule.create` or `rule.update`,
+  without the rule's name (it holds the merchant's).
+- `POST /rules/{id}/revert` answers `{"rule_id", "reverted", "job_id"}`:
+  the rows whose `category_rule_id` is the rule go back to undecided
+  through the pinned write (`updated_at` kept; a split the rule made is
+  removed), the rule is deleted, and when rows were returned a
+  `categorise.refresh` job (`job_id`) guesses for them again. A member may
+  revert a merchant rule; any other rule needs owner or admin (`403
+  rule-not-revertible`); a foreign or missing rule is `404
+  rule-not-found`. Audit `rule.revert` (`reverted`: a count).
+
+Categorisation notes (`app.domain.categorisation`, router
+`categorisation`; CATEGORISATION.md):
+
+- `GET /categorisation/summary` (any role): `{"dictionary_version",
+  "dictionary_merchants", "cleaner_version", "up_to_date", "by_source":
+  [{"source", "transactions"}], "uncategorised", "suggestions",
+  "learned_merchants"}`, counted over the accounts the caller may see.
+  `source` null counts the rows nobody decided; `up_to_date` is false
+  while the household's rows were last evaluated with an older merchant
+  list or clean-up.
+- `GET /categorisation/learned?cursor=&limit=` (any role; `limit` 1-200,
+  default 50): `{"items": [{"id", "merchant_key", "merchant", "direction":
+  "out" | "in", "category_id", "decisions", "total", "share", "last_decided_at",
+  "rule_id", "offer_rule", "example_transaction_id"}], "next_cursor"}`, one
+  item per merchant and direction (the category with the most decisions),
+  in merchant-key order. `share` is decimal text with two places.
+  `offer_rule` is true at three or more unanimous decisions when no rule
+  covers the merchant; `example_transaction_id` is a row the caller may
+  see to make the rule from. A caller who does not see every account is
+  shown only what was learned about merchants on rows they may see.
+- `DELETE /categorisation/learned/{id}` (member or above): `204`; forgets
+  every category of that merchant and direction. Categories already
+  written stay. `404 memory-not-found` for a missing or foreign id. Audit
+  `memory.forget` (a count).
+- `POST /categorisation/refresh` (owner or admin): `202 {"job_id",
+  "state"}`; queues `categorise.refresh` for the household with `force`.
+  The job adds default categories of a newer edition, recomputes merchant
+  keys when the clean-up or the dictionary moved, seeds the memory once
+  from `legacy` rows and re-evaluates only undecided rows, suggestions
+  and rows whose source is `dictionary` or `keyword`. The same job is
+  queued hourly by `categorise.dispatch` for households whose versions are
+  behind. Audit `categorise.refresh` (versions and counts).
 
 Jobs notes (`app.domain.jobs.service`, router `jobs`): `GET /jobs/{id}`
 returns `{"id", "type", "state", "attempts", "max_attempts", "finished",
@@ -1575,26 +1725,87 @@ Recurring notes (`app.domain.recurring`, router `recurring`; scopes
 - Schedules (`{"id", "account_id", "name", "cadence":
   daily|weekly|monthly|quarterly|yearly, "interval_count", "next_due",
   "amount_min", "amount_max", "payee_id", "category_id", "origin":
-  detected|manual, "active", "last_seen_on"}`) follow their account's
+  detected|manual, "active", "last_seen_on", "kind":
+  subscription|bill|income|other, "status":
+  suggested|active|confirmed|paused|ended|dismissed, "status_source":
+  detector|person, "merchant"}`; `active` is always `status in (active,
+  confirmed)`) follow their account's
   visibility: hidden, foreign or missing is `404 schedule-not-found`; writes
   need member or above and an edit grant (`403` on a view-only account).
-  `GET /recurring?origin=&active=&account=` lists at most 500, soonest first.
+  `GET /recurring?origin=&active=&account=` lists at most 500, soonest first;
+  a dismissed series is not listed.
   `POST /recurring` (`Idempotency-Key` honoured) adds a manual schedule;
   amounts are in the account currency (`422 currency-mismatch`) with
   `amount_min <= amount_max` (`422 invalid-amount-range`); payee and
   category must be the household's (`404`). `PATCH` changes any field
-  (`null` clears payee/category), `DELETE` removes it.
+  (`null` clears payee/category); `kind` is recorded as the person's word,
+  `active: false` pauses the series (`paused`) and `active: true` confirms
+  it (`confirmed`), both by a person. `DELETE` on a **manual** schedule
+  removes it; on a **detected** series it sets `dismissed` (the row stays
+  as the tombstone that keeps detection from finding it again, its charges
+  are unlinked, the list no longer shows it; `204` either way). **Changed
+  in 1.0.0-rc.10**: before, a deleted detected schedule was removed and
+  came back with the next detection.
 - `GET /recurring/candidates?account=` (any role) runs detection over the
   visible accounts and stores nothing: `{"as_of", "items": [{"account_id",
-  "payee_id", "name", "pattern": weekly|biweekly|monthly|quarterly|annual,
+  "payee_id", "name", "pattern":
+  weekly|biweekly|monthly|two_monthly|quarterly|half_yearly|annual,
   "cadence", "interval_count", "amount_min", "amount_max", "category_id",
   "occurrences", "first_seen", "last_seen", "next_due", "regularity",
   "confidence", "schedule_id"}]}`. `POST /recurring/detect` (`{"account_ids"?}`,
   member or above; every account editable, else `404 account-not-found`)
   stores them as `detected` schedules and answers `{"as_of", "created",
   "updated", "unchanged", "skipped_manual", "items"}`. Manual schedules are
-  never changed; a detected schedule keeps the name and `active` flag a
-  person gave it. Detection rules: `app/domain/recurring/detection.py`.
+  never changed; a detected series keeps the name, the kind and the status
+  a person gave it, and a dismissed one is never created again. A series
+  with thin evidence is stored as `suggested` (not `active`: it is in no
+  calendar and no forecast until a person confirms it or more charges
+  arrive). Rows are grouped by account, merchant key and direction;
+  "still running", missed and ended are judged against the account's
+  latest row, never against today. Detection rules:
+  `app/domain/recurring/detection.py`; what changed about a series:
+  `app/domain/recurring/subscriptions.py`; CATEGORISATION.md
+  "Subscriptions and bills".
+- **Subscription notes** (router `subscriptions`; the same scopes and the
+  same account visibility: a series on a hidden account is absent from
+  every list, total and count, and `404 schedule-not-found` by id).
+  `GET /subscriptions?kind=&status=&account=` (any role; `kind`
+  `subscription` and/or `bill`, default both; `status` repeatable, default
+  every status but `dismissed`): `{"as_of", "subscriptions": {"currency",
+  "monthly", "yearly", "count", "unconverted"}, "bills": {...}, "items",
+  "needs_look"}`. The totals are what the `active` and `confirmed` series
+  cost per month and per year in the household's currency; a series in
+  another currency without a rate is named in `unconverted` (ids), not
+  summed. `needs_look` counts suggested series plus series with open
+  changes. An item is `{"id", "account_id", "name", "merchant", "kind",
+  "kind_source", "status", "status_source", "origin", "cadence",
+  "interval_count", "amount", "amount_min", "amount_max", "monthly_cost",
+  "yearly_cost", "next_due", "overdue", "first_seen_on", "last_seen_on",
+  "occurrences", "confidence", "category_id", "payee_id", "price_change":
+  {"previous", "current", "on", "pending"} | null, "open_events"}`;
+  `overdue` is judged against the account's latest row; `pending` marks a
+  price change seen on one charge only. `GET /subscriptions/{id}` adds
+  `"charges"` (the linked transactions, newest first, at most 60:
+  `{"transaction_id", "posted_date", "amount"}`) and `"events"`.
+  `GET /subscriptions/events?state=&cursor=&limit=` (any role; `state`
+  `open` or `seen`; `limit` 1-200, default 50) lists changes newest first:
+  `{"items": [{"id", "schedule_id", "name", "kind":
+  new|price_changed|missed|ended|charged_after_end|renewal_due|trial_converted,
+  "occurred_on", "amount_before", "amount_after", "transaction_id",
+  "state"}], "next_cursor", "open"}`. `POST /subscriptions/events/seen`
+  `{"ids"}` (1-200; member or above) answers `{"seen"}`; ids the caller
+  cannot see are ignored. `POST /subscriptions/{id}/decision` `{"decision":
+  "confirm" | "dismiss" | "pause" | "resume" | "end" | "reopen", "kind"?:
+  "subscription" | "bill"}` (member or above with an edit grant on the
+  account) records a person's decision, which detection never undoes:
+  `confirm`, `resume` and `reopen` give `confirmed`, `dismiss` gives
+  `dismissed` (its charges are unlinked through the pinned write),
+  `pause` gives `paused`, `end` gives `ended`. It marks the series' open
+  changes seen, answers the item, is audited as `subscription.decide`
+  (the decision, kind and status; no name) and emits `schedule.updated`.
+  Each change detection finds emits `subscription.changed`
+  (`account_id`, `schedule_id`), which members and viewers receive only
+  for accounts they see.
 - `GET /cashflow/calendar?days=&account=` (any role; `days` 1-366, default
   30): `{"currency", "date_from", "date_to", "opening_balance", "days":
   [{"on", "events": [{"schedule_id", "name", "account_id", "kind":
@@ -1758,7 +1969,11 @@ fresh step-up. A channel is `{"id", "name", "type", "enabled", "events",
 "updated_at"}`; `type` is `smtp|webhook|ntfy|gotify|matrix`, `events` a
 subset of `account_locked`, `recovery_code_used`, `mfa_reset`,
 `role_changed`, `new_device`, `review_waiting`, `tax_reminder`,
-`backup_failed`, `ai_client_created` (default: all), `config` only the
+`backup_failed`, `ai_client_created`, `subscription_new`,
+`subscription_price_changed`, `subscription_missed`,
+`subscription_renewal` (default for a new channel: all; a channel made
+before 1.0.0-rc.10 keeps the list it has, so the four subscription kinds
+are off until someone ticks them), `config` only the
 non-secret fields (`host`, `port`, `tls`, `sender`, `recipients`,
 `username`, `url`, `server_url`, `homeserver_url`, `room_id`, `priority`).
 `POST` takes `{"name", "enabled"?, "events"?, "config": {"type", ...}}`
@@ -1869,7 +2084,7 @@ GET /ai/v1/spending|income?period&group_by=category|payee|month|account|account_
 GET /ai/v1/trends?metric=spending|income&month=YYYY-MM&months
 GET /ai/v1/budgets/status?on           get_budget_status
 GET /ai/v1/goals                       get_savings_goals
-GET /ai/v1/recurring                   get_recurring (active schedules)
+GET /ai/v1/recurring                   get_recurring (active schedules; each with kind and status)
 GET /ai/v1/net-worth/history?range&granularity
 GET /ai/v1/allocation                  by asset class, sector and account (type)
 GET /ai/v1/accounts                    type, label, institution, currency, balance (no number)

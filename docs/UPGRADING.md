@@ -294,6 +294,119 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.10
+
+Categorisation and subscriptions ([CATEGORISATION.md](CATEGORISATION.md)).
+No new setting, no new container, no new outbound connection.
+
+- Migration `0014` adds six columns to `transaction`, twelve to
+  `scheduled_transaction`, the tables `merchant_memory` and
+  `subscription_event`, and a unique constraint each on `rule` and
+  `scheduled_transaction`. It is applied by `perfin migrate` like every
+  revision ("Database migrations"). It writes to every transaction that
+  has a category or a split and to every recurring item (one pass each, in
+  plain SQL, which does not move `updated_at`), so on a large ledger it
+  takes longer than the earlier revisions; take the backup first, as
+  always. The new columns are nullable or have defaults, but a check now
+  ties `scheduled_transaction.active` to the new `status` column: finish
+  the migration before the new pods take traffic, and do not leave pods of
+  rc.9 running against the migrated database longer than the rollout
+  needs.
+- **Your existing categories are kept, and never guessed over.** Every
+  transaction that already had a category or a split is marked as
+  categorised "before this version" (`legacy`). No merchant list, keyword
+  or learned answer ever replaces such a category; a rule you re-apply may
+  still change it, as before.
+- **A background pass runs within an hour of the upgrade** (the hourly
+  `categorise.dispatch` job queues one `categorise.refresh` per
+  household; an owner or admin can start it at once with "Check again" on
+  Documents, "What PerFin has learned"). Once, per household, it:
+  - adds 13 default categories under the groups you still have (Fast
+    food, Alcohol and bars, Food delivery, General merchandise, Home and
+    garden, Games, News and books, Software and apps, Memberships, Other
+    utilities, Home improvement, Financial and legal services, Cash and
+    ATM). Nothing of yours is renamed or moved; a category of your own
+    with the same name under the same group takes the key instead of
+    getting a twin; a default you deleted earlier stays deleted. New
+    households see "Streaming" where yours says "Streaming and
+    subscriptions"; yours keeps its name;
+  - works out the merchant of every transaction from the bank's wording
+    (the wording itself is not changed);
+  - counts the categories your transactions already have as what you
+    taught, so the next charge from a merchant you always filed one way is
+    filed that way from the first day;
+  - guesses for the transactions that have **no** category, and only for
+    those. A sure guess becomes the category and says where it came from;
+    an unsure one is a suggestion you can accept.
+
+  Until it has run, "How transactions got their category" says "Not up to
+  date yet". It is audited as `categorise.refresh` with counts. If the
+  number of uncategorised transactions is what you budget or report on,
+  expect it to drop after the pass: reports count a guessed category like
+  any other, and never a suggestion.
+- **Recurring items keep working.** An item you entered by hand is
+  "Confirmed"; one PerFin found and that is active is "Found for you"; one
+  you switched off is "Paused". Until the next detection looks at them,
+  money in is "income" and everything else "other"; the daily detection
+  then says which are subscriptions and which are bills. The calendar and
+  the budget forecast read the same items as before.
+- **A deleted found item no longer returns.** Deleting a recurring item
+  PerFin found now marks it "Not recurring" (dismissed) instead of
+  removing it, so the next night's detection does not bring it back. Items
+  you deleted **before** this release left no trace and can be found once
+  more; dismiss them again and they stay away. `DELETE /recurring/{id}`
+  still answers `204`; a script that relied on the row being gone should
+  filter on `status`. A deleted hand-entered item is deleted, as before.
+- **The first detection is quiet.** It records what it finds without a
+  "new subscription" for everything you have been paying for years; only
+  series that start from now on are announced. Detection is also stricter
+  than before: weekly groceries, a coffee habit, fuel and transfers are no
+  longer listed as recurring, and a found item with thin evidence is only
+  suggested. An item the old detector created that the new one would not
+  find stays as it is while its charges keep coming (dismiss it with "Not
+  recurring" if it is a habit); one whose charges stopped long ago is
+  marked ended without an alert.
+- **Notifications.** Four kinds are new (a new subscription, a price
+  change, a missed or stopped charge, a renewal within a week). A channel
+  you already have keeps the kinds it was subscribed to, so it sends none
+  of these until you tick them in Settings, Notifications. A new channel
+  starts with all kinds.
+- **"Always categorise like this" rules made before keep working.** They
+  are ordinary rules and stay in your rules list, in their place. The old
+  dialog is gone; its replacement, "Always categorise *merchant* as...",
+  is in the same menu, is now offered to members too, and makes a rule on
+  the merchant instead of on words of the description. Some rules made
+  with the old dialog never matched anything (the reason it was replaced):
+  the rules page shows how often each rule matched ("Matches"), and one
+  at zero can be deleted.
+- **Re-applying rules no longer overrides you.** `POST /rules/apply` (and
+  "Apply rules") leaves the category of a transaction alone when a person
+  chose it from this release on. Categories from before the upgrade are
+  not known to be a person's and can still be changed by a rule, as
+  before.
+- **Archives are format 3** (PORTABILITY.md). An export made by this
+  release cannot be imported into rc.9 or earlier
+  (`archive-version-unsupported`); keep that in mind before a rollback.
+  Format 1 and 2 archives still import, with their categories marked
+  `legacy`. One old case does not, and did not before this release
+  either: a format 2 archive written before migration `0009` (a release
+  before 1.0.0-rc.3) lacks `account.subtype` and is refused whole with
+  `archive-invalid-value`, importing nothing. Export it again from an
+  instance at `0009` or later: restore the backup of that time, upgrade,
+  export.
+- **Rollback** is a restore of the pre-upgrade backup, as for every
+  release ("Rollback"). What was recorded since (sources, suggestions,
+  what was learned, decisions about subscriptions) goes with it.
+- API: nothing was removed. Twelve routes, four transaction filters, seven
+  transaction fields, four schedule fields and one bulk action are new
+  (CHANGELOG.md, API.md). Changed behaviour a client may notice: `DELETE
+  /recurring/{id}` on a detected series (above); `PATCH /recurring/{id}`
+  with `active` sets the status as a person's decision; the import run
+  summary's `rules_changed` counts rows a rule categorised, no longer rows
+  a rule changed in any way; recurring patterns gain `two_monthly` and
+  `half_yearly`. MCP: still 19 tools; `get_recurring` rows gain `kind` and
+  `status`.
+
 ### 1.0.0-rc.9
 
 - Migration `0013` adds the column `statement_record.verification` and the

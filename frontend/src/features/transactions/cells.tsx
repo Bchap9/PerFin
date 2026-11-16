@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Inline-edit cells of the transactions grid. Each commit goes through `useEditTransaction` (optimistic, rolled back on failure). */
+import "./transactions.css";
+
 import { useState } from "react";
 
+import { Button } from "../../components/Button";
+import { CategoryPicker } from "../../components/CategoryPicker";
 import { Checkbox } from "../../components/Checkbox";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import type { Category, Payee, Tag, Transaction } from "./api";
-import { useEditTransaction } from "./optimistic";
+import { useAcceptSuggestion, useEditTransaction } from "./optimistic";
+import { confidenceText, isGuess, isSuggestion, sourceLabel } from "./provenance";
 
 export function rowLabel(row: Transaction, payees: readonly Payee[]): string {
   return payees.find((payee) => payee.id === row.payee_id)?.name ?? row.raw_payee ?? "transaction";
@@ -18,47 +23,145 @@ interface CellProps {
   label: string;
 }
 
-export function CategoryCell({ row, editable, label, categories }: CellProps & { categories: readonly Category[] }) {
-  const edit = useEditTransaction();
-  if (row.splits.length > 0) {
-    return <span>Split ({row.splits.length})</span>;
-  }
-  const name = categories.find((category) => category.id === row.category_id)?.name;
-  if (!editable) {
-    return <span>{name ?? "Uncategorised"}</span>;
+/** The small line under a category: who or what decided, and how sure a guess is. */
+function Why({ row, ruleNames }: { row: Transaction; ruleNames: ReadonlyMap<string, string> | undefined }) {
+  const suggestion = isSuggestion(row);
+  // Until the rule names are there, a rule is not called missing.
+  const ruleId = row.category_rule_id ?? null;
+  const source =
+    row.category_source === "rule" && ruleId !== null && ruleNames === undefined
+      ? "Rule"
+      : sourceLabel(row, ruleId === null ? undefined : ruleNames?.get(ruleId));
+  const confidence = suggestion || isGuess(row.category_source) ? confidenceText(row.category_confidence) : null;
+  if (!suggestion && source === null && confidence === null) {
+    return null;
   }
   return (
-    <span className="cell-edit">
-      <Select
-        aria-label={`Category of ${label}`}
-        placeholder="Uncategorised"
-        options={categories.map((category) => ({ value: category.id, label: category.name }))}
-        value={row.category_id ?? ""}
-        onChange={(event) => {
-          edit.mutate({ id: row.id, patch: { category_id: event.target.value === "" ? null : event.target.value } });
-        }}
-      />
+    <span className="cat-cell__why">
+      {suggestion ? <span>Suggestion</span> : null}
+      {source === null ? null : <span>{source}</span>}
+      {confidence === null ? null : <span>{confidence}</span>}
     </span>
   );
 }
 
-export function PayeeCell({ row, editable, label, payees }: CellProps & { payees: readonly Payee[] }) {
+export function CategoryCell({
+  row,
+  editable,
+  label,
+  categories,
+  ruleNames,
+  onCategorised,
+}: CellProps & {
+  categories: readonly Category[];
+  ruleNames?: ReadonlyMap<string, string> | undefined;
+  /** The server accepted a category the person chose for this row here (not a clearing). */
+  onCategorised?: ((row: Transaction, categoryId: string) => void) | undefined;
+}) {
   const edit = useEditTransaction();
-  const name = payees.find((payee) => payee.id === row.payee_id)?.name ?? row.raw_payee;
-  if (!editable) {
-    return <span>{name ?? "-"}</span>;
+  const accept = useAcceptSuggestion();
+  if (row.splits.length > 0) {
+    return <span>Split ({row.splits.length})</span>;
   }
-  return (
+  const name = categories.find((category) => category.id === row.category_id)?.name;
+  // A suggestion whose category is not in the list cannot be offered by name.
+  const suggested = isSuggestion(row) ? categories.find((category) => category.id === row.suggested_category_id)?.name : undefined;
+  const why = <Why row={row} ruleNames={ruleNames} />;
+  const picker = (placeholder?: string) => (
     <span className="cell-edit">
-      <Select
-        aria-label={`Payee of ${label}`}
-        placeholder={row.raw_payee ?? "No payee"}
-        options={payees.map((payee) => ({ value: payee.id, label: payee.name }))}
-        value={row.payee_id ?? ""}
+      <CategoryPicker
+        aria-label={`Category of ${label}`}
+        categories={categories}
+        {...(placeholder === undefined ? {} : { placeholder })}
+        value={row.category_id ?? ""}
         onChange={(event) => {
-          edit.mutate({ id: row.id, patch: { payee_id: event.target.value === "" ? null : event.target.value } });
+          const chosen = event.target.value;
+          edit.mutate(
+            { id: row.id, patch: { category_id: chosen === "" ? null : chosen } },
+            {
+              onSuccess: () => {
+                if (chosen !== "") {
+                  onCategorised?.(row, chosen);
+                }
+              },
+            },
+          );
         }}
       />
+    </span>
+  );
+  if (suggested !== undefined) {
+    return (
+      <span className="cat-cell">
+        <span className="cat-cell__suggestion">{suggested}?</span>
+        {editable ? (
+          <span className="cat-cell__choice">
+            <Button
+              size="sm"
+              aria-label={`Accept the suggestion for ${label}`}
+              loading={accept.isPending}
+              onClick={() => {
+                const accepted = row.suggested_category_id ?? "";
+                accept.mutate(row.id, {
+                  onSuccess: (result) => {
+                    if (result.changed > 0 && accepted !== "") {
+                      onCategorised?.(row, accepted);
+                    }
+                  },
+                });
+              }}
+            >
+              Accept
+            </Button>
+            {picker("Choose another")}
+          </span>
+        ) : null}
+        {why}
+      </span>
+    );
+  }
+  return (
+    <span className="cat-cell">
+      {editable ? picker() : <span>{name ?? "Uncategorised"}</span>}
+      {why}
+    </span>
+  );
+}
+
+const same = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+/**
+ * The payee, the merchant PerFin recognised (when that says more than the
+ * payee or the descriptor already do) and, always, the bank's own wording.
+ */
+export function PayeeCell({ row, editable, label, payees }: CellProps & { payees: readonly Payee[] }) {
+  const edit = useEditTransaction();
+  const payee = payees.find((item) => item.id === row.payee_id)?.name;
+  const raw = (row.raw_payee ?? "").trim() === "" ? null : row.raw_payee;
+  const merchant = (row.merchant ?? "").trim() === "" || same(row.merchant, raw) || same(row.merchant, payee) ? null : row.merchant;
+  // Read-only, a row without a payee is headed by its merchant or else its descriptor, said once.
+  const heading = payee ?? (merchant === null ? raw : null);
+  return (
+    <span className="payee-cell">
+      {editable ? (
+        <span className="cell-edit">
+          <Select
+            aria-label={`Payee of ${label}`}
+            placeholder="No payee"
+            options={payees.map((item) => ({ value: item.id, label: item.name }))}
+            value={row.payee_id ?? ""}
+            onChange={(event) => {
+              edit.mutate({ id: row.id, patch: { payee_id: event.target.value === "" ? null : event.target.value } });
+            }}
+          />
+        </span>
+      ) : heading === null ? null : (
+        <span>{heading}</span>
+      )}
+      {merchant === null ? null : <span className="payee-cell__merchant">{merchant}</span>}
+      {raw === null || (!editable && heading === raw) ? null : <span className="payee-cell__raw">{raw}</span>}
+      {!editable && heading === null && merchant === null && raw === null ? <span>-</span> : null}
     </span>
   );
 }

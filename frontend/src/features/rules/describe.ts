@@ -3,12 +3,15 @@ import { CONDITION_TYPES, TEXT_OPS, type ConditionDraft, type GroupDraft } from 
 
 export type Names = (kind: "payee" | "category" | "account" | "tag", id: string) => string;
 
+/** The name to show for a merchant key, when the caller knows one. */
+export type MerchantNames = (key: string) => string | undefined;
+
 function list(kind: Parameters<Names>[0], ids: readonly string[], names: Names): string {
   return ids.map((id) => names(kind, id)).join(", ");
 }
 
 /** One line of plain language for a condition. */
-export function describeCondition(item: ConditionDraft, names: Names): string {
+export function describeCondition(item: ConditionDraft, names: Names, merchants?: MerchantNames): string {
   const prefix = item.negate ? "not: " : "";
   const label = CONDITION_TYPES.find((type) => type.value === item.type)?.label ?? item.type;
   switch (item.type) {
@@ -33,14 +36,16 @@ export function describeCondition(item: ConditionDraft, names: Names): string {
       return `${prefix}Date ${[item.from === "" ? null : `from ${item.from}`, item.to === "" ? null : `to ${item.to}`].filter((part) => part !== null).join(" ")}`;
     case "category_unset":
       return `${prefix}Has no category`;
+    case "merchant":
+      return `${prefix}The merchant is ${merchants?.(item.value) ?? item.value}`;
   }
 }
 
-export function describeGroup(group: GroupDraft, names: Names): string {
+export function describeGroup(group: GroupDraft, names: Names, merchants?: MerchantNames): string {
   if (group.items.length === 0) {
     return "Every transaction";
   }
-  return group.items.map((item) => describeCondition(item, names)).join(group.match === "all" ? " and " : " or ");
+  return group.items.map((item) => describeCondition(item, names, merchants)).join(group.match === "all" ? " and " : " or ");
 }
 
 export interface ChangeSet {

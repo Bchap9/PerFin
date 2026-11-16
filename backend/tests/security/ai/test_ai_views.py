@@ -37,6 +37,7 @@ from app.domain.accounts.models import Account, AccountType
 from app.domain.ai import service as ai_service
 from app.domain.ai.models import AiCall, AiMode
 from app.domain.ai.service import AiLimits
+from app.domain.transactions.models import ScheduleOrigin
 from app.main import create_app
 from tests.fixtures.ai import ai_client, ai_headers, owner_principal
 from tests.fixtures.factories import Factories, UserRecord
@@ -466,6 +467,59 @@ def test_detail_view_contents(app_client: TestClient, factories: Factories, worl
     loans = app_client.get(f"{API}/loans", headers=headers).json()["items"]
     assert loans[0]["lender"] == "Placeholder Home Lending for [MEMBER]"
     assert "number" not in json.dumps(loans)
+
+
+def test_recurring_rows_say_kind_and_status(
+    app_client: TestClient, factories: Factories, world: World
+) -> None:
+    with factories.transaction() as db:
+        set_context(db, world.household_id)
+        checking = db.get_one(Account, world.checking_id)
+        found = make_scheduled_transaction(
+            db,
+            checking,
+            name="Synthetic Streaming",
+            origin=ScheduleOrigin.DETECTED,
+            next_due=TODAY,
+            amount_min="-9.00",
+            amount_max="-9.00",
+        )
+        found.kind = "subscription"
+        ended = make_scheduled_transaction(
+            db, checking, name="Synthetic Gym", origin=ScheduleOrigin.DETECTED, next_due=TODAY
+        )
+        ended.status, ended.active = "ended", False
+        suggested = make_scheduled_transaction(
+            db, checking, name="Synthetic Maybe", origin=ScheduleOrigin.DETECTED, next_due=TODAY
+        )
+        suggested.status, suggested.active = "suggested", False
+    _, raw = ai_client(factories, world.owner)
+    items = app_client.get(f"{API}/recurring", headers=ai_headers(raw)).json()["items"]
+    said = {item["name"]: (item["kind"], item["status"]) for item in items}
+    # Entered by hand: a person's word. Found by detection: the detector's.
+    assert said == {
+        "ZELLE TO [MEMBER]": ("other", "confirmed"),
+        "Synthetic Streaming": ("subscription", "active"),
+    }
+    # What is not counted (ended, only suggested) is still not listed.
+    assert all(item["active"] for item in items)
+    # Nothing else about a series is new: no merchant key, no confidence.
+    assert set(items[0]) == {
+        "name",
+        "payee",
+        "category",
+        "account",
+        "cadence",
+        "interval_count",
+        "next_due",
+        "amount_min",
+        "amount_max",
+        "origin",
+        "active",
+        "last_seen_on",
+        "kind",
+        "status",
+    }
 
 
 def test_name_filters_do_not_confirm_scrubbed_identity(

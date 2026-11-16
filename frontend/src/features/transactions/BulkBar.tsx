@@ -4,13 +4,21 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "../../components/Button";
+import { CategoryPicker } from "../../components/CategoryPicker";
 import { Dialog } from "../../components/Dialog";
 import { Select } from "../../components/Select";
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { bulkAction, invalidateLedger, useCategories, useTags, type BulkAction } from "./api";
 
-export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () => void }) {
+interface BulkBarProps {
+  ids: readonly string[];
+  /** The selected rows that carry a suggestion (and no category). */
+  suggestionIds?: readonly string[];
+  onDone: () => void;
+}
+
+export function BulkBar({ ids, suggestionIds = [], onDone }: BulkBarProps) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const categories = useCategories();
@@ -43,10 +51,10 @@ export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () =>
   return (
     <div className="ledger-toolbar" role="group" aria-label={`Actions for ${String(ids.length)} selected`}>
       <strong>{ids.length} selected</strong>
-      <Select
+      <CategoryPicker
         aria-label="Bulk category"
         placeholder="Choose category"
-        options={(categories.data ?? []).map((category) => ({ value: category.id, label: category.name }))}
+        categories={categories.data ?? []}
         value={categoryId}
         onChange={(event) => {
           setCategoryId(event.target.value);
@@ -61,6 +69,18 @@ export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () =>
       >
         Set category
       </Button>
+      {suggestionIds.length > 0 ? (
+        <Button
+          title="Take the suggested category for each selected transaction that has one"
+          loading={run.isPending}
+          onClick={() => {
+            // Only the rows that have one: the others are not this action's business.
+            run.mutate({ action: "accept_suggestions", ids: [...suggestionIds] });
+          }}
+        >
+          Accept suggestions
+        </Button>
+      ) : null}
       <Select
         aria-label="Bulk tag"
         placeholder="Choose tag"

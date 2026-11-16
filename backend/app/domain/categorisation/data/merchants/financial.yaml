@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Who pays a person, the tax office, and firms paid for tax, legal and
+# credit services. Format and sources: ../README.md. One entry a line here.
+#
+# `inflow: true` is a company or an office that pays money in: it answers
+# for a credit only, never for a charge. There is no entry here for a bank,
+# for a card issuer's payment or for a service that moves money between
+# people: those are recognised from the descriptor's kind in clean-up and
+# are never a merchant.
+merchants:
+  # Payroll processors: a deposit from one of these is a salary.
+  - {key: adp, name: ADP, category: income.salary, inflow: true, match: [adp]}
+  - {key: paychex, name: Paychex, category: income.salary, inflow: true, match: [paychex]}
+  - {key: gusto, name: Gusto, category: income.salary, inflow: true, match: [gusto pay, gusto payroll]}
+  - {key: paycom, name: Paycom, category: income.salary, inflow: true, match: [paycom]}
+  - {key: paylocity, name: Paylocity, category: income.salary, inflow: true, match: [paylocity]}
+  - {key: paycor, name: Paycor, category: income.salary, inflow: true, match: [paycor]}
+  - {key: trinet, name: TriNet, category: income.salary, inflow: true, match: [trinet]}
+  - {key: justworks, name: Justworks, category: income.salary, inflow: true, match: [justworks]}
+  - {key: rippling, name: Rippling, category: income.salary, inflow: true, match: [rippling]}
+  - {key: insperity, name: Insperity, category: income.salary, inflow: true, match: [insperity]}
+  - {key: dayforce, name: Dayforce, category: income.salary, inflow: true, match: [dayforce, ceridian]}
+  - {key: quickbooks payroll, name: QuickBooks Payroll, category: income.salary, inflow: true, match: [quickbooks payroll, intuit payroll]}
+  - {key: surepayroll, name: SurePayroll, category: income.salary, inflow: true, match: [surepayroll]}
+  - {key: onpay, name: OnPay, category: income.salary, inflow: true, match: [onpay]}
+  - {key: square payroll, name: Square Payroll, category: income.salary, inflow: true, match: [square payroll]}
+  - {key: dfas, name: Defense Finance and Accounting Service, category: income.salary, inflow: true, match: [dfas]}
+
+  # Benefits paid by the government.
+  - {key: social security, name: Social Security Administration, category: income.other, inflow: true, match: [ssa treas]}
+  - {key: veterans benefits, name: Veterans Benefits Administration, category: income.other, inflow: true, match: [va benef, vacp treas]}
+
+  # Brokerages and investing apps: money sent to one is put aside, not
+  # spent. Only the forms a transfer to the investment account prints: the
+  # same firm's card, bank account, subscription or advice fee has no entry,
+  # so a one-word name counts only alone or with the word its transfers carry.
+  - {key: fidelity, name: Fidelity Investments, category: transfers.investments, match: [fid bkg svc]}
+  - {key: vanguard, name: Vanguard, category: transfers.investments, match: [vanguard buy, vanguard investment]}
+  - {key: charles schwab, name: Charles Schwab, category: transfers.investments, match: [schwab brokerage]}
+  - {key: robinhood, name: Robinhood, category: transfers.investments, match: [robinhood =, robinhood debits, robinhood securities]}
+  - {key: acorns, name: Acorns, category: transfers.investments, match: [acorns invest, acorns investing]}
+  - {key: betterment, name: Betterment, category: transfers.investments, match: [betterment =, betterment transfer, betterment deposit]}
+  - {key: wealthfront, name: Wealthfront, category: transfers.investments, match: [wealthfront =, wealthfront edi, wealthfront transfer, wealthfront deposit]}
+
+  # Tax offices.
+  - {key: irs, name: Internal Revenue Service, category: financial.taxes, match: [irs]}
+  - {key: eftps, name: EFTPS, category: financial.taxes, match: [eftps]}
+  - {key: pay1040, name: Pay1040, category: financial.taxes, match: [pay1040]}
+  - {key: franchise tax board, name: California Franchise Tax Board, category: financial.taxes, match: [franchise tax bd, franchise tax board]}
+  - {key: nys tax, name: New York State Department of Taxation and Finance, category: financial.taxes, match: [nys dtf]}
+
+  # Tax preparation, legal and credit services.
+  - {key: turbotax, name: TurboTax, category: financial.services, match: [turbotax, intuit turbotax]}
+  - {key: h and r block, name: H&R Block, category: financial.services, match: [h r block, hr block, hrblock]}
+  - {key: jackson hewitt, name: Jackson Hewitt, category: financial.services, match: [jackson hewitt]}
+  - {key: taxact, name: TaxAct, category: financial.services, match: [taxact]}
+  - {key: freetaxusa, name: FreeTaxUSA, category: financial.services, match: [freetaxusa]}
+  - {key: taxslayer, name: TaxSlayer, category: financial.services, match: [taxslayer]}
+  - {key: liberty tax, name: Liberty Tax, category: financial.services, match: [liberty tax]}
+  - {key: legalzoom, name: LegalZoom, category: financial.services, match: [legalzoom]}
+  - {key: rocket lawyer, name: Rocket Lawyer, category: financial.services, match: [rocket lawyer, rocketlawyer]}
+  - {key: nolo, name: Nolo, category: financial.services, match: [nolo =]}
+  - {key: trust and will, name: Trust & Will, category: financial.services, match: [trust will, trust and will]}
+  - {key: experian, name: Experian, category: financial.services, match: [experian]}
+  - {key: equifax, name: Equifax, category: financial.services, match: [equifax]}
+  - {key: transunion, name: TransUnion, category: financial.services, match: [transunion]}
+  - {key: myfico, name: myFICO, category: financial.services, match: [myfico]}

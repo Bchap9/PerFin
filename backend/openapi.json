@@ -3219,6 +3219,7 @@
                   "currency": "#/components/schemas/CurrencyCondition",
                   "date": "#/components/schemas/DateCondition",
                   "memo": "#/components/schemas/MemoCondition",
+                  "merchant": "#/components/schemas/MerchantCondition",
                   "not": "#/components/schemas/NotCondition-Input",
                   "payee": "#/components/schemas/PayeeCondition",
                   "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -3256,6 +3257,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CategoryUnsetCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/MerchantCondition"
                 },
                 {
                   "$ref": "#/components/schemas/AllCondition-Input"
@@ -3298,6 +3302,7 @@
                   "currency": "#/components/schemas/CurrencyCondition",
                   "date": "#/components/schemas/DateCondition",
                   "memo": "#/components/schemas/MemoCondition",
+                  "merchant": "#/components/schemas/MerchantCondition",
                   "not": "#/components/schemas/NotCondition-Output",
                   "payee": "#/components/schemas/PayeeCondition",
                   "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -3335,6 +3340,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CategoryUnsetCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/MerchantCondition"
                 },
                 {
                   "$ref": "#/components/schemas/AllCondition-Output"
@@ -3711,6 +3719,7 @@
                   "currency": "#/components/schemas/CurrencyCondition",
                   "date": "#/components/schemas/DateCondition",
                   "memo": "#/components/schemas/MemoCondition",
+                  "merchant": "#/components/schemas/MerchantCondition",
                   "not": "#/components/schemas/NotCondition-Input",
                   "payee": "#/components/schemas/PayeeCondition",
                   "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -3748,6 +3757,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CategoryUnsetCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/MerchantCondition"
                 },
                 {
                   "$ref": "#/components/schemas/AllCondition-Input"
@@ -3794,6 +3806,7 @@
                   "currency": "#/components/schemas/CurrencyCondition",
                   "date": "#/components/schemas/DateCondition",
                   "memo": "#/components/schemas/MemoCondition",
+                  "merchant": "#/components/schemas/MerchantCondition",
                   "not": "#/components/schemas/NotCondition-Output",
                   "payee": "#/components/schemas/PayeeCondition",
                   "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -3831,6 +3844,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CategoryUnsetCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/MerchantCondition"
                 },
                 {
                   "$ref": "#/components/schemas/AllCondition-Output"
@@ -5052,7 +5068,7 @@
       },
       "BulkAction": {
         "additionalProperties": false,
-        "description": "One action over many transactions; each id is authorised on its own.\n\n* ``categorise``: set ``category_id`` (``null`` clears it); split\n  transactions are skipped (their categories live on the splits);\n* ``tag`` / ``untag``: add / remove ``tag_ids``;\n* ``delete``: delete (each deletion is audited);\n* ``confirm``: set ``review_state`` to ``confirmed``.",
+        "description": "One action over many transactions; each id is authorised on its own.\n\n* ``categorise``: set ``category_id`` (``null`` clears it); split\n  transactions are skipped (their categories live on the splits);\n* ``tag`` / ``untag``: add / remove ``tag_ids``;\n* ``delete``: delete (each deletion is audited);\n* ``confirm``: set ``review_state`` to ``confirmed``;\n* ``accept_suggestions``: make each row's suggested category its category,\n  as the person's own choice (no ``category_id``, no ``tag_ids``); a row\n  without a suggestion is skipped with the reason ``suggestion-missing``.",
         "properties": {
           "action": {
             "enum": [
@@ -5060,7 +5076,8 @@
               "tag",
               "untag",
               "delete",
-              "confirm"
+              "confirm",
+              "accept_suggestions"
             ],
             "title": "Action",
             "type": "string"
@@ -5156,7 +5173,8 @@
               "tag",
               "untag",
               "delete",
-              "confirm"
+              "confirm",
+              "accept_suggestions"
             ],
             "title": "Action",
             "type": "string"
@@ -5601,6 +5619,58 @@
           "unconverted"
         ],
         "title": "CashflowReport",
+        "type": "object"
+      },
+      "CategorisationSummary": {
+        "description": "Where categorisation stands for the household.\n\n``up_to_date``: every row was last evaluated with the dictionary and the\nclean-up that ship with this version. ``uncategorised`` rows have no\ncategory and no split; ``suggestions`` of them carry a suggestion.",
+        "properties": {
+          "by_source": {
+            "items": {
+              "$ref": "#/components/schemas/SourceCount"
+            },
+            "title": "By Source",
+            "type": "array"
+          },
+          "cleaner_version": {
+            "title": "Cleaner Version",
+            "type": "integer"
+          },
+          "dictionary_merchants": {
+            "title": "Dictionary Merchants",
+            "type": "integer"
+          },
+          "dictionary_version": {
+            "title": "Dictionary Version",
+            "type": "integer"
+          },
+          "learned_merchants": {
+            "title": "Learned Merchants",
+            "type": "integer"
+          },
+          "suggestions": {
+            "title": "Suggestions",
+            "type": "integer"
+          },
+          "uncategorised": {
+            "title": "Uncategorised",
+            "type": "integer"
+          },
+          "up_to_date": {
+            "title": "Up To Date",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "dictionary_version",
+          "dictionary_merchants",
+          "cleaner_version",
+          "up_to_date",
+          "by_source",
+          "uncategorised",
+          "suggestions",
+          "learned_merchants"
+        ],
+        "title": "CategorisationSummary",
         "type": "object"
       },
       "CategoryCreate": {
@@ -6350,11 +6420,15 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
-            "maxItems": 9,
+            "maxItems": 13,
             "title": "Events",
             "type": "array"
           },
@@ -6397,7 +6471,11 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
@@ -6505,7 +6583,11 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
@@ -6676,11 +6758,15 @@
                     "review_waiting",
                     "tax_reminder",
                     "backup_failed",
-                    "ai_client_created"
+                    "ai_client_created",
+                    "subscription_new",
+                    "subscription_price_changed",
+                    "subscription_missed",
+                    "subscription_renewal"
                   ],
                   "type": "string"
                 },
-                "maxItems": 9,
+                "maxItems": 13,
                 "type": "array"
               },
               {
@@ -8567,6 +8653,40 @@
         "title": "DuplicateDecision",
         "type": "object"
       },
+      "EventsSeen": {
+        "additionalProperties": false,
+        "description": "Mark changes as seen; ids the caller cannot see are ignored.",
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "EventsSeen",
+        "type": "object"
+      },
+      "EventsSeenOut": {
+        "properties": {
+          "seen": {
+            "title": "Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seen"
+        ],
+        "title": "EventsSeenOut",
+        "type": "object"
+      },
       "ExportOut": {
         "description": "An export job of the caller; ``counts`` per entity once ``ready``.",
         "properties": {
@@ -9973,7 +10093,7 @@
           "price_change": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PriceChange"
+                "$ref": "#/components/schemas/app__domain__investments__schemas__PriceChange"
               },
               {
                 "type": "null"
@@ -11179,6 +11299,127 @@
           "added"
         ],
         "title": "LearnOut",
+        "type": "object"
+      },
+      "LearnedCategory": {
+        "description": "What the household's own corrections say about one merchant.\n\n``decisions`` of ``total`` person-decided transactions of the merchant\nwent to ``category_id`` (``share``). ``rule_id``: the merchant already has\nan \"always\" rule. ``offer_rule``: the household was unanimous often\nenough that a rule is worth offering; ``example_transaction_id`` is a row\nto make it from.",
+        "properties": {
+          "category_id": {
+            "format": "uuid",
+            "title": "Category Id",
+            "type": "string"
+          },
+          "decisions": {
+            "title": "Decisions",
+            "type": "integer"
+          },
+          "direction": {
+            "enum": [
+              "out",
+              "in"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "example_transaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Transaction Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_decided_at": {
+            "format": "date-time",
+            "title": "Last Decided At",
+            "type": "string"
+          },
+          "merchant": {
+            "title": "Merchant",
+            "type": "string"
+          },
+          "merchant_key": {
+            "title": "Merchant Key",
+            "type": "string"
+          },
+          "offer_rule": {
+            "title": "Offer Rule",
+            "type": "boolean"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "share": {
+            "title": "Share",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "merchant_key",
+          "merchant",
+          "direction",
+          "category_id",
+          "decisions",
+          "total",
+          "share",
+          "last_decided_at",
+          "rule_id",
+          "offer_rule",
+          "example_transaction_id"
+        ],
+        "title": "LearnedCategory",
+        "type": "object"
+      },
+      "LearnedCategoryPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LearnedCategory"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "LearnedCategoryPage",
         "type": "object"
       },
       "LearnedLayoutList": {
@@ -13720,6 +13961,233 @@
         "title": "MemoCondition",
         "type": "object"
       },
+      "MerchantCondition": {
+        "additionalProperties": false,
+        "description": "The transaction's merchant key is exactly ``key``.",
+        "properties": {
+          "key": {
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+( [a-z0-9]+)*$",
+            "title": "Key",
+            "type": "string"
+          },
+          "type": {
+            "const": "merchant",
+            "default": "merchant",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "MerchantCondition",
+        "type": "object"
+      },
+      "MerchantRuleIn": {
+        "additionalProperties": false,
+        "description": "``POST /rules/merchant``. ``apply_to_existing`` also re-categorises the\nmerchant's existing rows on the accounts the caller may edit (as a job);\na category a person chose is never changed.",
+        "properties": {
+          "apply_to_existing": {
+            "default": false,
+            "title": "Apply To Existing",
+            "type": "boolean"
+          },
+          "category_id": {
+            "format": "uuid",
+            "title": "Category Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "category_id"
+        ],
+        "title": "MerchantRuleIn",
+        "type": "object"
+      },
+      "MerchantRuleOut": {
+        "description": "The merchant's rule. ``replaced``: it existed and its category was changed\nfrom ``previous_category_id``. ``job_id``: the job applying it to existing rows.",
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "previous_category_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Category Id"
+          },
+          "replaced": {
+            "title": "Replaced",
+            "type": "boolean"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleOut"
+          }
+        },
+        "required": [
+          "rule",
+          "replaced",
+          "previous_category_id",
+          "job_id"
+        ],
+        "title": "MerchantRuleOut",
+        "type": "object"
+      },
+      "MerchantRulePreview": {
+        "description": "What \"always categorise this merchant as...\" would do, counted on the server.\n\n``teachable`` is false, with a ``reason``, when no rule can be made from\nthe row: it names no merchant, it is not a purchase (a transfer, a card\npayment, a payment to a person...) or it is split. The counts are over\nevery row of the merchant on the accounts the caller may edit:\n``uncategorised`` (no category; suggestions included), ``guessed`` (a\nguess with another category, which would change), ``decided`` (a person,\nthe file, a payee default, another rule or an earlier release decided:\nthese never change) and ``same_category`` (already there).\n``existing_rule_id``: the merchant already has a rule, which would be\nchanged. ``shadowed_by``: an earlier rule already categorises the row, so\nsaving is refused. ``sample`` holds at most 20 of the affected rows.",
+        "properties": {
+          "decided": {
+            "title": "Decided",
+            "type": "integer"
+          },
+          "existing_rule_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Rule Id"
+          },
+          "guessed": {
+            "title": "Guessed",
+            "type": "integer"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant"
+          },
+          "merchant_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Key"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_merchant",
+                  "not_a_purchase",
+                  "split"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "same_category": {
+            "title": "Same Category",
+            "type": "integer"
+          },
+          "sample": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Sample",
+            "type": "array"
+          },
+          "shadowed_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shadowed By"
+          },
+          "teachable": {
+            "title": "Teachable",
+            "type": "boolean"
+          },
+          "uncategorised": {
+            "title": "Uncategorised",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "merchant_key",
+          "merchant",
+          "teachable",
+          "reason",
+          "uncategorised",
+          "guessed",
+          "decided",
+          "same_category",
+          "existing_rule_id",
+          "shadowed_by",
+          "sample"
+        ],
+        "title": "MerchantRulePreview",
+        "type": "object"
+      },
+      "MerchantRulePreviewIn": {
+        "additionalProperties": false,
+        "description": "``POST /rules/merchant/preview``: the row the person is looking at and the\ncategory they want every charge of its merchant to get.",
+        "properties": {
+          "category_id": {
+            "format": "uuid",
+            "title": "Category Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "category_id"
+        ],
+        "title": "MerchantRulePreviewIn",
+        "type": "object"
+      },
       "MergeInto": {
         "additionalProperties": false,
         "description": "``POST /categories/{id}/merge``, ``POST /payees/{id}/merge``: the survivor.",
@@ -14288,6 +14756,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Input",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -14325,6 +14794,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Input"
@@ -14366,6 +14838,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Output",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -14403,6 +14876,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Output"
@@ -14593,7 +15069,9 @@
           "weekly",
           "biweekly",
           "monthly",
+          "two_monthly",
           "quarterly",
+          "half_yearly",
           "annual"
         ],
         "title": "Pattern",
@@ -15481,42 +15959,6 @@
         "title": "PriceBrief",
         "type": "object"
       },
-      "PriceChange": {
-        "description": "How the latest stored close moved from the stored close before it.",
-        "properties": {
-          "fraction": {
-            "title": "Fraction",
-            "type": "string"
-          },
-          "previous_close": {
-            "title": "Previous Close",
-            "type": "string"
-          },
-          "since": {
-            "format": "date",
-            "title": "Since",
-            "type": "string"
-          },
-          "value": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Money"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "since",
-          "previous_close",
-          "value",
-          "fraction"
-        ],
-        "title": "PriceChange",
-        "type": "object"
-      },
       "PriceFeedOut": {
         "description": "Whether prices are fetched (``PERFIN_PRICE_PROVIDER``) and how often.",
         "properties": {
@@ -16254,6 +16696,13 @@
               "scheduled_transaction.interval_count"
             ]
           },
+          "kind": {
+            "title": "Kind",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.kind"
+            ]
+          },
           "last_seen_on": {
             "anyOf": [
               {
@@ -16304,6 +16753,13 @@
             "x-ai-source": [
               "payee.name"
             ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.status"
+            ]
           }
         },
         "required": [
@@ -16318,7 +16774,9 @@
           "amount_max",
           "origin",
           "active",
-          "last_seen_on"
+          "last_seen_on",
+          "kind",
+          "status"
         ],
         "title": "RecurringAi",
         "type": "object"
@@ -17706,6 +18164,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Input",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -17743,6 +18202,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Input"
@@ -17828,6 +18290,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Input",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -17865,6 +18328,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Input"
@@ -18086,6 +18552,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Input",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -18123,6 +18590,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Input"
@@ -18220,6 +18690,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Output",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -18257,6 +18728,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Output"
@@ -18411,6 +18885,7 @@
                 "currency": "#/components/schemas/CurrencyCondition",
                 "date": "#/components/schemas/DateCondition",
                 "memo": "#/components/schemas/MemoCondition",
+                "merchant": "#/components/schemas/MerchantCondition",
                 "not": "#/components/schemas/NotCondition-Output",
                 "payee": "#/components/schemas/PayeeCondition",
                 "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -18448,6 +18923,9 @@
               },
               {
                 "$ref": "#/components/schemas/CategoryUnsetCondition"
+              },
+              {
+                "$ref": "#/components/schemas/MerchantCondition"
               },
               {
                 "$ref": "#/components/schemas/AllCondition-Output"
@@ -18549,6 +19027,39 @@
           "rule_ids"
         ],
         "title": "RuleReorder",
+        "type": "object"
+      },
+      "RuleRevertOut": {
+        "description": "``POST /rules/{id}/revert``: the rule is gone and ``reverted`` rows it had\ncategorised are undecided again; ``job_id`` is the job that guesses for them.",
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "reverted": {
+            "title": "Reverted",
+            "type": "integer"
+          },
+          "rule_id": {
+            "format": "uuid",
+            "title": "Rule Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "reverted",
+          "job_id"
+        ],
+        "title": "RuleRevertOut",
         "type": "object"
       },
       "RuleTest": {
@@ -18786,6 +19297,7 @@
                     "currency": "#/components/schemas/CurrencyCondition",
                     "date": "#/components/schemas/DateCondition",
                     "memo": "#/components/schemas/MemoCondition",
+                    "merchant": "#/components/schemas/MerchantCondition",
                     "not": "#/components/schemas/NotCondition-Input",
                     "payee": "#/components/schemas/PayeeCondition",
                     "payee_is": "#/components/schemas/PayeeIsCondition",
@@ -18823,6 +19335,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/CategoryUnsetCondition"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MerchantCondition"
                   },
                   {
                     "$ref": "#/components/schemas/AllCondition-Input"
@@ -19369,7 +19884,7 @@
       },
       "ScheduleUpdate": {
         "additionalProperties": false,
-        "description": "Fields to change; absent fields are left alone, ``null`` clears payee/category.",
+        "description": "Fields to change; absent fields are left alone, ``null`` clears payee/category.\n\n``kind`` is the person's word on what the series is; detection does not\nchange it afterwards. ``active: false`` pauses the series, ``active:\ntrue`` confirms it.",
         "properties": {
           "active": {
             "anyOf": [
@@ -19436,6 +19951,23 @@
               }
             ],
             "title": "Interval Count"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "subscription",
+                  "bill",
+                  "income",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           },
           "name": {
             "anyOf": [
@@ -20758,6 +21290,42 @@
         "title": "SnippetPart",
         "type": "object"
       },
+      "SourceCount": {
+        "description": "How many transactions got their category this way (``null``: nobody decided).",
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "person",
+                  "file",
+                  "rule",
+                  "payee",
+                  "learned",
+                  "dictionary",
+                  "keyword",
+                  "legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "transactions"
+        ],
+        "title": "SourceCount",
+        "type": "object"
+      },
       "SplitAi": {
         "additionalProperties": false,
         "properties": {
@@ -21640,6 +22208,511 @@
           "sections"
         ],
         "title": "StatementSummary",
+        "type": "object"
+      },
+      "SubscriptionCharge": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "posted_date": {
+            "format": "date",
+            "title": "Posted Date",
+            "type": "string"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "posted_date",
+          "amount"
+        ],
+        "title": "SubscriptionCharge",
+        "type": "object"
+      },
+      "SubscriptionDecision": {
+        "additionalProperties": false,
+        "description": "A person's decision about a series; detection never undoes it.\n\n``confirm`` (it is one), ``dismiss`` (it is not: it never comes back),\n``pause`` / ``resume``, ``end`` (it stopped) and ``reopen`` (an ended or\ndismissed one is one after all). ``kind`` also says which of the two it is.",
+        "properties": {
+          "decision": {
+            "enum": [
+              "confirm",
+              "dismiss",
+              "pause",
+              "resume",
+              "end",
+              "reopen"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "subscription",
+                  "bill"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "SubscriptionDecision",
+        "type": "object"
+      },
+      "SubscriptionDetail": {
+        "description": "One series with its charges (newest first, at most 60) and its changes.",
+        "properties": {
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionCharge"
+            },
+            "maxItems": 60,
+            "title": "Charges",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionEventOut"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionOut"
+          }
+        },
+        "required": [
+          "subscription",
+          "charges",
+          "events"
+        ],
+        "title": "SubscriptionDetail",
+        "type": "object"
+      },
+      "SubscriptionEventOut": {
+        "description": "One change of one series; ``name`` is the series' name.",
+        "properties": {
+          "amount_after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount_before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "new",
+              "price_changed",
+              "missed",
+              "ended",
+              "charged_after_end",
+              "renewal_due",
+              "trial_converted"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "occurred_on": {
+            "format": "date",
+            "title": "Occurred On",
+            "type": "string"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "seen"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "name",
+          "kind",
+          "occurred_on",
+          "amount_before",
+          "amount_after",
+          "transaction_id",
+          "state"
+        ],
+        "title": "SubscriptionEventOut",
+        "type": "object"
+      },
+      "SubscriptionEventPage": {
+        "description": "One page of changes, newest first; ``open`` counts every open one.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionEventOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "open": {
+            "title": "Open",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "open"
+        ],
+        "title": "SubscriptionEventPage",
+        "type": "object"
+      },
+      "SubscriptionList": {
+        "description": "``GET /subscriptions``. ``needs_look``: suggested series plus series\nwith an open change.",
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string"
+          },
+          "bills": {
+            "$ref": "#/components/schemas/SubscriptionTotals"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "needs_look": {
+            "title": "Needs Look",
+            "type": "integer"
+          },
+          "subscriptions": {
+            "$ref": "#/components/schemas/SubscriptionTotals"
+          }
+        },
+        "required": [
+          "as_of",
+          "subscriptions",
+          "bills",
+          "items",
+          "needs_look"
+        ],
+        "title": "SubscriptionList",
+        "type": "object"
+      },
+      "SubscriptionOut": {
+        "description": "A recurring series of kind ``subscription`` or ``bill``.\n\n``amount`` is the latest charge (the middle of the range before one was\nseen); ``monthly_cost`` and ``yearly_cost`` spread it over the cadence, in\nthe account's currency. ``overdue``: the expected charge did not arrive,\njudged against the account's latest row and never against today.\n``open_events``: changes nobody has looked at yet.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "amount_max": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "amount_min": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "first_seen_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen On"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "interval_count": {
+            "title": "Interval Count",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "subscription",
+              "bill",
+              "income",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "kind_source": {
+            "enum": [
+              "detector",
+              "person"
+            ],
+            "title": "Kind Source",
+            "type": "string"
+          },
+          "last_seen_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen On"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant"
+          },
+          "monthly_cost": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due"
+          },
+          "occurrences": {
+            "title": "Occurrences",
+            "type": "integer"
+          },
+          "open_events": {
+            "title": "Open Events",
+            "type": "integer"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ScheduleOrigin"
+          },
+          "overdue": {
+            "title": "Overdue",
+            "type": "boolean"
+          },
+          "payee_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee Id"
+          },
+          "price_change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__domain__recurring__schemas__PriceChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "suggested",
+              "active",
+              "confirmed",
+              "paused",
+              "ended",
+              "dismissed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_source": {
+            "enum": [
+              "detector",
+              "person"
+            ],
+            "title": "Status Source",
+            "type": "string"
+          },
+          "yearly_cost": {
+            "$ref": "#/components/schemas/Money"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "name",
+          "merchant",
+          "kind",
+          "kind_source",
+          "status",
+          "status_source",
+          "origin",
+          "cadence",
+          "interval_count",
+          "amount",
+          "amount_min",
+          "amount_max",
+          "monthly_cost",
+          "yearly_cost",
+          "next_due",
+          "overdue",
+          "first_seen_on",
+          "last_seen_on",
+          "occurrences",
+          "confidence",
+          "category_id",
+          "payee_id",
+          "price_change",
+          "open_events"
+        ],
+        "title": "SubscriptionOut",
+        "type": "object"
+      },
+      "SubscriptionTotals": {
+        "description": "What the active and confirmed series of one kind cost, in ``currency``\n(the household's). ``unconverted``: series left out for want of a rate.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "unconverted": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Unconverted",
+            "type": "array"
+          },
+          "yearly": {
+            "$ref": "#/components/schemas/Money"
+          }
+        },
+        "required": [
+          "currency",
+          "monthly",
+          "yearly",
+          "count",
+          "unconverted"
+        ],
+        "title": "SubscriptionTotals",
         "type": "object"
       },
       "SubtypeOut": {
@@ -24134,6 +25207,7 @@
         "type": "object"
       },
       "TransactionOut": {
+        "description": "A transaction.\n\nHow its category was decided: ``category_source`` (``null`` while nobody\nand nothing decided) with ``category_confidence`` (decimal text, two\nplaces) and, for ``rule``, ``category_rule_id``. ``suggested_category_id``\nis a guess PerFin is not sure enough of to state: it is set only while\n``category_id`` is ``null`` and counts in no report. ``merchant_key`` is\nwho was paid, ``merchant`` the name to show for it; ``subscription_id``\nis the recurring series the row is a charge of.",
         "properties": {
           "account_id": {
             "format": "uuid",
@@ -24142,6 +25216,17 @@
           },
           "amount": {
             "$ref": "#/components/schemas/Money"
+          },
+          "category_confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Confidence"
           },
           "category_id": {
             "anyOf": [
@@ -24154,6 +25239,39 @@
               }
             ],
             "title": "Category Id"
+          },
+          "category_rule_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Rule Id"
+          },
+          "category_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "person",
+                  "file",
+                  "rule",
+                  "payee",
+                  "learned",
+                  "dictionary",
+                  "keyword",
+                  "legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Source"
           },
           "confidence": {
             "anyOf": [
@@ -24198,6 +25316,28 @@
               }
             ],
             "title": "Memo"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant"
+          },
+          "merchant_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Key"
           },
           "notes": {
             "anyOf": [
@@ -24262,6 +25402,30 @@
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          },
+          "suggested_category_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Category Id"
           },
           "tag_ids": {
             "items": {
@@ -25214,6 +26378,42 @@
         "title": "WebhookConfigIn",
         "type": "object"
       },
+      "app__domain__investments__schemas__PriceChange": {
+        "description": "How the latest stored close moved from the stored close before it.",
+        "properties": {
+          "fraction": {
+            "title": "Fraction",
+            "type": "string"
+          },
+          "previous_close": {
+            "title": "Previous Close",
+            "type": "string"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "since",
+          "previous_close",
+          "value",
+          "fraction"
+        ],
+        "title": "PriceChange",
+        "type": "object"
+      },
       "app__domain__loans__schemas__ScheduleOut": {
         "description": "``GET /loans/{id}/schedule``.\n\n``basis=original``: from origination over the original principal (rate\nchanges applied); ``basis=projected``: from the balance owed today.",
         "properties": {
@@ -25252,6 +26452,34 @@
           "totals"
         ],
         "title": "ScheduleOut",
+        "type": "object"
+      },
+      "app__domain__recurring__schemas__PriceChange": {
+        "description": "The latest price change of a series. ``pending``: seen on one charge\nonly so far (the next charge at the new price confirms it).",
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "on": {
+            "format": "date",
+            "title": "On",
+            "type": "string"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/Money"
+          }
+        },
+        "required": [
+          "previous",
+          "current",
+          "on",
+          "pending"
+        ],
+        "title": "PriceChange",
         "type": "object"
       },
       "app__domain__recurring__schemas__ScheduleOut": {
@@ -25295,6 +26523,16 @@
             "title": "Interval Count",
             "type": "integer"
           },
+          "kind": {
+            "enum": [
+              "subscription",
+              "bill",
+              "income",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "last_seen_on": {
             "anyOf": [
               {
@@ -25306,6 +26544,17 @@
               }
             ],
             "title": "Last Seen On"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant"
           },
           "name": {
             "title": "Name",
@@ -25330,6 +26579,26 @@
               }
             ],
             "title": "Payee Id"
+          },
+          "status": {
+            "enum": [
+              "suggested",
+              "active",
+              "confirmed",
+              "paused",
+              "ended",
+              "dismissed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_source": {
+            "enum": [
+              "detector",
+              "person"
+            ],
+            "title": "Status Source",
+            "type": "string"
           }
         },
         "required": [
@@ -25345,7 +26614,11 @@
           "category_id",
           "origin",
           "active",
-          "last_seen_on"
+          "last_seen_on",
+          "kind",
+          "status",
+          "status_source",
+          "merchant"
         ],
         "title": "ScheduleOut",
         "type": "object"
@@ -30866,6 +32139,222 @@
         "summary": "Merge a category into another (owner/admin)",
         "tags": [
           "categories"
+        ]
+      }
+    },
+    "/api/v1/categorisation/learned": {
+      "get": {
+        "operationId": "get_learned_api_v1_categorisation_learned_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnedCategoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What PerFin learned from the household's corrections",
+        "tags": [
+          "categorisation"
+        ]
+      }
+    },
+    "/api/v1/categorisation/learned/{memory_id}": {
+      "delete": {
+        "operationId": "delete_learned_api_v1_categorisation_learned__memory_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Forget what was learned about one merchant (member or above)",
+        "tags": [
+          "categorisation"
+        ]
+      }
+    },
+    "/api/v1/categorisation/refresh": {
+      "post": {
+        "operationId": "post_refresh_api_v1_categorisation_refresh_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Look again at the transactions nobody decided, as a job (owner/admin)",
+        "tags": [
+          "categorisation"
+        ]
+      }
+    },
+    "/api/v1/categorisation/summary": {
+      "get": {
+        "operationId": "get_summary_api_v1_categorisation_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategorisationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "How my transactions got their categories",
+        "tags": [
+          "categorisation"
         ]
       }
     },
@@ -39025,6 +40514,136 @@
         ]
       }
     },
+    "/api/v1/rules/merchant": {
+      "post": {
+        "operationId": "post_merchant_rule_api_v1_rules_merchant_post",
+        "parameters": [
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MerchantRuleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantRuleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Always categorise a merchant as a category (member or above)",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/rules/merchant/preview": {
+      "post": {
+        "operationId": "post_merchant_rule_preview_api_v1_rules_merchant_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MerchantRulePreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantRulePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What 'always categorise this merchant as...' would change (writes nothing)",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
     "/api/v1/rules/reorder": {
       "post": {
         "operationId": "post_rules_reorder_api_v1_rules_reorder_post",
@@ -39300,6 +40919,63 @@
           }
         },
         "summary": "Change a rule (owner/admin)",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}/revert": {
+      "post": {
+        "operationId": "post_rule_revert_api_v1_rules__rule_id__revert_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Rule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleRevertOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Delete a rule and undo the categories it set",
         "tags": [
           "rules"
         ]
@@ -41316,6 +42992,401 @@
         ]
       }
     },
+    "/api/v1/subscriptions": {
+      "get": {
+        "operationId": "get_subscriptions_api_v1_subscriptions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "subscription",
+                      "bill"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "suggested",
+                      "active",
+                      "confirmed",
+                      "paused",
+                      "ended",
+                      "dismissed"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Subscriptions and bills I can see, with what they cost",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/events": {
+      "get": {
+        "operationId": "get_events_api_v1_subscriptions_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "seen"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What changed about my subscriptions and bills",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/events/seen": {
+      "post": {
+        "operationId": "post_events_seen_api_v1_subscriptions_events_seen_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventsSeen"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsSeenOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Mark changes as seen (member or above)",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{schedule_id}": {
+      "get": {
+        "operationId": "get_subscription_api_v1_subscriptions__schedule_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "One subscription or bill with its charges and its changes",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{schedule_id}/decision": {
+      "post": {
+        "operationId": "post_decision_api_v1_subscriptions__schedule_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Confirm, dismiss, pause, resume, end or reopen one (member or above)",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/tags": {
       "get": {
         "operationId": "get_tags_api_v1_tags_get",
@@ -42966,6 +45037,83 @@
           },
           {
             "in": "query",
+            "name": "category_source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "person",
+                    "file",
+                    "rule",
+                    "payee",
+                    "learned",
+                    "dictionary",
+                    "keyword",
+                    "legacy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "suggested",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Suggested"
+            }
+          },
+          {
+            "in": "query",
+            "name": "merchant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "pattern": "^[a-z0-9]+( [a-z0-9]+)*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merchant"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subscription",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscription"
+            }
+          },
+          {
+            "in": "query",
             "name": "q",
             "required": false,
             "schema": {
@@ -43176,7 +45324,7 @@
             "description": "Problem details"
           }
         },
-        "summary": "Categorise, tag, untag, delete or confirm many transactions",
+        "summary": "Categorise, tag, untag, delete, confirm or accept suggestions for many transactions",
         "tags": [
           "transactions"
         ]

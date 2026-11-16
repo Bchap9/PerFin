@@ -40,7 +40,8 @@ repository and contains nothing that is not in git.
 ## Understand it
 
 [Vision](VISION.md), [architecture](ARCHITECTURE.md), [data model](DATA_MODEL.md),
-[authentication](AUTH.md), [ingestion](INGESTION.md), [AI access](AI_ACCESS.md),
+[authentication](AUTH.md), [ingestion](INGESTION.md),
+[categories and subscriptions](CATEGORISATION.md), [AI access](AI_ACCESS.md),
 [API](API.md) and the [decision records](adr/README.md).
 
 ## Licence

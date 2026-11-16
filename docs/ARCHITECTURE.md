@@ -124,7 +124,20 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
   days missing since the last one.)
 - `detect_recurring`: daily (Phase 5, `app/workers/handlers/recurring.py`):
   one `recurring.detect` per household and day; writes `detected`
-  scheduled transactions, never touches manual ones.
+  scheduled transactions, never touches manual ones. Since 1.0.0-rc.10 the
+  same job settles what changed about each series (price, missed, ended,
+  new: `subscription_event` rows and their notifications) and announces
+  renewals a week ahead; it makes no outbound request (CATEGORISATION.md).
+- `categorise.dispatch`: hourly, instance-level
+  (`app/workers/handlers/categorise.py`): queues one `categorise.refresh`
+  for each household whose rows were last evaluated with an older
+  clean-up, merchant dictionary or default-category edition.
+  `categorise.refresh` (per household; also queued by `POST
+  /categorisation/refresh`, after a full import and after a rule is
+  undone) adds new default categories, recomputes merchant keys,
+  seeds the learned memory once and re-evaluates only the rows nobody
+  decided, through pinned writes that leave `updated_at` alone. No
+  network: the dictionary is a file in the image.
 - `refresh_prices`: scheduled, only if a price provider is enabled.
   (Built in Phase 5 as an instance-level recurring job every 6 hours
   (`PERFIN_PRICE_REFRESH_MINUTES`; also queued on demand by `POST
@@ -161,7 +174,8 @@ maintenance jobs, `watch_dropfolder` and `dropfolder.finish`, and
 `tax_reminders`/`tax.reminders` (the snapshot, recurring and export jobs ran
 through a live `perfin worker` in the Phases 5+6 live run).
 Phase 7 adds `send_notification` and `notify_review_waiting`
-(docs/security/notifications.md); `backup_export` is not built. The extraction subprocess is built
+(docs/security/notifications.md); 1.0.0-rc.10 adds `categorise.dispatch`
+and `categorise.refresh`; `backup_export` is not built. The extraction subprocess is built
 (`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
 memory, CPU, open files and file size, a wall-clock timeout, its own process
 group, Landlock limiting the filesystem to reading the interpreter's own

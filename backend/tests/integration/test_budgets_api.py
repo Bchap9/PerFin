@@ -503,7 +503,8 @@ def forecast_book(actors: Actors, ledger: LedgerFactories, factories: Factories)
         db.execute(
             update(ScheduledTransaction)
             .where(ScheduledTransaction.id == inactive.id)
-            .values(active=False)
+            # As a person's pause leaves it: ``active`` follows ``status`` (a check).
+            .values(active=False, status="paused", status_source="person")
         )
     budget = _create(
         owner,

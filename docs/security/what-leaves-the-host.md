@@ -12,6 +12,7 @@ detail on its own page.
 | Feature | Setting that enables it | Destination | What is sent | Page |
 | --- | --- | --- | --- | --- |
 | Document ingestion (upload, drop folder) | always on | none | nothing; files stay local, encrypted | [ingestion.md](ingestion.md) |
+| Categorisation and subscription detection | always on | none | nothing; the merchant list is a file in the image, what was learned is a table in your database, and no lookup is made | [CATEGORISATION.md](../CATEGORISATION.md) |
 | Email intake | `PERFIN_EMAIL_INTAKE_ENABLED=true` and mailbox settings | your IMAPS host, port 993 | mailbox login, IMAP commands | [ingestion.md](ingestion.md), [email.md](email.md) |
 | Password-reset mail | `PERFIN_SMTP_HOST` | your SMTP relay | a reset link to the account's own address | [email.md](email.md) |
 | Notification channels | an owner adds a channel | the channel's host (SMTP, webhook, ntfy, Gotify, Matrix) | a fixed title and one generic sentence | [notifications.md](notifications.md) |

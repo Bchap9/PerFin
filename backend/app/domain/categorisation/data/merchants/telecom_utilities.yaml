@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Bills: mobile phone, internet and television, electricity, gas, water and
+# refuse, alarm companies and storage units, by the names they bill under.
+# Format and sources: ../README.md. One entry a line here.
+#
+# A bill comes monthly (water and refuse often every two or three months)
+# and its amount moves, so it is `series: bill`, never a subscription.
+# A utility that sells both power and gas is filed under electricity. A
+# name that is an everyday word or a surname ("Spectrum", "Optimum", "Cox",
+# "Frontier", "Visible", "Ring", "Spire", "Dish") is matched only together
+# with the word that makes it the company; town and county water offices
+# are local and are not here. A company whose one billing name covers a
+# mobile phone and a line at home ("Verizon", "AT&T") is `mixed: true` under
+# that bare name: the category is a suggestion, the bill is still a bill.
+merchants:
+  # Mobile phone.
+  - {key: verizon wireless, name: Verizon Wireless, category: utilities.phone, series: bill, cadences: [monthly], match: [verizon wireless, verizon wrls, verizon wrl, vzwrlss, vzw, vz wireless]}
+  - {key: at and t wireless, name: AT&T Wireless, category: utilities.phone, series: bill, cadences: [monthly], match: [at t mobility, att mobility, at t wireless, att wireless]}
+  # The bare name bills a phone or a line at home alike: a suggestion only.
+  - {key: verizon, name: Verizon, category: utilities.phone, series: bill, cadences: [monthly], mixed: true, match: [verizon]}
+  - {key: at and t, name: AT&T, category: utilities.phone, series: bill, cadences: [monthly], mixed: true, match: [at t, att]}
+  - {key: t mobile, name: T-Mobile, category: utilities.phone, series: bill, cadences: [monthly], match: [t mobile, tmobile, tmo]}
+  - {key: us cellular, name: UScellular, category: utilities.phone, series: bill, cadences: [monthly], match: [us cellular, uscellular, u s cellular, uscc]}
+  - {key: cricket wireless, name: Cricket Wireless, category: utilities.phone, series: bill, cadences: [monthly], match: [cricket wireless, cricket wrls, cricketwireless]}
+  - {key: metro by t mobile, name: Metro by T-Mobile, category: utilities.phone, series: bill, cadences: [monthly], match: [metro by t mobile, metropcs, metro pcs, metrobyt mobile]}
+  - {key: boost mobile, name: Boost Mobile, category: utilities.phone, series: bill, cadences: [monthly], match: [boost mobile, boostmobile]}
+  - {key: mint mobile, name: Mint Mobile, category: utilities.phone, series: bill, cadences: [monthly, quarterly, half_yearly, annual], match: [mint mobile, mintmobile]}
+  - {key: visible, name: Visible, category: utilities.phone, series: bill, cadences: [monthly, annual], match: [visible wireless, visible service, visible svc]}
+  - {key: google fi, name: Google Fi, category: utilities.phone, series: bill, cadences: [monthly], match: [google fi ~, googlefi]}
+  - {key: xfinity mobile, name: Xfinity Mobile, category: utilities.phone, series: bill, cadences: [monthly], match: [xfinity mobile, comcast xfinity mobile]}
+  - {key: spectrum mobile, name: Spectrum Mobile, category: utilities.phone, series: bill, cadences: [monthly], match: [spectrum mobile]}
+  - {key: straight talk, name: Straight Talk, category: utilities.phone, series: bill, cadences: [monthly], match: [straight talk, straighttalk]}
+  - {key: tracfone, name: Tracfone, category: utilities.phone, series: bill, cadences: [monthly, quarterly, annual], match: [tracfone]}
+  - {key: consumer cellular, name: Consumer Cellular, category: utilities.phone, series: bill, cadences: [monthly], match: [consumer cellular, consumercellular]}
+  - {key: total wireless, name: Total Wireless, category: utilities.phone, series: bill, cadences: [monthly], match: [total wireless, total by verizon]}
+  - {key: ooma, name: Ooma, category: utilities.phone, series: bill, cadences: [monthly, annual], match: [ooma]}
+
+  # Internet, cable and satellite.
+  - {key: xfinity, name: Xfinity (Comcast), category: utilities.internet, series: bill, cadences: [monthly], match: [xfinity, comcast]}
+  - {key: spectrum, name: Spectrum (Charter), category: utilities.internet, series: bill, cadences: [monthly], match: [spectrum mobile internet, spectrum internet, spectrum tv, spectrum cable, spectrum charter, charter communications, charter comm, charter spectrum, time warner cable, twc]}
+  - {key: cox communications, name: Cox Communications, category: utilities.internet, series: bill, cadences: [monthly], match: [cox communications, cox comm, cox cable, cox internet]}
+  - {key: optimum, name: Optimum (Altice), category: utilities.internet, series: bill, cadences: [monthly], match: [optimum cable, optimum online, optimum internet, altice usa, cablevision, suddenlink]}
+  - {key: verizon fios, name: Verizon Fios, category: utilities.internet, series: bill, cadences: [monthly], match: [verizon fios, vz fios, verizon online, fios]}
+  - {key: at and t internet, name: AT&T Internet, category: utilities.internet, series: bill, cadences: [monthly], match: [at t internet, att internet, at t uverse, att uverse, at t u verse, at t fiber, att fiber]}
+  - {key: frontier communications, name: Frontier Communications, category: utilities.internet, series: bill, cadences: [monthly], match: [frontier communications, frontier comm, frontier internet, frontier fiber]}
+  - {key: centurylink, name: CenturyLink, category: utilities.internet, series: bill, cadences: [monthly], match: [centurylink, century link, ctl centurylink, lumen technologies]}
+  - {key: windstream, name: Windstream (Kinetic), category: utilities.internet, series: bill, cadences: [monthly], match: [windstream, kinetic by windstream]}
+  - {key: mediacom, name: Mediacom, category: utilities.internet, series: bill, cadences: [monthly], match: [mediacom]}
+  - {key: wow internet, name: WOW! Internet, category: utilities.internet, series: bill, cadences: [monthly], match: [wow internet, wideopenwest, wow cable]}
+  - {key: astound broadband, name: Astound Broadband, category: utilities.internet, series: bill, cadences: [monthly], match: [astound =, rcn, grande communications, wave broadband, astound broadband]}
+  - {key: sparklight, name: Sparklight (Cable One), category: utilities.internet, series: bill, cadences: [monthly], match: [sparklight, cable one, cableone]}
+  - {key: google fiber, name: Google Fiber, category: utilities.internet, series: bill, cadences: [monthly], match: [google fiber ~, googlefiber]}
+  - {key: starlink, name: Starlink, category: utilities.internet, series: bill, cadences: [monthly], match: [starlink]}
+  - {key: hughesnet, name: Hughesnet, category: utilities.internet, series: bill, cadences: [monthly], match: [hughesnet, hughes network]}
+  - {key: directv, name: DIRECTV, category: utilities.internet, series: bill, cadences: [monthly], match: [directv, direct tv]}
+  - {key: dish network, name: DISH Network, category: utilities.internet, series: bill, cadences: [monthly], match: [dish network, dish ntwk, dishnetwork]}
+
+  # Electricity (and utilities that sell power and gas together).
+  - {key: pacific gas and electric, name: Pacific Gas and Electric (PG&E), category: utilities.electricity, series: bill, cadences: [monthly], match: [pg e, pacific gas, pgande]}
+  - {key: southern california edison, name: Southern California Edison, category: utilities.electricity, series: bill, cadences: [monthly], match: [southern california edison, so cal edison, socal edison, southern cal edison, sce ebill, sce bill]}
+  - {key: san diego gas and electric, name: San Diego Gas & Electric, category: utilities.electricity, series: bill, cadences: [monthly], match: [san diego gas, sdg e, sdge]}
+  - {key: con edison, name: Con Edison, category: utilities.electricity, series: bill, cadences: [monthly], match: [con ed, coned, con edison, consolidated edison]}
+  - {key: duke energy, name: Duke Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [duke energy ~, dukeenergy]}
+  - {key: dominion energy, name: Dominion Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [dominion energy, dominion va power, dominion virginia power]}
+  - {key: florida power and light, name: Florida Power & Light, category: utilities.electricity, series: bill, cadences: [monthly], match: [fpl, florida power]}
+  - {key: georgia power, name: Georgia Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [georgia power, ga power]}
+  - {key: alabama power, name: Alabama Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [alabama power, al power]}
+  - {key: national grid, name: National Grid, category: utilities.electricity, series: bill, cadences: [monthly], match: [national grid, nat grid, ngrid, nationalgrid]}
+  - {key: xcel energy, name: Xcel Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [xcel energy, xcelenergy, xcel =]}
+  - {key: dte energy, name: DTE Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [dte energy, dte]}
+  - {key: consumers energy, name: Consumers Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [consumers energy, consumersenergy]}
+  - {key: comed, name: ComEd, category: utilities.electricity, series: bill, cadences: [monthly], match: [comed, commonwealth edison]}
+  - {key: pseg, name: PSE&G, category: utilities.electricity, series: bill, cadences: [monthly], match: [pseg, pse g, public service electric]}
+  - {key: ppl electric, name: PPL Electric Utilities, category: utilities.electricity, series: bill, cadences: [monthly], match: [ppl electric, ppl utilities]}
+  - {key: firstenergy, name: FirstEnergy, category: utilities.electricity, series: bill, cadences: [monthly], match: [firstenergy, first energy, ohio edison, jcp l, penelec, met ed, toledo edison, illuminating company]}
+  - {key: eversource, name: Eversource, category: utilities.electricity, series: bill, cadences: [monthly], match: [eversource]}
+  - {key: entergy, name: Entergy, category: utilities.electricity, series: bill, cadences: [monthly], match: [entergy]}
+  - {key: ameren, name: Ameren, category: utilities.electricity, series: bill, cadences: [monthly], match: [ameren]}
+  - {key: centerpoint energy, name: CenterPoint Energy, category: utilities.heating, series: bill, cadences: [monthly], match: [centerpoint energy, centerpoint ener, centerpoint =]}
+  - {key: american electric power, name: American Electric Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [american electric power, aep ohio, aep texas, appalachian power, indiana michigan power, aep]}
+  - {key: txu energy, name: TXU Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [txu energy, txu]}
+  - {key: reliant energy, name: Reliant Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [reliant energy]}
+  - {key: puget sound energy, name: Puget Sound Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [puget sound energy, puget sound enrgy]}
+  - {key: portland general electric, name: Portland General Electric, category: utilities.electricity, series: bill, cadences: [monthly], match: [portland general, pgn]}
+  - {key: rocky mountain power, name: Rocky Mountain Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [rocky mountain power, rocky mtn power]}
+  - {key: arizona public service, name: Arizona Public Service (APS), category: utilities.electricity, series: bill, cadences: [monthly], match: [arizona public service, aps electric, aps payment]}
+  - {key: salt river project, name: Salt River Project (SRP), category: utilities.electricity, series: bill, cadences: [monthly], match: [salt river project, srp surepay, srp power]}
+  - {key: nv energy, name: NV Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [nv energy, nvenergy]}
+  - {key: tampa electric, name: Tampa Electric (TECO), category: utilities.electricity, series: bill, cadences: [monthly], match: [tampa electric, teco]}
+  - {key: we energies, name: We Energies, category: utilities.electricity, series: bill, cadences: [monthly], match: [we energies, weenergies]}
+  - {key: evergy, name: Evergy, category: utilities.electricity, series: bill, cadences: [monthly], match: [evergy]}
+  - {key: oklahoma gas and electric, name: Oklahoma Gas & Electric, category: utilities.electricity, series: bill, cadences: [monthly], match: [og e, oge energy, oklahoma gas]}
+  - {key: ladwp, name: Los Angeles Department of Water and Power, category: utilities.electricity, series: bill, cadences: [monthly, two_monthly], match: [ladwp, la dwp, la dept of water]}
+  - {key: smud, name: SMUD, category: utilities.electricity, series: bill, cadences: [monthly], match: [smud]}
+  - {key: cps energy, name: CPS Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [cps energy]}
+  - {key: pepco, name: Pepco, category: utilities.electricity, series: bill, cadences: [monthly], match: [pepco]}
+  - {key: baltimore gas and electric, name: Baltimore Gas and Electric (BGE), category: utilities.electricity, series: bill, cadences: [monthly], match: [bge, baltimore gas]}
+  - {key: peco energy, name: PECO, category: utilities.electricity, series: bill, cadences: [monthly], match: [peco energy]}
+
+  # Gas.
+  - {key: socalgas, name: SoCalGas, category: utilities.heating, series: bill, cadences: [monthly], match: [socalgas, so cal gas, socal gas, southern california gas]}
+  - {key: nicor gas, name: Nicor Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [nicor gas, nicor]}
+  - {key: peoples gas, name: Peoples Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [peoples gas]}
+  - {key: atmos energy, name: Atmos Energy, category: utilities.heating, series: bill, cadences: [monthly], match: [atmos energy, atmos =]}
+  - {key: southwest gas, name: Southwest Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [southwest gas, sw gas]}
+  - {key: piedmont natural gas, name: Piedmont Natural Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [piedmont natural gas, piedmont ng, piedmont nat gas]}
+  - {key: columbia gas, name: Columbia Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [columbia gas]}
+  - {key: spire, name: Spire, category: utilities.heating, series: bill, cadences: [monthly], match: [spire energy, spire missouri, spire alabama, spire gas]}
+  - {key: washington gas, name: Washington Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [washington gas]}
+  - {key: national fuel gas, name: National Fuel, category: utilities.heating, series: bill, cadences: [monthly], match: [national fuel gas, national fuel]}
+
+  # Water and refuse.
+  - {key: american water, name: American Water, category: utilities.water, series: bill, cadences: [monthly, quarterly], match: [american water, amer water, amwater]}
+  - {key: california water service, name: California Water Service, category: utilities.water, series: bill, cadences: [monthly, two_monthly], match: [california water service, cal water]}
+  - {key: waste management, name: WM (Waste Management), category: utilities.other, series: bill, cadences: [monthly, quarterly], match: [waste management, waste mgmt, wm ezpay]}
+  - {key: republic services, name: Republic Services, category: utilities.other, series: bill, cadences: [monthly, quarterly], match: [republic services, republic svcs, republicservices]}
+  - {key: waste connections, name: Waste Connections, category: utilities.other, series: bill, cadences: [monthly, quarterly], match: [waste connections]}
+  - {key: recology, name: Recology, category: utilities.other, series: bill, cadences: [monthly, quarterly], match: [recology]}
+
+  # Alarm companies.
+  - {key: adt, name: ADT, category: utilities.other, series: bill, cadences: [monthly], match: [adt security, adt llc, adt alarm, adt services, protection one]}
+  - {key: simplisafe, name: SimpliSafe, category: utilities.other, series: bill, cadences: [monthly], match: [simplisafe]}
+  - {key: vivint, name: Vivint, category: utilities.other, series: bill, cadences: [monthly], match: [vivint]}
+  - {key: ring, name: Ring, category: utilities.other, series: bill, cadences: [monthly, annual], match: [ring protect, ring basic, ring standard, ring premium, ring yearly plan, ring monthly plan, ring home]}
+  - {key: brinks home, name: Brinks Home, category: utilities.other, series: bill, cadences: [monthly], match: [brinks home, brinks home security]}
+
+  # Storage units.
+  - {key: public storage, name: Public Storage, category: housing.fees, series: bill, cadences: [monthly], match: [public storage, publicstorage]}
+  - {key: extra space storage, name: Extra Space Storage, category: housing.fees, series: bill, cadences: [monthly], match: [extra space storage, extra space, extraspace]}
+  - {key: cubesmart, name: CubeSmart, category: housing.fees, series: bill, cadences: [monthly], match: [cubesmart, cube smart]}
+  - {key: u haul, name: U-Haul, category: housing.fees, match: [u haul, uhaul]}

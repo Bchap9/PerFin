@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Software, apps, storage and online services paid by the month or the
+# year. Format and sources: ../README.md. One entry a line here.
+#
+# An opaque biller (an app store, a platform's billing name) fronts many
+# products and the statement does not say which: it is one merchant,
+# `mixed: true`, so its category is only ever a suggestion, and a series of
+# it is still found by its amount. A product the statement does name
+# ("GOOGLE *Google One") is its own entry with a longer match, so it wins.
+#
+# A name that is also a surname or an everyday word ("Norton", "Notion",
+# "Zoom", "Box", "Slack", "Calm") is matched only by a form that is the
+# service's own, or left out.
+merchants:
+  # Opaque billers.
+  - {key: apple services, name: Apple (App Store and services), category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [apple com bill, apl itunes com bill, apl itunes, itunes com bill, itunes com, apple services]}
+  - {key: google play, name: Google Play, category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [google play, google]}
+  - {key: microsoft, name: Microsoft, category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [microsoft, msft, msbill info]}
+
+  # What those billers name on the statement.
+  - {key: google one, name: Google One, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [google one ~, googleone ~, google storage ~]}
+  - {key: google workspace, name: Google Workspace, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [google workspace, google gsuite, google g suite]}
+  - {key: google cloud, name: Google Cloud, category: leisure.software, series: subscription, cadences: [monthly], match: [google cloud]}
+  - {key: google store, name: Google Store, category: shopping.electronics, match: [google store, google google store]}
+  - {key: microsoft 365, name: Microsoft 365, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [microsoft 365, microsoft office, msft office, microsoft365, microsoft microsoft 365]}
+  - {key: apple icloud, name: iCloud, category: leisure.software, series: subscription, cadences: [monthly], match: [apple icloud, icloud]}
+
+  # Creative and office tools.
+  - {key: adobe, name: Adobe, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [adobe =, adobesystem, adobesystems, adobe creative, adobe acropro, adobe acrobat, adobe systems, adobe photogphy, adobe photography, adobe stock, adobe express, adobe premiere, adobe lightroom, adobe cc]}
+  - {key: canva, name: Canva, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [canva]}
+  - {key: figma, name: Figma, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [figma]}
+  - {key: grammarly, name: Grammarly, category: leisure.software, series: subscription, cadences: [monthly, quarterly, annual], match: [grammarly]}
+  - {key: evernote, name: Evernote, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [evernote]}
+  - {key: notion, name: Notion, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [notion labs, notion so]}
+  - {key: zoom, name: Zoom, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [zoom us, zoomus, zoom video]}
+  - {key: docusign, name: Docusign, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [docusign]}
+  - {key: github, name: GitHub, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [github]}
+
+  # Assistants.
+  - {key: openai, name: OpenAI (ChatGPT), category: leisure.software, series: subscription, cadences: [monthly], match: [openai, chatgpt]}
+  - {key: anthropic, name: Anthropic (Claude), category: leisure.software, series: subscription, cadences: [monthly, annual], match: [anthropic, claude ai]}
+  - {key: midjourney, name: Midjourney, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [midjourney]}
+
+  # Storage and backup.
+  - {key: dropbox, name: Dropbox, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [dropbox]}
+  - {key: backblaze, name: Backblaze, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [backblaze]}
+
+  # Passwords, privacy and protection.
+  - {key: 1password, name: 1Password, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [1password, agilebits]}
+  - {key: lastpass, name: LastPass, category: leisure.software, series: subscription, cadences: [annual], match: [lastpass]}
+  - {key: dashlane, name: Dashlane, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [dashlane]}
+  - {key: bitwarden, name: Bitwarden, category: leisure.software, series: subscription, cadences: [annual], match: [bitwarden]}
+  - {key: nordvpn, name: NordVPN, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [nordvpn, nord vpn, nordaccount]}
+  - {key: expressvpn, name: ExpressVPN, category: leisure.software, series: subscription, cadences: [monthly, half_yearly, annual], match: [expressvpn, express vpn]}
+  - {key: surfshark, name: Surfshark, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [surfshark]}
+  - {key: proton, name: Proton, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [proton ag, protonmail, proton mail, protonvpn, proton vpn]}
+  - {key: norton, name: Norton, category: leisure.software, series: subscription, cadences: [annual], match: [nortonlifelock, norton lifelock, norton antivirus, norton security, norton 360]}
+  - {key: lifelock, name: LifeLock, category: financial.services, series: subscription, cadences: [monthly, annual], match: [lifelock]}
+  - {key: mcafee, name: McAfee, category: leisure.software, series: subscription, cadences: [annual], match: [mcafee =, mcafee total, mcafee antivirus, mcafee livesafe]}
+  - {key: malwarebytes, name: Malwarebytes, category: leisure.software, series: subscription, cadences: [annual], match: [malwarebytes]}
+  - {key: life360, name: Life360, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [life360]}
+
+  # Web sites, domains and hosting.
+  - {key: squarespace, name: Squarespace, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [squarespace, sqsp]}
+  - {key: wix, name: Wix, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [wix com, wixcom]}
+  - {key: godaddy, name: GoDaddy, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [godaddy, dnh godaddy]}
+  - {key: wordpress, name: WordPress.com, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [wordpress, wpchrg, automattic]}
+  - {key: mailchimp, name: Mailchimp, category: leisure.software, series: subscription, cadences: [monthly], match: [mailchimp, intuit mailchimp]}
+
+  # Money and paperwork.
+  - {key: quickbooks, name: QuickBooks, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [quickbooks, intuit quickbooks, intuit qbooks]}
+  - {key: quicken, name: Quicken, category: leisure.software, series: subscription, cadences: [annual], match: [quicken =, quicken deluxe, quicken premier, quicken classic, quicken simplifi]}
+  - {key: ynab, name: YNAB, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [ynab, you need a budget]}
+  - {key: monarch money, name: Monarch Money, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [monarch money, monarchmoney]}
+  - {key: rocket money, name: Rocket Money, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [rocket money, rocketmoney, truebill]}
+
+  # People and family trees.
+  - {key: linkedin, name: LinkedIn, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [linkedin]}
+  - {key: ancestry, name: Ancestry, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [ancestry, ancestrycom]}
+  - {key: tinder, name: Tinder, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [tinder =, tinder gold, tinder plus, tinder platinum]}
+  - {key: bumble, name: Bumble, category: leisure.memberships, series: subscription, cadences: [weekly, monthly, quarterly], match: [bumble =, bumble premium, bumble boost]}
+  - {key: hinge, name: Hinge, category: leisure.memberships, series: subscription, cadences: [weekly, monthly, quarterly, half_yearly], match: [hinge app, hinge inc, hingeapp]}
+  - {key: eharmony, name: eharmony, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [eharmony]}
+
+  # Learning by subscription.
+  - {key: duolingo, name: Duolingo, category: family.education, series: subscription, cadences: [monthly, annual], match: [duolingo]}
+  - {key: babbel, name: Babbel, category: family.education, series: subscription, cadences: [monthly, quarterly, half_yearly, annual], match: [babbel]}
+  - {key: rosetta stone, name: Rosetta Stone, category: family.education, series: subscription, cadences: [quarterly, annual], match: [rosetta stone, rosettastone]}
+  - {key: coursera, name: Coursera, category: family.education, series: subscription, cadences: [monthly, annual], match: [coursera]}
+  - {key: skillshare, name: Skillshare, category: family.education, series: subscription, cadences: [monthly, annual], match: [skillshare]}
+  - {key: masterclass, name: MasterClass, category: family.education, series: subscription, cadences: [annual], match: [masterclass]}
+  - {key: chegg, name: Chegg, category: family.education, series: subscription, cadences: [monthly], match: [chegg]}
+  - {key: quizlet, name: Quizlet, category: family.education, series: subscription, cadences: [monthly, annual], match: [quizlet]}
+  - {key: abcmouse, name: ABCmouse, category: family.education, series: subscription, cadences: [monthly, annual], match: [abcmouse, abc mouse]}

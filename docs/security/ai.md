@@ -7,7 +7,10 @@ ids refer to `docs/AI_ACCESS.md` (M1-M8) and `docs/SECURITY.md`; status is in
 ## Short answer
 
 **PerFin sends nothing to any hosted model or AI service.** There is no
-outbound call to an AI provider and no setting for one. The optional local
+outbound call to an AI provider and no setting for one. Categories and
+subscriptions are worked out on the host from a merchant list that is a
+file in the image and from the household's own corrections; no model of
+any kind is involved ([`../CATEGORISATION.md`](../CATEGORISATION.md)). The optional local
 model container (ADR-0010, [`../ML.md`](../ML.md)) is refused unless it runs on
 your own network, and it only suggests (what a document is, which account
 it is about, what kind of activity an unfamiliar wording on a brokerage
@@ -30,7 +33,9 @@ Data crosses a boundary only on a tool call, over the transport you chose:
 Financial facts: accounts by type, nickname and institution, balances,
 transactions (date, amount, payee, category, tags, scrubbed notes), budgets,
 goals, holdings, loans, manual-asset nicknames and values, net worth, tax
-totals by category and box label. Amounts may be rounded; nicknames and
+totals by category and box label. Recurring rows (`get_recurring`) carry
+`kind` (subscription, bill, income, other) and `status` (active,
+confirmed) since 1.0.0-rc.10; only series PerFin counts are listed. Amounts may be rounded; nicknames and
 merchant location may be hidden; Aggregates mode removes transactions.
 
 ## What is never exposed
@@ -38,7 +43,11 @@ merchant location may be hidden; Aggregates mode removes transactions.
 Government identifiers; account, card, routing, IBAN and loan numbers
 including last 4 and partial masks; household member names, usernames, emails,
 phones, date of birth; home and property addresses; documents, previews,
-extracted text and OCR; credentials and keys; tax-form identity boxes. Free
+extracted text and OCR; credentials and keys; tax-form identity boxes; the
+merchant key PerFin derives from a statement line (`merchant_key`), what it
+learned from the household's corrections (`merchant_memory`), the changes
+it found about subscriptions (`subscription_event`) and which rule set a
+category. Free
 text is scrubbed to typed placeholders in the API and again in `perfin mcp`.
 Corpus tests must show zero leaks.
 PerFin keeps the page text of statements and payslips for its review tools

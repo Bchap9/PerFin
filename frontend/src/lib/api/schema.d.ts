@@ -1199,6 +1199,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/categorisation/learned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What PerFin learned from the household's corrections */
+        get: operations["get_learned_api_v1_categorisation_learned_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categorisation/learned/{memory_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Forget what was learned about one merchant (member or above) */
+        delete: operations["delete_learned_api_v1_categorisation_learned__memory_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categorisation/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Look again at the transactions nobody decided, as a job (owner/admin) */
+        post: operations["post_refresh_api_v1_categorisation_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categorisation/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How my transactions got their categories */
+        get: operations["get_summary_api_v1_categorisation_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents": {
         parameters: {
             query?: never;
@@ -2663,6 +2731,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/rules/merchant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Always categorise a merchant as a category (member or above) */
+        post: operations["post_merchant_rule_api_v1_rules_merchant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/merchant/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** What 'always categorise this merchant as...' would change (writes nothing) */
+        post: operations["post_merchant_rule_preview_api_v1_rules_merchant_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/rules/reorder": {
         parameters: {
             query?: never;
@@ -2714,6 +2816,23 @@ export interface paths {
         head?: never;
         /** Change a rule (owner/admin) */
         patch: operations["patch_rule_api_v1_rules__rule_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/rules/{rule_id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete a rule and undo the categories it set */
+        post: operations["post_rule_revert_api_v1_rules__rule_id__revert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/securities": {
@@ -3086,6 +3205,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Subscriptions and bills I can see, with what they cost */
+        get: operations["get_subscriptions_api_v1_subscriptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subscriptions/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What changed about my subscriptions and bills */
+        get: operations["get_events_api_v1_subscriptions_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subscriptions/events/seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark changes as seen (member or above) */
+        post: operations["post_events_seen_api_v1_subscriptions_events_seen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subscriptions/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One subscription or bill with its charges and its changes */
+        get: operations["get_subscription_api_v1_subscriptions__schedule_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subscriptions/{schedule_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm, dismiss, pause, resume, end or reopen one (member or above) */
+        post: operations["post_decision_api_v1_subscriptions__schedule_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tags": {
         parameters: {
             query?: never;
@@ -3360,7 +3564,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Categorise, tag, untag, delete or confirm many transactions */
+        /** Categorise, tag, untag, delete, confirm or accept suggestions for many transactions */
         post: operations["post_bulk_api_v1_transactions_bulk_post"];
         delete?: never;
         options?: never;
@@ -4438,7 +4642,7 @@ export interface components {
         /** AllCondition */
         "AllCondition-Input": {
             /** Conditions */
-            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -4448,7 +4652,7 @@ export interface components {
         /** AllCondition */
         "AllCondition-Output": {
             /** Conditions */
-            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -4565,7 +4769,7 @@ export interface components {
         /** AnyCondition */
         "AnyCondition-Input": {
             /** Conditions */
-            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
+            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -4575,7 +4779,7 @@ export interface components {
         /** AnyCondition */
         "AnyCondition-Output": {
             /** Conditions */
-            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
+            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -5035,14 +5239,17 @@ export interface components {
          *       transactions are skipped (their categories live on the splits);
          *     * ``tag`` / ``untag``: add / remove ``tag_ids``;
          *     * ``delete``: delete (each deletion is audited);
-         *     * ``confirm``: set ``review_state`` to ``confirmed``.
+         *     * ``confirm``: set ``review_state`` to ``confirmed``;
+         *     * ``accept_suggestions``: make each row's suggested category its category,
+         *       as the person's own choice (no ``category_id``, no ``tag_ids``); a row
+         *       without a suggestion is skipped with the reason ``suggestion-missing``.
          */
         BulkAction: {
             /**
              * Action
              * @enum {string}
              */
-            action: "categorise" | "tag" | "untag" | "delete" | "confirm";
+            action: "categorise" | "tag" | "untag" | "delete" | "confirm" | "accept_suggestions";
             /** Category Id */
             category_id?: string | null;
             /** Ids */
@@ -5071,7 +5278,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "categorise" | "tag" | "untag" | "delete" | "confirm";
+            action: "categorise" | "tag" | "untag" | "delete" | "confirm" | "accept_suggestions";
             /** Changed */
             changed: number;
             /** Results */
@@ -5244,6 +5451,32 @@ export interface components {
             outflow: components["schemas"]["Money"];
             /** Unconverted */
             unconverted: components["schemas"]["Money"][];
+        };
+        /**
+         * CategorisationSummary
+         * @description Where categorisation stands for the household.
+         *
+         *     ``up_to_date``: every row was last evaluated with the dictionary and the
+         *     clean-up that ship with this version. ``uncategorised`` rows have no
+         *     category and no split; ``suggestions`` of them carry a suggestion.
+         */
+        CategorisationSummary: {
+            /** By Source */
+            by_source: components["schemas"]["SourceCount"][];
+            /** Cleaner Version */
+            cleaner_version: number;
+            /** Dictionary Merchants */
+            dictionary_merchants: number;
+            /** Dictionary Version */
+            dictionary_version: number;
+            /** Learned Merchants */
+            learned_merchants: number;
+            /** Suggestions */
+            suggestions: number;
+            /** Uncategorised */
+            uncategorised: number;
+            /** Up To Date */
+            up_to_date: boolean;
         };
         /**
          * CategoryCreate
@@ -5441,7 +5674,7 @@ export interface components {
              */
             enabled: boolean;
             /** Events */
-            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /** Name */
             name: string;
         };
@@ -5456,7 +5689,7 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             /** Events */
-            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /**
              * Id
              * Format: uuid
@@ -5491,7 +5724,7 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             /** Events */
-            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /**
              * Id
              * Format: uuid
@@ -5538,7 +5771,7 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             /** Events */
-            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[] | null;
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[] | null;
             /** Name */
             name?: string | null;
             /** Rotate Secret */
@@ -6238,6 +6471,19 @@ export interface components {
             transaction_id: string;
         };
         /**
+         * EventsSeen
+         * @description Mark changes as seen; ids the caller cannot see are ignored.
+         */
+        EventsSeen: {
+            /** Ids */
+            ids: string[];
+        };
+        /** EventsSeenOut */
+        EventsSeenOut: {
+            /** Seen */
+            seen: number;
+        };
+        /**
          * ExportOut
          * @description An export job of the caller; ``counts`` per entity once ``ready``.
          */
@@ -6683,7 +6929,7 @@ export interface components {
             market_value: components["schemas"]["Money"] | null;
             market_value_base: components["schemas"]["Money"] | null;
             price: components["schemas"]["PriceBrief"] | null;
-            price_change: components["schemas"]["PriceChange"] | null;
+            price_change: components["schemas"]["app__domain__investments__schemas__PriceChange"] | null;
             /** Quantity */
             quantity: string;
             security: components["schemas"]["SecurityBrief"];
@@ -7095,6 +7341,61 @@ export interface components {
         LearnOut: {
             /** Added */
             added: number;
+        };
+        /**
+         * LearnedCategory
+         * @description What the household's own corrections say about one merchant.
+         *
+         *     ``decisions`` of ``total`` person-decided transactions of the merchant
+         *     went to ``category_id`` (``share``). ``rule_id``: the merchant already has
+         *     an "always" rule. ``offer_rule``: the household was unanimous often
+         *     enough that a rule is worth offering; ``example_transaction_id`` is a row
+         *     to make it from.
+         */
+        LearnedCategory: {
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            /** Decisions */
+            decisions: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "out" | "in";
+            /** Example Transaction Id */
+            example_transaction_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Last Decided At
+             * Format: date-time
+             */
+            last_decided_at: string;
+            /** Merchant */
+            merchant: string;
+            /** Merchant Key */
+            merchant_key: string;
+            /** Offer Rule */
+            offer_rule: boolean;
+            /** Rule Id */
+            rule_id: string | null;
+            /** Share */
+            share: string;
+            /** Total */
+            total: number;
+        };
+        /** LearnedCategoryPage */
+        LearnedCategoryPage: {
+            /** Items */
+            items: components["schemas"]["LearnedCategory"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** LearnedLayoutList */
         LearnedLayoutList: {
@@ -7913,6 +8214,113 @@ export interface components {
             value: string;
         };
         /**
+         * MerchantCondition
+         * @description The transaction's merchant key is exactly ``key``.
+         */
+        MerchantCondition: {
+            /** Key */
+            key: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "merchant";
+        };
+        /**
+         * MerchantRuleIn
+         * @description ``POST /rules/merchant``. ``apply_to_existing`` also re-categorises the
+         *     merchant's existing rows on the accounts the caller may edit (as a job);
+         *     a category a person chose is never changed.
+         */
+        MerchantRuleIn: {
+            /**
+             * Apply To Existing
+             * @default false
+             */
+            apply_to_existing: boolean;
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+        };
+        /**
+         * MerchantRuleOut
+         * @description The merchant's rule. ``replaced``: it existed and its category was changed
+         *     from ``previous_category_id``. ``job_id``: the job applying it to existing rows.
+         */
+        MerchantRuleOut: {
+            /** Job Id */
+            job_id: string | null;
+            /** Previous Category Id */
+            previous_category_id: string | null;
+            /** Replaced */
+            replaced: boolean;
+            rule: components["schemas"]["RuleOut"];
+        };
+        /**
+         * MerchantRulePreview
+         * @description What "always categorise this merchant as..." would do, counted on the server.
+         *
+         *     ``teachable`` is false, with a ``reason``, when no rule can be made from
+         *     the row: it names no merchant, it is not a purchase (a transfer, a card
+         *     payment, a payment to a person...) or it is split. The counts are over
+         *     every row of the merchant on the accounts the caller may edit:
+         *     ``uncategorised`` (no category; suggestions included), ``guessed`` (a
+         *     guess with another category, which would change), ``decided`` (a person,
+         *     the file, a payee default, another rule or an earlier release decided:
+         *     these never change) and ``same_category`` (already there).
+         *     ``existing_rule_id``: the merchant already has a rule, which would be
+         *     changed. ``shadowed_by``: an earlier rule already categorises the row, so
+         *     saving is refused. ``sample`` holds at most 20 of the affected rows.
+         */
+        MerchantRulePreview: {
+            /** Decided */
+            decided: number;
+            /** Existing Rule Id */
+            existing_rule_id: string | null;
+            /** Guessed */
+            guessed: number;
+            /** Merchant */
+            merchant: string | null;
+            /** Merchant Key */
+            merchant_key: string | null;
+            /** Reason */
+            reason: ("no_merchant" | "not_a_purchase" | "split") | null;
+            /** Same Category */
+            same_category: number;
+            /** Sample */
+            sample: string[];
+            /** Shadowed By */
+            shadowed_by: string | null;
+            /** Teachable */
+            teachable: boolean;
+            /** Uncategorised */
+            uncategorised: number;
+        };
+        /**
+         * MerchantRulePreviewIn
+         * @description ``POST /rules/merchant/preview``: the row the person is looking at and the
+         *     category they want every charge of its merchant to get.
+         */
+        MerchantRulePreviewIn: {
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+        };
+        /**
          * MergeInto
          * @description ``POST /categories/{id}/merge``, ``POST /payees/{id}/merge``: the survivor.
          */
@@ -8140,7 +8548,7 @@ export interface components {
         /** NotCondition */
         "NotCondition-Input": {
             /** Condition */
-            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -8150,7 +8558,7 @@ export interface components {
         /** NotCondition */
         "NotCondition-Output": {
             /** Condition */
-            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -8221,7 +8629,7 @@ export interface components {
          * Pattern
          * @enum {string}
          */
-        Pattern: "weekly" | "biweekly" | "monthly" | "quarterly" | "annual";
+        Pattern: "weekly" | "biweekly" | "monthly" | "two_monthly" | "quarterly" | "half_yearly" | "annual";
         /** PayeeCondition */
         PayeeCondition: {
             /**
@@ -8512,22 +8920,6 @@ export interface components {
             source: string | null;
             /** Updated At */
             updated_at: string | null;
-        };
-        /**
-         * PriceChange
-         * @description How the latest stored close moved from the stored close before it.
-         */
-        PriceChange: {
-            /** Fraction */
-            fraction: string;
-            /** Previous Close */
-            previous_close: string;
-            /**
-             * Since
-             * Format: date
-             */
-            since: string;
-            value: components["schemas"]["Money"] | null;
         };
         /**
          * PriceFeedOut
@@ -8824,6 +9216,8 @@ export interface components {
             category: string | null;
             /** Interval Count */
             interval_count: number;
+            /** Kind */
+            kind: string;
             /** Last Seen On */
             last_seen_on: string | null;
             /** Name */
@@ -8837,6 +9231,8 @@ export interface components {
             origin: string;
             /** Payee */
             payee: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * RecurringExtraIn
@@ -9337,7 +9733,7 @@ export interface components {
             /** Actions */
             actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
             /** Conditions */
-            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
             /**
              * Stop Processing
              * @default false
@@ -9352,7 +9748,7 @@ export interface components {
             /** Actions */
             actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
             /** Conditions */
-            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
             /**
              * Enabled
              * @default true
@@ -9429,7 +9825,7 @@ export interface components {
             /** Actions */
             actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
             /** Conditions */
-            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
             /**
              * Enabled
              * @default true
@@ -9451,7 +9847,7 @@ export interface components {
             /** Actions */
             actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Output"] | components["schemas"]["SplitAmountAction-Output"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
             /** Conditions */
-            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
             /**
              * Enabled
              * @default true
@@ -9513,7 +9909,7 @@ export interface components {
             /** Actions */
             actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Output"] | components["schemas"]["SplitAmountAction-Output"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
             /** Conditions */
-            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
             /**
              * Created At
              * Format: date-time
@@ -9554,6 +9950,22 @@ export interface components {
         RuleReorder: {
             /** Rule Ids */
             rule_ids: string[];
+        };
+        /**
+         * RuleRevertOut
+         * @description ``POST /rules/{id}/revert``: the rule is gone and ``reverted`` rows it had
+         *     categorised are undecided again; ``job_id`` is the job that guesses for them.
+         */
+        RuleRevertOut: {
+            /** Job Id */
+            job_id: string | null;
+            /** Reverted */
+            reverted: number;
+            /**
+             * Rule Id
+             * Format: uuid
+             */
+            rule_id: string;
         };
         /**
          * RuleTest
@@ -9620,7 +10032,7 @@ export interface components {
             /** Actions */
             actions?: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[] | null;
             /** Conditions */
-            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"]) | null;
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["MerchantCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"]) | null;
             /** Enabled */
             enabled?: boolean | null;
             /** Name */
@@ -9778,6 +10190,10 @@ export interface components {
         /**
          * ScheduleUpdate
          * @description Fields to change; absent fields are left alone, ``null`` clears payee/category.
+         *
+         *     ``kind`` is the person's word on what the series is; detection does not
+         *     change it afterwards. ``active: false`` pauses the series, ``active:
+         *     true`` confirms it.
          */
         ScheduleUpdate: {
             /** Active */
@@ -9789,6 +10205,8 @@ export interface components {
             category_id?: string | null;
             /** Interval Count */
             interval_count?: number | null;
+            /** Kind */
+            kind?: ("subscription" | "bill" | "income" | "other") | null;
             /** Name */
             name?: string | null;
             /** Next Due */
@@ -10286,6 +10704,16 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * SourceCount
+         * @description How many transactions got their category this way (``null``: nobody decided).
+         */
+        SourceCount: {
+            /** Source */
+            source: ("person" | "file" | "rule" | "payee" | "learned" | "dictionary" | "keyword" | "legacy") | null;
+            /** Transactions */
+            transactions: number;
+        };
         /** SplitAi */
         SplitAi: {
             amount: components["schemas"]["AiMoney"];
@@ -10534,6 +10962,204 @@ export interface components {
             sections: components["schemas"]["SummarySection"][];
             /** Total Value */
             total_value: string | null;
+        };
+        /** SubscriptionCharge */
+        SubscriptionCharge: {
+            amount: components["schemas"]["Money"];
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
+        };
+        /**
+         * SubscriptionDecision
+         * @description A person's decision about a series; detection never undoes it.
+         *
+         *     ``confirm`` (it is one), ``dismiss`` (it is not: it never comes back),
+         *     ``pause`` / ``resume``, ``end`` (it stopped) and ``reopen`` (an ended or
+         *     dismissed one is one after all). ``kind`` also says which of the two it is.
+         */
+        SubscriptionDecision: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirm" | "dismiss" | "pause" | "resume" | "end" | "reopen";
+            /** Kind */
+            kind?: ("subscription" | "bill") | null;
+        };
+        /**
+         * SubscriptionDetail
+         * @description One series with its charges (newest first, at most 60) and its changes.
+         */
+        SubscriptionDetail: {
+            /** Charges */
+            charges: components["schemas"]["SubscriptionCharge"][];
+            /** Events */
+            events: components["schemas"]["SubscriptionEventOut"][];
+            subscription: components["schemas"]["SubscriptionOut"];
+        };
+        /**
+         * SubscriptionEventOut
+         * @description One change of one series; ``name`` is the series' name.
+         */
+        SubscriptionEventOut: {
+            amount_after: components["schemas"]["Money"] | null;
+            amount_before: components["schemas"]["Money"] | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "new" | "price_changed" | "missed" | "ended" | "charged_after_end" | "renewal_due" | "trial_converted";
+            /** Name */
+            name: string;
+            /**
+             * Occurred On
+             * Format: date
+             */
+            occurred_on: string;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "seen";
+            /** Transaction Id */
+            transaction_id: string | null;
+        };
+        /**
+         * SubscriptionEventPage
+         * @description One page of changes, newest first; ``open`` counts every open one.
+         */
+        SubscriptionEventPage: {
+            /** Items */
+            items: components["schemas"]["SubscriptionEventOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Open */
+            open: number;
+        };
+        /**
+         * SubscriptionList
+         * @description ``GET /subscriptions``. ``needs_look``: suggested series plus series
+         *     with an open change.
+         */
+        SubscriptionList: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            bills: components["schemas"]["SubscriptionTotals"];
+            /** Items */
+            items: components["schemas"]["SubscriptionOut"][];
+            /** Needs Look */
+            needs_look: number;
+            subscriptions: components["schemas"]["SubscriptionTotals"];
+        };
+        /**
+         * SubscriptionOut
+         * @description A recurring series of kind ``subscription`` or ``bill``.
+         *
+         *     ``amount`` is the latest charge (the middle of the range before one was
+         *     seen); ``monthly_cost`` and ``yearly_cost`` spread it over the cadence, in
+         *     the account's currency. ``overdue``: the expected charge did not arrive,
+         *     judged against the account's latest row and never against today.
+         *     ``open_events``: changes nobody has looked at yet.
+         */
+        SubscriptionOut: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            amount: components["schemas"]["Money"];
+            amount_max: components["schemas"]["Money"];
+            amount_min: components["schemas"]["Money"];
+            cadence: components["schemas"]["Cadence"];
+            /** Category Id */
+            category_id: string | null;
+            /** Confidence */
+            confidence: string | null;
+            /** First Seen On */
+            first_seen_on: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Interval Count */
+            interval_count: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "subscription" | "bill" | "income" | "other";
+            /**
+             * Kind Source
+             * @enum {string}
+             */
+            kind_source: "detector" | "person";
+            /** Last Seen On */
+            last_seen_on: string | null;
+            /** Merchant */
+            merchant: string | null;
+            monthly_cost: components["schemas"]["Money"];
+            /** Name */
+            name: string;
+            /** Next Due */
+            next_due: string | null;
+            /** Occurrences */
+            occurrences: number;
+            /** Open Events */
+            open_events: number;
+            origin: components["schemas"]["ScheduleOrigin"];
+            /** Overdue */
+            overdue: boolean;
+            /** Payee Id */
+            payee_id: string | null;
+            price_change: components["schemas"]["app__domain__recurring__schemas__PriceChange"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "suggested" | "active" | "confirmed" | "paused" | "ended" | "dismissed";
+            /**
+             * Status Source
+             * @enum {string}
+             */
+            status_source: "detector" | "person";
+            yearly_cost: components["schemas"]["Money"];
+        };
+        /**
+         * SubscriptionTotals
+         * @description What the active and confirmed series of one kind cost, in ``currency``
+         *     (the household's). ``unconverted``: series left out for want of a rate.
+         */
+        SubscriptionTotals: {
+            /** Count */
+            count: number;
+            /** Currency */
+            currency: string;
+            monthly: components["schemas"]["Money"];
+            /** Unconverted */
+            unconverted: string[];
+            yearly: components["schemas"]["Money"];
         };
         /** SubtypeOut */
         SubtypeOut: {
@@ -11342,7 +11968,18 @@ export interface components {
              */
             transaction_id: string;
         };
-        /** TransactionOut */
+        /**
+         * TransactionOut
+         * @description A transaction.
+         *
+         *     How its category was decided: ``category_source`` (``null`` while nobody
+         *     and nothing decided) with ``category_confidence`` (decimal text, two
+         *     places) and, for ``rule``, ``category_rule_id``. ``suggested_category_id``
+         *     is a guess PerFin is not sure enough of to state: it is set only while
+         *     ``category_id`` is ``null`` and counts in no report. ``merchant_key`` is
+         *     who was paid, ``merchant`` the name to show for it; ``subscription_id``
+         *     is the recurring series the row is a charge of.
+         */
         TransactionOut: {
             /**
              * Account Id
@@ -11350,8 +11987,14 @@ export interface components {
              */
             account_id: string;
             amount: components["schemas"]["Money"];
+            /** Category Confidence */
+            category_confidence?: string | null;
             /** Category Id */
             category_id: string | null;
+            /** Category Rule Id */
+            category_rule_id?: string | null;
+            /** Category Source */
+            category_source?: ("person" | "file" | "rule" | "payee" | "learned" | "dictionary" | "keyword" | "legacy") | null;
             /** Confidence */
             confidence: string | null;
             /**
@@ -11368,6 +12011,10 @@ export interface components {
             id: string;
             /** Memo */
             memo: string | null;
+            /** Merchant */
+            merchant?: string | null;
+            /** Merchant Key */
+            merchant_key?: string | null;
             /** Notes */
             notes: string | null;
             /** Payee Id */
@@ -11385,6 +12032,10 @@ export interface components {
             /** Splits */
             splits: components["schemas"]["SplitOut"][];
             status: components["schemas"]["TransactionStatus"];
+            /** Subscription Id */
+            subscription_id?: string | null;
+            /** Suggested Category Id */
+            suggested_category_id?: string | null;
             /** Tag Ids */
             tag_ids: string[];
             transfer: components["schemas"]["TransferOut"] | null;
@@ -11686,6 +12337,22 @@ export interface components {
             url: string;
         };
         /**
+         * PriceChange
+         * @description How the latest stored close moved from the stored close before it.
+         */
+        app__domain__investments__schemas__PriceChange: {
+            /** Fraction */
+            fraction: string;
+            /** Previous Close */
+            previous_close: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            value: components["schemas"]["Money"] | null;
+        };
+        /**
          * ScheduleOut
          * @description ``GET /loans/{id}/schedule``.
          *
@@ -11708,6 +12375,22 @@ export interface components {
             start_balance: components["schemas"]["Money"];
             totals: components["schemas"]["ScheduleTotalsOut"];
         };
+        /**
+         * PriceChange
+         * @description The latest price change of a series. ``pending``: seen on one charge
+         *     only so far (the next charge at the new price confirms it).
+         */
+        app__domain__recurring__schemas__PriceChange: {
+            current: components["schemas"]["Money"];
+            /**
+             * On
+             * Format: date
+             */
+            on: string;
+            /** Pending */
+            pending: boolean;
+            previous: components["schemas"]["Money"];
+        };
         /** ScheduleOut */
         app__domain__recurring__schemas__ScheduleOut: {
             /**
@@ -11729,8 +12412,15 @@ export interface components {
             id: string;
             /** Interval Count */
             interval_count: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "subscription" | "bill" | "income" | "other";
             /** Last Seen On */
             last_seen_on: string | null;
+            /** Merchant */
+            merchant: string | null;
             /** Name */
             name: string;
             /**
@@ -11741,6 +12431,16 @@ export interface components {
             origin: components["schemas"]["ScheduleOrigin"];
             /** Payee Id */
             payee_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "suggested" | "active" | "confirmed" | "paused" | "ended" | "dismissed";
+            /**
+             * Status Source
+             * @enum {string}
+             */
+            status_source: "detector" | "person";
         };
     };
     responses: never;
@@ -16324,6 +17024,233 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CategoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_learned_api_v1_categorisation_learned_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnedCategoryPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_learned_api_v1_categorisation_learned__memory_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_refresh_api_v1_categorisation_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_summary_api_v1_categorisation_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategorisationSummary"];
                 };
             };
             /** @description Problem details */
@@ -23120,6 +24047,129 @@ export interface operations {
             };
         };
     };
+    post_merchant_rule_api_v1_rules_merchant_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantRuleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerchantRuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_merchant_rule_preview_api_v1_rules_merchant_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantRulePreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerchantRulePreview"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     post_rules_reorder_api_v1_rules_reorder_post: {
         parameters: {
             query?: never;
@@ -23376,6 +24426,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_rule_revert_api_v1_rules__rule_id__revert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleRevertOut"];
                 };
             };
             /** @description Problem details */
@@ -25427,6 +26535,306 @@ export interface operations {
             };
         };
     };
+    get_subscriptions_api_v1_subscriptions_get: {
+        parameters: {
+            query?: {
+                kind?: ("subscription" | "bill")[] | null;
+                status?: ("suggested" | "active" | "confirmed" | "paused" | "ended" | "dismissed")[] | null;
+                account?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_events_api_v1_subscriptions_events_get: {
+        parameters: {
+            query?: {
+                state?: ("open" | "seen") | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionEventPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_events_seen_api_v1_subscriptions_events_seen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EventsSeen"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsSeenOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_subscription_api_v1_subscriptions__schedule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionDetail"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_decision_api_v1_subscriptions__schedule_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_tags_api_v1_tags_get: {
         parameters: {
             query?: {
@@ -26761,6 +28169,10 @@ export interface operations {
                 status?: components["schemas"]["TransactionStatus"][] | null;
                 transfer?: boolean | null;
                 document?: string | null;
+                category_source?: ("person" | "file" | "rule" | "payee" | "learned" | "dictionary" | "keyword" | "legacy") | null;
+                suggested?: boolean | null;
+                merchant?: string | null;
+                subscription?: string | null;
                 q?: string | null;
                 cursor?: string | null;
                 limit?: number;

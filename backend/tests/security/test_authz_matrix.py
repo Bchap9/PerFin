@@ -69,6 +69,8 @@ from app.db.rls import set_context
 from app.db.session import make_sessionmaker
 from app.domain.accounts.models import Account
 from app.domain.assets.models import ManualAsset
+from app.domain.categorisation import memory
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import DocumentKind, ParserFingerprint
 from app.domain.goals.models import Goal
@@ -455,6 +457,8 @@ def build_object(
             for role, level in (("member", GrantLevel.EDIT), ("viewer", GrantLevel.VIEW)):
                 grant_account(db, household_id, world.users[role].id, account.id, level)
             return str(make_scheduled_transaction(db, account).id)
+    if kind == "merchant_memory":
+        return str(make_merchant_memory(factories, world))
     if kind == "ai_client":
         # Always the matrix household's owner: the owner of another household
         # is handed this one and must get 404.
@@ -699,6 +703,25 @@ def make_tax_object(
             store = LocalFSBlobStore.from_settings(factories.settings)
             return str(make_tax_export(db, store, factories.keyring, tax_year, owner.id).job_id)
     raise AssertionError(f"no tax generator for {kind!r}")
+
+
+def make_merchant_memory(factories: Factories, world: World) -> uuid.UUID:
+    """One learned decision of the matrix household, for a fresh merchant key
+    each time, so every caller forgets its own entry."""
+    household_id = world.household.id
+    letters = "".join(secrets.choice(string.ascii_lowercase) for _ in range(12))
+    with factories.transaction() as db:
+        category = make_category(db, household_id)
+        with household_context(db, household_id):
+            memory.record(
+                db, household_id, f"matrix {letters}", "out", category.id, at=clock.utcnow()
+            )
+            return db.execute(
+                select(MerchantMemory.id).where(
+                    MerchantMemory.household_id == household_id,
+                    MerchantMemory.merchant_key == f"matrix {letters}",
+                )
+            ).scalar_one()
 
 
 def make_taxonomy_object(factories: Factories, world: World, kind: str) -> Any:

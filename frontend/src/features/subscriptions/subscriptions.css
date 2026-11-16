@@ -1,0 +1,290 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The subscriptions view. A table from 720px; below that each row is a card
+   with the name, the amount and the next date first. */
+
+.subs-cost {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.subs-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: 0;
+}
+
+.subs-figure dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.subs-figure dd {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.subs-cost__count,
+.subs-cost__note {
+  margin: 0;
+}
+
+.subs-cost__note {
+  font-size: var(--font-size-sm);
+}
+
+.subs-empty {
+  margin: 0;
+  padding: var(--space-5) 0;
+  color: var(--color-text-muted);
+}
+
+.subs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.subs-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+a.subs-name {
+  color: inherit;
+}
+
+.subs-look {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.subs-look__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.subs-look__change {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.subs-actions,
+.subs-menu,
+.subs-menu__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.subs-menu {
+  justify-content: flex-end;
+}
+
+.subs-upcoming {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.subs-upcoming__date {
+  color: var(--color-text-muted);
+}
+
+.subs-upcoming__amount,
+.subs-num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.subs-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.subs-table th,
+.subs-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: start;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.subs-table thead th {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.subs-table .subs-num {
+  text-align: end;
+}
+
+.subs-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.subs-sort:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.subs-folded > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: var(--space-2) 0;
+}
+
+.subs-folded > .subs-list {
+  padding-top: var(--space-2);
+}
+
+/* One series up close. */
+
+.subs-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+}
+
+.subs-fact dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.subs-fact dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.subs-charges {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.subs-charges th,
+.subs-charges td {
+  padding: var(--space-2) var(--space-3);
+  text-align: start;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.subs-charges thead th {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.subs-charges .subs-num {
+  text-align: end;
+}
+
+.subs-detail__link {
+  margin: var(--space-3) 0 0;
+}
+
+.subs-detail__back {
+  margin: 0;
+}
+
+@media (max-width: 719.98px) {
+  .subs-table,
+  .subs-table tbody {
+    display: block;
+  }
+
+  /* The column names stay for screen readers; each cell carries its own label. */
+  .subs-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .subs-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-1) var(--space-3);
+    margin-bottom: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  .subs-table tbody th,
+  .subs-table tbody td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .subs-table .subs-col-name {
+    order: 1;
+    grid-column: 1;
+  }
+
+  .subs-table .subs-col-amount {
+    order: 2;
+    grid-column: 2;
+  }
+
+  .subs-table .subs-col-next {
+    order: 3;
+    grid-column: 1 / -1;
+  }
+
+  .subs-table .subs-col-rest {
+    order: 4;
+    grid-column: 1 / -1;
+    text-align: start;
+  }
+
+  .subs-table .subs-col-actions {
+    order: 5;
+    grid-column: 1 / -1;
+  }
+
+  .subs-table .subs-col-next::before,
+  .subs-table .subs-col-rest::before {
+    content: attr(data-label) ": ";
+    color: var(--color-text-muted);
+  }
+
+  .subs-table .subs-col-rest:empty {
+    display: none;
+  }
+
+  .subs-menu {
+    justify-content: flex-start;
+  }
+
+  .subs-upcoming {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .subs-upcoming__date {
+    grid-column: 1 / -1;
+  }
+}

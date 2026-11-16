@@ -1,0 +1,177 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Words that say what was bought, for a payee the merchant list does not
+# know. Read in this order: the first word found in a descriptor's core
+# answers, so the more telling word stands higher ("animal hospital" above
+# "hospital", "parking" above everything). A keyword is a suggestion unless
+# it is `strong`.
+#
+# A keyword is a trade, never a name: no surname ("Baker", "Cook"), no
+# place ("Park", "Springs", "Temple") and no word that fits any business
+# ("market", "shop", "club", "bar", "gas", "auto", "home"). A word that
+# opens a listed merchant's name ("pizza" in Pizza Hut) may be a keyword
+# only in that merchant's group of categories.
+#
+# `via` ties an entry to a payment processor (the name clean-up gives it).
+# With no `word`, the entry covers everything that processor fronts.
+keywords:
+  # Toast is a point-of-sale system sold to places that serve food and
+  # drink. Nearly all are restaurants, so that is stated; where the name
+  # itself says coffee, bread or beer, that word answers instead, as a
+  # suggestion (the matcher's rule for a `strong` entry).
+  - via: toast
+    category: food.restaurants
+    strong: true
+  # What these front is nearly always what they are for; said as a
+  # suggestion, because a convenience store delivers through them too.
+  - {via: doordash, category: food.delivery}
+  - {via: grubhub, category: food.delivery}
+  - {via: instacart, category: food.groceries}
+
+  # Where the car was left or washed: said first, so that "hospital parking"
+  # is parking and "pet wash" is not a car wash.
+  - {word: parking, category: transport.parking}
+  - {word: toll, category: transport.parking}
+  - {word: car wash, category: transport.car_maintenance}
+  - {word: car rental, category: leisure.travel}
+
+  # Animals, before the words they share with people's medicine.
+  - {word: animal hospital, category: family.pets}
+  - {word: veterinary, category: family.pets}
+  - {word: vet, category: family.pets}
+  - {word: pet, category: family.pets}
+  - {word: pets, category: family.pets}
+
+  # Eating out.
+  - {word: pizza, category: food.restaurants}
+  - {word: pizzeria, category: food.restaurants}
+  - {word: grill, category: food.restaurants}
+  - {word: restaurant, category: food.restaurants}
+  - {word: bistro, category: food.restaurants}
+  - {word: diner, category: food.restaurants}
+  - {word: steakhouse, category: food.restaurants}
+  - {word: sushi, category: food.restaurants}
+  - {word: ramen, category: food.restaurants}
+  - {word: taco, category: food.restaurants}
+  - {word: bbq, category: food.restaurants}
+  - {word: burger, category: food.restaurants}
+  - {word: kitchen, category: food.restaurants}
+  - {word: deli, category: food.restaurants}
+
+  # Coffee, bread and sweets.
+  - {word: cafe, category: food.coffee}
+  - {word: coffee, category: food.coffee}
+  - {word: espresso, category: food.coffee}
+  - {word: bakery, category: food.coffee}
+  - {word: donut, category: food.coffee}
+  - {word: bagel, category: food.coffee}
+  - {word: ice cream, category: food.coffee}
+  - {word: smoothie, category: food.coffee}
+
+  # Drink.
+  - {word: liquor, category: food.alcohol}
+  - {word: wine, category: food.alcohol}
+  - {word: brewery, category: food.alcohol}
+  - {word: winery, category: food.alcohol}
+  - {word: pub, category: food.alcohol}
+  - {word: tavern, category: food.alcohol}
+
+  # Food to take home.
+  - {word: grocery, category: food.groceries}
+  - {word: grocer, category: food.groceries}
+  - {word: supermarket, category: food.groceries}
+  - {word: farmers market, category: food.groceries}
+
+  # Health.
+  - {word: pharmacy, category: health.pharmacy}
+  - {word: dental, category: health.dental}
+  - {word: dentist, category: health.dental}
+  - {word: orthodontics, category: health.dental}
+  - {word: urgent care, category: health.medical}
+  - {word: pediatrics, category: health.medical}
+  - {word: dermatology, category: health.medical}
+  - {word: chiropractic, category: health.medical}
+  - {word: optometry, category: health.medical}
+  - {word: clinic, category: health.medical}
+  - {word: hospital, category: health.medical}
+  - {word: medical, category: health.medical}
+  - {word: gym, category: health.fitness}
+  - {word: fitness, category: health.fitness}
+  - {word: yoga, category: health.fitness}
+
+  # The car.
+  - {word: fuel, category: transport.fuel}
+  - {word: auto repair, category: transport.car_maintenance}
+  - {word: auto body, category: transport.car_maintenance}
+  - {word: auto parts, category: transport.car_maintenance}
+  - {word: tire, category: transport.car_maintenance}
+  - {word: tires, category: transport.car_maintenance}
+  - {word: oil change, category: transport.car_maintenance}
+  - {word: lube, category: transport.car_maintenance}
+  - {word: collision, category: transport.car_maintenance}
+  - {word: towing, category: transport.car_maintenance}
+  - {word: taxi, category: transport.taxi}
+  - {word: transit, category: transport.public_transit}
+
+  # Children and school.
+  - {word: daycare, category: family.childcare}
+  - {word: childcare, category: family.childcare}
+  - {word: preschool, category: family.childcare}
+  - {word: montessori, category: family.childcare}
+  - {word: tutoring, category: family.education}
+  - {word: university, category: family.education}
+  - {word: college, category: family.education}
+  - {word: school, category: family.education}
+
+  # Looking after oneself.
+  - {word: salon, category: family.personal_care}
+  - {word: barber, category: family.personal_care}
+  - {word: barbershop, category: family.personal_care}
+  - {word: nails, category: family.personal_care}
+  - {word: spa, category: family.personal_care}
+  - {word: laundromat, category: family.personal_care}
+  - {word: dry cleaners, category: family.personal_care}
+
+  # Giving.
+  - {word: ministries, category: family.donations}
+  - {word: florist, category: family.gifts}
+  - {word: flowers, category: family.gifts}
+
+  # Going out and going away.
+  - {word: cinema, category: leisure.events}
+  - {word: theatre, category: leisure.events}
+  - {word: theater, category: leisure.events}
+  - {word: bowling, category: leisure.events}
+  - {word: museum, category: leisure.events}
+  - {word: zoo, category: leisure.events}
+  - {word: tickets, category: leisure.events}
+  - {word: hotel, category: leisure.travel}
+  - {word: motel, category: leisure.travel}
+  - {word: inn, category: leisure.travel}
+  - {word: resort, category: leisure.travel}
+  - {word: airlines, category: leisure.travel}
+  - {word: bookstore, category: leisure.hobbies}
+
+  # The home.
+  - {word: hardware, category: housing.improvement}
+  - {word: plumbing, category: housing.maintenance}
+  - {word: hvac, category: housing.maintenance}
+  - {word: roofing, category: housing.maintenance}
+  - {word: landscaping, category: housing.maintenance}
+  - {word: pest control, category: housing.maintenance}
+  - {word: locksmith, category: housing.maintenance}
+  - {word: apartments, category: housing.rent}
+  - {word: self storage, category: housing.fees}
+  - {word: furniture, category: shopping.home}
+  - {word: water dept, category: utilities.water}
+  - {word: water district, category: utilities.water}
+  - {word: utilities, category: utilities.other}
+
+  # Shops and offices.
+  - {word: boutique, category: shopping.clothing}
+  - {word: clothing, category: shopping.clothing}
+  - {word: shoes, category: shopping.clothing}
+  - {word: jewelry, category: shopping.clothing}
+  - {word: electronics, category: shopping.electronics}
+  - {word: attorney, category: financial.services}
+  - {word: law office, category: financial.services}
+  - {word: cpa, category: financial.services}

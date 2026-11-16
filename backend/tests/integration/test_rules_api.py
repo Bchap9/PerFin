@@ -26,7 +26,7 @@ from app.core.errors import ProblemError
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
-from app.domain.rules import service
+from app.domain.rules import merchant, service
 from app.domain.rules.engine import RuleField
 from app.domain.rules.schemas import (
     HIDDEN_ACCOUNT,
@@ -422,6 +422,68 @@ def test_dry_run_reports_matches_and_writes_nothing(
     assert _row(factories, hh, Rule, uuid.UUID(saved["id"])).hit_count == 0
 
 
+def test_dry_run_leaves_a_category_a_person_chose_as_the_job_will(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    coffee = ledger.category(hh, name="Coffee")
+    chosen = ledger.category(hh, name="Work lunches")
+    tag = ledger.tag(hh)
+    by_hand = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 12", category=chosen, category_source="person"
+    )
+    cleared = ledger.transaction(account, raw_payee="CORNER COFFEE 13", category_source="person")
+    legacy = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 14", category=chosen, category_source="legacy"
+    )
+    saved = _created(owner.post(RULES, json=_coffee_rule(coffee.id)))
+    wanted = {"before": str(chosen.id), "after": str(coffee.id)}
+
+    def dry(**body: Any) -> dict[str, Any]:
+        response = owner.post(f"{RULES}/test", json=body)
+        assert response.status_code == 200, response.text
+        return {item["transaction"]["id"]: item for item in response.json()["items"]}
+
+    draft = {key: value for key, value in _coffee_rule(coffee.id).items() if key != "name"}
+    for body in ({}, {"rule_id": saved["id"]}, {"rule": draft}):
+        items = dry(**body)
+        assert set(items) == {str(by_hand.id), str(cleared.id), str(legacy.id)}
+        # The person's rows match, and the answer says the category stays.
+        for row in (by_hand, cleared):
+            item = items[str(row.id)]
+            assert item["changes"]["category_id"] is None
+            [skipped] = item["skipped"]
+            assert (skipped["action"], skipped["reason"]) == (
+                "set_category",
+                "categorization was set by hand",
+            )
+        # Negative: an earlier release's category is still the rule's to change.
+        assert items[str(legacy.id)]["changes"]["category_id"] == wanted
+        assert items[str(legacy.id)]["skipped"] == []
+    assert set(dry(only_changes=True)) == {str(legacy.id)}
+
+    # Only the category is protected: the rule's tag would still be added.
+    tagging = {
+        **draft,
+        "actions": [
+            {"type": "set_category", "category_id": str(coffee.id)},
+            {"type": "add_tags", "tag_ids": [str(tag.id)]},
+        ],
+    }
+    tagged = dry(rule=tagging, only_changes=True)
+    assert set(tagged) == {str(by_hand.id), str(cleared.id), str(legacy.id)}
+    assert tagged[str(by_hand.id)]["changes"]["added_tag_ids"] == [str(tag.id)]
+    assert tagged[str(by_hand.id)]["changes"]["category_id"] is None
+
+    # The dry run and the job agree.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        summary = service.run_rules(db, hh, RunRulesJob())
+    assert summary.changed_ids == [legacy.id]
+
+
 def test_dry_run_transaction_is_read_only(
     db: Session, factories: Factories, ledger: LedgerFactories
 ) -> None:
@@ -685,6 +747,236 @@ def test_dangling_references_are_skipped_not_fatal(
     db.connection().exec_driver_sql("SET CONSTRAINTS ALL IMMEDIATE")
 
 
+# ---- provenance, and what a person chose ---------------------------------------------
+
+
+def _grocer_rule(category_id: uuid.UUID, **extra: Any) -> dict[str, Any]:
+    return {
+        "name": "Corner Grocer",
+        "conditions": {"type": "merchant", "key": "corner grocer"},
+        "actions": [{"type": "set_category", "category_id": str(category_id)}],
+        **extra,
+    }
+
+
+def _provenance(row: Transaction) -> tuple[Any, ...]:
+    return (row.category_id, row.category_source, row.category_rule_id, row.category_confidence)
+
+
+def test_a_rule_applied_at_creation_marks_the_row(
+    db: Session, factories: Factories, ledger: LedgerFactories
+) -> None:
+    record = factories.user(role="owner")
+    hh = record.household_id
+    assert hh is not None
+    account = ledger.account(hh)
+    groceries = ledger.category(hh, name="Groceries")
+    guess = ledger.category(hh, name="A guess")
+    tag = ledger.tag(hh)
+    rule = ledger.rule(hh, **{k: v for k, v in _grocer_rule(groceries.id).items() if k != "name"})
+    tagger = ledger.rule(hh, sort_order=1, actions=[{"type": "add_tags", "tag_ids": [str(tag.id)]}])
+    known = make_transaction(
+        db,
+        account,
+        raw_payee="CORNER GROCER 0417",
+        merchant_key="corner grocer",
+        suggested_category_id=guess.id,
+    )
+    # Negative: a longer key, and a descriptor that names the merchant with no key.
+    longer = make_transaction(
+        db, account, raw_payee="CORNER GROCER DELI", merchant_key="corner grocer deli"
+    )
+    no_key = make_transaction(db, account, raw_payee="CORNER GROCER 0417")
+    set_context(db, hh)
+
+    summary = service.apply_rules_to(db, hh, [known, longer, no_key], user_id=record.id)
+    db.flush()
+    for row in (known, longer, no_key):
+        db.refresh(row)
+    assert summary.hits[rule.id] == 1
+    assert summary.hits[tagger.id] == 3
+    assert _provenance(known) == (groceries.id, "rule", rule.id, Decimal("1.0000"))
+    assert known.suggested_category_id is None  # a rule's answer replaces a guess
+    assert known.updated_at > known.created_at  # the importer equalises afterwards
+    # A rule that only tagged decided no category: the rows stay undecided.
+    assert _provenance(longer) == (None, None, None, None)
+    assert _provenance(no_key) == (None, None, None, None)
+
+
+def test_reapply_does_not_change_a_category_a_person_chose(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    coffee = ledger.category(hh, name="Coffee")
+    chosen = ledger.category(hh, name="Work lunches")
+    earlier = ledger.category(hh, name="Eating out")
+    by_hand = ledger.transaction(
+        account,
+        raw_payee="CORNER COFFEE 12",
+        category=chosen,
+        category_source="person",
+        category_confidence=Decimal("1"),
+    )
+    cleared = ledger.transaction(account, raw_payee="CORNER COFFEE 13", category_source="person")
+    legacy = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 14", category=earlier, category_source="legacy"
+    )
+    guessed = ledger.transaction(
+        account,
+        raw_payee="CORNER COFFEE 15",
+        category=earlier,
+        category_source="dictionary",
+        category_confidence=Decimal("0.90"),
+    )
+    undecided = ledger.transaction(account, raw_payee="CORNER COFFEE 16")
+    rule_id = uuid.UUID(_created(owner.post(RULES, json=_coffee_rule(coffee.id)))["id"])
+
+    accepted = owner.post(f"{RULES}/apply", json={})
+    assert accepted.status_code == 202, accepted.text
+    with factories.transaction() as db:
+        set_context(db, hh)
+        job = db.get(Job, uuid.UUID(accepted.json()["job_id"]))
+        assert job is not None
+        run_rules_handler(_ctx(db, hh, job.id), RunRulesJob.model_validate(job.payload))
+
+    # What a person chose, and what a person cleared, is as they left it.
+    kept = _row(factories, hh, Transaction, by_hand.id)
+    assert _provenance(kept) == (chosen.id, "person", None, Decimal("1.0000"))
+    assert kept.updated_at == by_hand.updated_at
+    emptied = _row(factories, hh, Transaction, cleared.id)
+    assert _provenance(emptied) == (None, "person", None, None)
+    # Everything else is the rule's to decide, as before.
+    for row in (legacy, guessed, undecided):
+        after = _row(factories, hh, Transaction, row.id)
+        assert _provenance(after) == (coffee.id, "rule", rule_id, Decimal("1.0000"))
+    [applied] = household_audit(factories, hh, "rule.apply")
+    assert applied.after is not None
+    assert (applied.after["matched"], applied.after["changed"]) == (5, 3)
+
+    # The new-transaction hook is not what protects them: the job is.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        again = service.run_rules(db, hh, RunRulesJob(rule_ids=[rule_id]))
+    assert (again.matched, again.changed) == (5, 0)
+
+
+def test_reapply_still_tags_a_person_row(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    coffee = ledger.category(hh, name="Coffee")
+    chosen = ledger.category(hh, name="Work lunches")
+    tag = ledger.tag(hh, name="caffeine")
+    by_hand = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 12", category=chosen, category_source="person"
+    )
+    ledger.rule(
+        hh,
+        conditions={"type": "payee", "op": "contains", "value": "coffee"},
+        actions=[
+            {"type": "set_category", "category_id": str(coffee.id)},
+            {"type": "add_tags", "tag_ids": [str(tag.id)]},
+            {"type": "set_note", "note": "from the rule"},
+            {"type": "flag_for_review"},
+        ],
+    )
+    with factories.transaction() as db:
+        set_context(db, hh)
+        summary = service.run_rules(db, hh, RunRulesJob())
+    assert summary.changed_ids == [by_hand.id]
+    row = _row(factories, hh, Transaction, by_hand.id)
+    assert _tags(factories, hh, by_hand.id) == {tag.id}
+    assert (row.notes, row.review_state) == ("from the rule", ReviewState.PENDING)
+    # Only the category is protected, and it still says who decided it.
+    assert _provenance(row) == (chosen.id, "person", None, None)
+
+
+def test_deleting_a_rule_leaves_source_rule_and_no_rule_id(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    groceries = ledger.category(hh, name="Groceries")
+    txn = ledger.transaction(account, raw_payee="CORNER GROCER 0417", merchant_key="corner grocer")
+    rule_id = uuid.UUID(_created(owner.post(RULES, json=_grocer_rule(groceries.id)))["id"])
+    with factories.transaction() as db:
+        set_context(db, hh)
+        assert service.run_rules(db, hh, RunRulesJob()).changed_ids == [txn.id]
+    before = _row(factories, hh, Transaction, txn.id)
+    assert _provenance(before) == (groceries.id, "rule", rule_id, Decimal("1.0000"))
+
+    assert owner.delete(f"{RULES}/{rule_id}").status_code == 204
+    after = _row(factories, hh, Transaction, txn.id)
+    # The category stays and still says a rule decided it; only the link is gone.
+    assert _provenance(after) == (groceries.id, "rule", None, Decimal("1.0000"))
+    assert after.updated_at == before.updated_at
+
+
+def test_merchant_rule_is_the_enabled_rule_for_exactly_that_key(
+    db: Session, factories: Factories, ledger: LedgerFactories
+) -> None:
+    record = factories.user(role="owner")
+    other = factories.user(role="owner")
+    hh, elsewhere = record.household_id, other.household_id
+    assert hh is not None
+    assert elsewhere is not None
+    groceries = ledger.category(hh, name="Groceries")
+    tag = ledger.tag(hh)
+    set_category = {"type": "set_category", "category_id": str(groceries.id)}
+    leaf = {"type": "merchant", "key": "corner grocer"}
+    # None of these is "the merchant's rule".
+    ledger.rule(hh, sort_order=0, conditions=leaf, actions=[set_category], enabled=False)
+    ledger.rule(
+        hh,
+        sort_order=1,
+        conditions={"type": "merchant", "key": "corner grocer deli"},
+        actions=[set_category],
+    )
+    ledger.rule(
+        hh,
+        sort_order=2,
+        conditions={"type": "all", "conditions": [leaf, {"type": "sign", "sign": "outflow"}]},
+        actions=[set_category],
+    )
+    ledger.rule(
+        hh, sort_order=3, conditions={"type": "any", "conditions": [leaf]}, actions=[set_category]
+    )
+    ledger.rule(
+        hh, sort_order=4, conditions={"type": "not", "condition": leaf}, actions=[set_category]
+    )
+    ledger.rule(
+        hh,
+        sort_order=5,
+        conditions=leaf,
+        actions=[set_category, {"type": "add_tags", "tag_ids": [str(tag.id)]}],
+    )
+    ledger.rule(hh, sort_order=6, conditions=leaf, actions=[{"type": "flag_for_review"}])
+    ledger.rule(hh, sort_order=7, conditions={"type": "not-a-condition"}, actions=[set_category])
+    set_context(db, hh)
+    assert merchant.merchant_rule(db, hh, "corner grocer") is None
+
+    wrapped = ledger.rule(
+        hh, sort_order=9, conditions={"type": "all", "conditions": [leaf]}, actions=[set_category]
+    )
+    found = merchant.merchant_rule(db, hh, "corner grocer")
+    assert found is not None
+    assert found.id == wrapped.id
+    bare = ledger.rule(hh, sort_order=8, conditions=leaf, actions=[set_category])
+    first = merchant.merchant_rule(db, hh, "corner grocer")
+    assert first is not None
+    assert first.id == bare.id  # the earlier one in rule order
+    assert merchant.merchant_rule(db, hh, "corner") is None
+    assert merchant.merchant_rule(db, hh, "grocer") is None
+    # Another household's rule is never found.
+    set_context(db, elsewhere)
+    assert merchant.merchant_rule(db, elsewhere, "corner grocer") is None
+
+
 # ---- export / import -----------------------------------------------------------------
 
 
@@ -799,3 +1091,56 @@ def test_rule_limit(db: Session, factories: Factories) -> None:
     with pytest.raises(ProblemError) as caught:
         service.create_rule(db, principal, body, request=None)
     assert caught.value.slug == "rule-limit"
+
+
+def test_a_merchant_rule_round_trips_through_export_and_import(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    source = actors.new(role="owner")
+    target = actors.new(role="owner")
+    src, dst = _hid(source), _hid(target)
+    groceries = ledger.category(src, name="Groceries")
+    leaf = {"type": "merchant", "key": "corner grocer"}
+    wrapped = {"type": "all", "conditions": [{"type": "merchant", "key": "harbour books"}]}
+    _created(source.post(RULES, json=_grocer_rule(groceries.id)))
+    _created(source.post(RULES, json=_grocer_rule(groceries.id, name="Books", conditions=wrapped)))
+    refused = source.post(
+        RULES, json=_grocer_rule(groceries.id, conditions={"type": "merchant", "key": "Corner"})
+    )
+    assert refused.status_code == 422  # a key is lower-case tokens, nothing else
+
+    document = source.get(f"{RULES}/export").json()
+    assert [r["conditions"] for r in document["rules"]] == [leaf, wrapped]
+    # A merchant key is not an id: it names nothing to look up on the other side.
+    assert [r["name"] for r in document["references"]["categories"]] == ["Groceries"]
+    assert document["references"]["accounts"] == []
+
+    t_groceries = ledger.category(dst, name="groceries")
+    account = ledger.account(dst)
+    imported = target.post(f"{RULES}/import", json=document)
+    assert imported.status_code == 201, imported.text
+    items = imported.json()["items"]
+    assert [r["conditions"] for r in items] == [leaf, wrapped]
+    assert all(
+        r["actions"] == [{"type": "set_category", "category_id": str(t_groceries.id)}]
+        for r in items
+    )
+
+    # And it works there: the key, the whole key and nothing but the key.
+    grocer = ledger.transaction(
+        account, raw_payee="CORNER GROCER 0417", merchant_key="corner grocer"
+    )
+    books = ledger.transaction(account, raw_payee="HARBOUR BOOKS", merchant_key="harbour books")
+    deli = ledger.transaction(
+        account, raw_payee="CORNER GROCER DELI", merchant_key="corner grocer deli"
+    )
+    with factories.transaction() as db:
+        set_context(db, dst)
+        summary = service.run_rules(db, dst, RunRulesJob())
+    assert sorted(summary.changed_ids) == sorted([grocer.id, books.id])
+    by_id = {uuid.UUID(r["id"]): r for r in items}
+    for row in (grocer, books):
+        after = _row(factories, dst, Transaction, row.id)
+        assert (after.category_id, after.category_source) == (t_groceries.id, "rule")
+        assert after.category_rule_id in by_id
+    assert _row(factories, dst, Transaction, deli.id).category_id is None

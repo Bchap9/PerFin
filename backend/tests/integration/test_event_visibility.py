@@ -5,7 +5,8 @@ The services' real ``emit`` calls (transfers, rules, goals, document
 deletion) are run as an owner on a hidden account and on a granted one; the
 stream's :func:`app.domain.events.service.deliverable` filter for a member
 must keep only the latter. The filter also fails closed on account-derived
-event types whose payload names no account.
+event types whose payload names no account. What detection finds about a
+subscription (``subscription.changed``) follows its account the same way.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from app.domain.documents.service import delete_document
 from app.domain.events.service import StreamView, deliverable
 from app.domain.goals import service as goals
 from app.domain.goals.schemas import GoalCreate
+from app.domain.recurring import service as recurring
+from app.domain.recurring.models import SubscriptionEvent
 from app.domain.rules import service as rules
 from app.domain.transactions import transfers
 from app.domain.transactions.models import Transaction
@@ -188,3 +191,53 @@ def test_transaction_rows_are_untouched(db: Session) -> None:
     group = transfers.link(db, principal, out, inn.id, request=None)
     rows = db.execute(select(Transaction).where(Transaction.transfer_group_id == group)).scalars()
     assert {r.id for r in rows} == {out.id, inn.id}
+
+
+def test_subscription_changed_reaches_only_those_who_see_the_account(db: Session) -> None:
+    owner = make_user(db, role="owner")
+    hh = owner.household_id
+    assert hh is not None
+    member = make_user(db, role="member", household=owner.household)
+    mine, hidden = make_account(db, hh), make_account(db, hh)
+    grant_account(db, hh, member.id, mine.id, GrantLevel.VIEW)
+    for account in (mine, hidden):
+        for month in (5, 6):
+            make_transaction(
+                db,
+                account,
+                amount="-15.49",
+                posted_date=date(2026, month, 9),
+                raw_payee="NETFLIX.COM",
+                merchant_key="netflix",
+            )
+    on = date(2026, 6, 12)
+
+    def detected(account_id: uuid.UUID) -> list[Event]:
+        marker = _marker(db, hh)
+        recurring.persist(db, hh, [account_id], on)
+        return _events_since(db, hh, marker)
+
+    hidden_events = detected(hidden.id)
+    visible_events = detected(mine.id)
+    for events in (hidden_events, visible_events):
+        assert sorted(e.type for e in events) == ["schedule.created", "subscription.changed"]
+    found = db.execute(
+        select(SubscriptionEvent.account_id, SubscriptionEvent.kind).where(
+            SubscriptionEvent.household_id == hh
+        )
+    ).all()
+    assert sorted(found, key=lambda row: row[0].bytes) == sorted(
+        [(mine.id, "new"), (hidden.id, "new")], key=lambda row: row[0].bytes
+    )
+    changed = next(e for e in visible_events if e.type == "subscription.changed")
+    assert set(changed.payload) == {"account_id", "schedule_id"}
+
+    view = StreamView(_principal(db, member), frozenset({mine.id}))
+    assert deliverable(db, view, hidden_events) == []
+    assert deliverable(db, view, visible_events) == visible_events
+    everyone = StreamView(_principal(db, owner), None)
+    assert deliverable(db, everyone, hidden_events) == hidden_events
+    # Fail closed: a subscription event that names no account reaches no member.
+    marker = _marker(db, hh)
+    emit(db, hh, "subscription.changed", {"schedule_id": str(uuid.uuid4())})
+    assert deliverable(db, view, _events_since(db, hh, marker)) == []

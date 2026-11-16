@@ -37,7 +37,236 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+Categorisation and subscriptions, the second of four stages on the way to
+1.0.0. A first import is mostly categorised from a merchant list that
+ships with PerFin and runs on the host; every category says how it was
+decided, an unsure guess is only a suggestion, and what a person chose is
+never overwritten by a guess; one correction teaches; subscriptions and
+bills have their own view, with decisions that stick and alerts when
+something changes. No hosted model, no lookup, nothing leaves the host.
+Migration `0014`; archives are format 3 (docs/CATEGORISATION.md,
+docs/UPGRADING.md "1.0.0-rc.10").
+
+### Added
+
+- **A first import arrives categorised** (docs/CATEGORISATION.md). PerFin
+  ships a list of 1,427 United States merchants and 124 keywords, written
+  by hand, and cleans a bank's wording down to who was paid (`POS DEBIT
+  NETFLIX.COM 866-579-7172 CA` is Netflix; `SQ *CORNER BAKERY 0417 AUSTIN
+  TX` is Corner Bakery, through Square). A new household used to get no
+  category on any row. On the 1,200 invented, labelled bank lines the
+  project measures itself with, 93.1% of the lines naming a well-known
+  merchant now get the right category as a fact (before: 0%), 70.4% of all
+  lines get a fact, no fact stated is wrong and no invented local shop is
+  given a wrong one. These figures are tests and cannot fall silently;
+  they are measured on invented lines, not on anybody's statements, and a
+  real first import will do less well. Card payments, transfers between
+  your accounts, loan payments, cash, salary, interest and bank fees are
+  recognised from the wording and kept out of spending (all 150 such
+  lines of the set). A cheque, a deposit and a payment between people are
+  never guessed.
+- **Every category says how it was decided.** The category cell reads "You
+  chose this", "From the file", "Rule: *name*", "Payee default", "Learned
+  from you", "Merchant list" or "Keyword", with how sure a guess is.
+  "How transactions got their category" on "What PerFin has learned"
+  counts them by source.
+- **An unsure guess is a suggestion, not a category.** Below 80% PerFin
+  asks "*Category*?" with Accept and a picker, and the row stays
+  uncategorised in every report and budget until someone answers. A store
+  that sells everything (Amazon, Walmart, Target, Costco, an app store) is
+  only ever a suggestion, and so is money coming in from a merchant on a
+  bank credit, which may be earnings rather than a refund. A payment to a
+  store's credit card is not shopping at that store, and a business that
+  only shares a chain's first word ("Hilton Head Plumbing") is not the
+  chain. "Accept suggestions" in the bulk bar takes many
+  at once; a "Suggestions" filter shows them with their count.
+- **One correction teaches.** Choosing a category for a transaction counts
+  for its merchant, and the next charge from that merchant is filed the
+  same way: right for 96.0% of the repeated invented merchants in the
+  labelled set after a single correction. It is a table of counts, not a
+  model. When a household files one merchant in several places PerFin
+  states nothing for it and only suggests. "Categories learned from you"
+  lists every entry with a Forget button.
+- **"Always categorise *merchant* as..."** from a transaction's menu, for
+  members too. It shows what the server counted over the whole ledger
+  before anything is saved (how many transactions have no category, how
+  many guesses would change, how many somebody decided and so stay),
+  makes an ordinary rule on the merchant, changes existing transactions
+  only when "Also change the existing transactions" is ticked, refuses
+  with the rule's name when an earlier rule already decides the row, and
+  has an **Undo** that returns exactly the transactions that rule
+  categorised to undecided. The rules page offers Undo as well (to
+  members on a merchant rule, to owners and admins on any rule) and the
+  rule editor reads and edits a "Merchant is" condition. A transfer, a card
+  payment, a payment to a person and a split transaction cannot teach,
+  and the dialog says so.
+- **A Subscriptions page** (after Calendar in the navigation): what your
+  subscriptions and, on their own tab, your bills cost per month and per
+  year; "Needs a look" for what PerFin is unsure of and what changed; what
+  is due in the next 30 days; ended and dismissed ones folded away. A
+  series opens to its charges, its price history and its next expected
+  charge. On the planted two-year test ledger all 40 series are found
+  (before: 23), 38 of them without asking, and none of the 25 decoys
+  (weekly groceries, a coffee habit, fuel, a transfer to savings, a card
+  payment) is shown as found (before: 6); one is suggested. That holds
+  whether or not anybody files a transaction. Which of them is a bill, a
+  subscription or income is right for all 40 once the transactions the
+  engine left open are filed, and for 33 of 40 (82.5%, under the 90%
+  target) straight after an import with nothing filed: the other seven
+  (rent, a loan, water, sewer and three local businesses) are listed as
+  "other" on the Calendar until then.
+- **An order through DoorDash, Grubhub, Instacart or Eventbrite is the
+  platform's**: `GRUBHUB*TACOBELL` is Grubhub, filed under food delivery,
+  not the restaurant behind it. The platform's own membership stays its
+  own merchant.
+- **A store that sells everything is not a subscription for being
+  regular.** Amazon, Walmart, Target, Costco and the like are a habit while
+  their transactions have no category; a plan billed through one (the same
+  price to the cent, at a regular rhythm) is suggested from the third
+  monthly charge.
+- **Two shops that begin alike stay two merchants.** An unknown shop
+  printed as two words and a state ("THE HIDEOUT TX", "BLUE HERON OH")
+  keeps both words as its merchant, so a correction, a rule or a series on
+  one never reaches the other. What you filed under a shop's first word
+  alone ("SQ *JUNEBUG") still answers for "JUNEBUG ASHGROVE OH".
+- **Decisions about a subscription stick.** Confirm, Not a subscription,
+  Pause, Resume, End, Reopen and "This is a bill" / "This is a
+  subscription" are recorded as yours, and detection never changes them. A
+  dismissed series does not come back.
+- **PerFin notices changes**: a new subscription, a price change (all 5
+  planted ones flagged, none falsely), a missed charge, a series that
+  stopped (all 4 planted ones ended, none wrongly), a charge after you
+  ended one, a yearly or half-yearly renewal a week ahead, and a trial
+  that became paid. Four notification kinds can be ticked per channel;
+  the sentence names no merchant, amount, date or account.
+- **Half-yearly and two-monthly series are found**, a yearly charge from
+  a known subscription is suggested after the first charge instead of
+  after two years, and two plans at one merchant are two series.
+- Thirteen default categories: Fast food, Alcohol and bars, Food
+  delivery, General merchandise, Home and garden, Games, News and books,
+  Software and apps, Memberships, Other utilities, Home improvement,
+  Financial and legal services, Cash and ATM. Existing households get
+  them once, under the groups they still have; nothing of theirs is
+  renamed or moved.
+- A payee is recognised behind a payment processor: `PAYPAL *NETFLIX`
+  finds the payee Netflix, which it did not.
+- The category lists of the grid, the transaction dialog and the bulk bar
+  are grouped by parent category.
+- API: `GET /categorisation/summary`, `GET /categorisation/learned`,
+  `DELETE /categorisation/learned/{id}`, `POST /categorisation/refresh`;
+  `POST /rules/merchant/preview`, `POST /rules/merchant`, `POST
+  /rules/{id}/revert`; `GET /subscriptions`, `GET /subscriptions/{id}`,
+  `GET /subscriptions/events`, `POST /subscriptions/events/seen`, `POST
+  /subscriptions/{id}/decision`. Transactions gain `merchant_key`,
+  `merchant`, `category_source`, `category_confidence`,
+  `category_rule_id`, `suggested_category_id` and `subscription_id`, the
+  filters `category_source`, `suggested`, `merchant` and `subscription`,
+  and the bulk action `accept_suggestions`. Recurring items gain `kind`,
+  `status`, `status_source` and `merchant`; rules gain the condition
+  `merchant`. The import run summary gains `categorised` and `suggested`.
+  Live events `transaction.categorised` and `subscription.changed`. Audit
+  actions `transaction.categorise`, `categorise.refresh`, `memory.forget`,
+  `rule.revert`, `subscription.decide` and
+  `transaction.bulk_accept_suggestions`, all with ids and counts only
+  (docs/API.md).
+- Migration `0014`: provenance columns on `transaction`, kind, status and
+  price facts on `scheduled_transaction`, the tables `merchant_memory` and
+  `subscription_event` (docs/DATA_MODEL.md). Worker jobs
+  `categorise.dispatch` (hourly) and `categorise.refresh`.
+- docs/CATEGORISATION.md: how a category is decided, what is learned and
+  how to forget it, the merchant list and how to propose a merchant,
+  subscriptions, and what the measured figures are and are not.
+
+### Changed
+
+- **Re-applying rules no longer overwrites a category a person chose.**
+  The transaction is still tagged, flagged and annotated; the rules dry
+  run lists the category action as skipped.
+- **A newer merchant list only touches what nobody decided.** After an
+  upgrade a background pass looks again at uncategorised transactions,
+  suggestions and categories that came from the merchant list or a
+  keyword, within the hour, and at nothing else. Existing categories are
+  marked "from before this version" and are never guessed over.
+- **A guess never makes an imported row look edited.** Reading a document
+  again still replaces a row that only carries a guessed category and
+  still keeps one whose category a person changed.
+- **Deleting a found recurring item dismisses it** ("Not recurring")
+  instead of removing it. It used to come back with the next night's
+  detection. `DELETE /recurring/{id}` still answers `204`; a hand-entered
+  item is deleted as before.
+- **Recurring detection is stricter.** Series are grouped by merchant
+  instead of by payee, so history no longer splits when a payee is
+  created. Groceries, restaurants, coffee, fuel, parking, taxis, transit,
+  general shopping, cash, transfers and card payments are no longer
+  listed as recurring. A series with thin evidence is suggested, and is
+  in no calendar or forecast until it is confirmed or more charges arrive.
+- **Nothing is "missed" because a statement was not uploaded.** Whether a
+  series still runs is judged against the newest transaction of its
+  account, not against today.
+- The Calendar's second tab is named "Recurring items"; it shows each
+  item's kind and state in the words of the Subscriptions page, and its
+  separate Suggestions card is gone because suggested series are rows.
+- "Streaming and subscriptions" is named "Streaming" for new households
+  (a subscription is a series, not a category). Existing households keep
+  their name.
+- The import run summary's `rules_changed` counts the rows a rule
+  categorised, no longer rows a rule changed in any other way.
+- Exports are archive format 3: they carry how each category was decided,
+  suggestions, what was learned and the state of every series. Formats 1
+  and 2 still import. An archive of this release cannot be imported into
+  an earlier one (docs/PORTABILITY.md).
+- MCP and the AI read API are unchanged in size (19 tools, 19 routes).
+  `get_recurring` rows gain `kind` and `status`. The merchant key, what
+  was learned and the subscription changes are not exposed
+  (docs/AI_ACCESS.md).
+- **Limits of this release.** The merchant list covers the United States
+  only, and a local shop is by definition not in it: it is learned from
+  the first correction. The figures under "Added" are measured on
+  invented data (1,200 labelled lines, a planted two-year ledger); with
+  nobody filing the transactions the engine leaves open, the kind of a
+  series (bill, subscription, income) is right for 82.5% of the planted
+  series instead of 100%, which is under the 90% target and is held at
+  that figure by its own test. Categories from before this release are not
+  known to be a person's choice, so a re-applied rule can still change
+  them. A wire transfer is only suggested as a transfer between your
+  accounts, never stated, because a wire may pay somebody else. When a
+  later merchant list or clean-up renames a merchant, what
+  was learned, the rules that name it and its recurring series follow the
+  new name (a series follows its own account's charges, whatever a charge
+  of the same old name on another account is called now); when that one
+  merchant becomes two, a rule or a series that named it stays with the
+  old name and a rule has to be made again. A series you dismissed or
+  ended then still holds for both names: what is found under the other one
+  on that account is only suggested, without a "New" alert. A format 2 archive written before migration `0009` (before
+  1.0.0-rc.3) is refused whole, as it already was (docs/UPGRADING.md).
+  There is no category model, no merchant category code, no automatic
+  payee, no merchant editor and no guess for the lines of a split.
+
+### Fixed
+
+- "Always categorise like this" could save a rule that did not match the
+  transaction it was made from, showed a preview that could never count
+  more than one transaction, and was offered to owners and admins only.
+  The rule is now made on the server from the merchant, the preview is
+  counted over the whole ledger, and a rule that cannot take effect is
+  refused.
+- A recurring item that stopped stayed active for ever. It is now marked
+  missed and then ended, against the account's newest transaction.
+- A price change of a recurring item was silent. It is now listed, and
+  the series keeps its history across the change.
+- Weekly groceries and similar habits were listed as active recurring
+  items: 6 of 25 decoys on the test ledger, now none.
+- A found recurring item that was deleted came back with the next
+  detection, and a yearly charge needed two years to be noticed (see
+  Changed and Added).
+
+### Removed
+
+- The old "Always categorise like this" dialog and its key builder in the
+  browser (replaced, see Added). Rules made with it stay in the rules
+  list and keep working.
+- The Suggestions card on the Calendar's recurring tab and its dry-run
+  request from the page. `GET /recurring/candidates` is still served.
 
 ## [1.0.0-rc.9] - 2026-11-16
 

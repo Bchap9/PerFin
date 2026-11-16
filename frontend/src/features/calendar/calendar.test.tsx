@@ -19,7 +19,13 @@ const SCHEDULE = {
   origin: "detected",
   active: true,
   last_seen_on: "2026-10-10",
+  kind: "subscription",
+  status: "active",
+  status_source: "detector",
+  merchant: "Streaming",
 };
+
+const schedule = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ ...SCHEDULE, id, name, merchant: name, ...extra });
 
 describe("calendar", () => {
   it("shows what is due with the expected balance", async () => {
@@ -62,17 +68,85 @@ describe("calendar", () => {
       ...referenceHandlers(),
       "GET /api/v1/cashflow/calendar": () => new Response(null, { status: 404 }),
       "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
-      "GET /api/v1/recurring/candidates": () => json({ as_of: "2026-11-03", items: [] }),
-      "PATCH /api/v1/recurring/:id": () => json({ ...SCHEDULE, active: false }),
+      "PATCH /api/v1/recurring/:id": () => json({ ...SCHEDULE, active: false, status: "paused", status_source: "person" }),
     });
     renderApp("/calendar");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("tab", { name: "Recurring and subscriptions" }));
+    expect(screen.queryByRole("tab", { name: "Recurring and subscriptions" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("tab", { name: "Recurring items" }));
     const row = within(await screen.findByRole("table", { name: "Recurring items" })).getByRole("row", { name: /Streaming/ });
     expect(within(row).getByText("Found for you")).toBeInTheDocument();
     expect(within(row).getByText("Every month")).toBeInTheDocument();
     await user.click(within(row).getByRole("button", { name: "Pause Streaming" }));
     await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
     expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.body).toEqual({ active: false });
+    // Suggested series are rows of the table now; the old pattern list is not asked for.
+    expect(api.callsTo("GET", "/api/v1/recurring/candidates")).toHaveLength(0);
+    expect(screen.queryByRole("heading", { name: "Suggestions" })).not.toBeInTheDocument();
+  });
+
+  it("the recurring tab shows kind and status and dismisses a detected item", async () => {
+    const rows = [
+      SCHEDULE,
+      schedule("s-2", "Harbor Water", { kind: "bill", status: "confirmed", status_source: "person" }),
+      schedule("s-3", "Payday", { kind: "income", status: "paused", status_source: "person", active: false, amount_min: money("2100.00"), amount_max: money("2100.00") }),
+      schedule("s-4", "Puzzle Post", { kind: "other", status: "suggested", active: false }),
+      schedule("s-5", "Old Gym", { kind: "subscription", status: "dismissed", status_source: "person", active: false }),
+      schedule("s-6", "Garden Club", { kind: "bill", status: "confirmed", status_source: "person", origin: "manual" }),
+    ];
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => new Response(null, { status: 404 }),
+      "GET /api/v1/recurring": () => json({ items: rows }),
+      "PATCH /api/v1/recurring/:id": () => json(SCHEDULE),
+      "DELETE /api/v1/recurring/:id": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/calendar");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "Recurring items" }));
+    const table = await screen.findByRole("table", { name: "Recurring items" });
+    const headers = within(table).getAllByRole("columnheader").map((cell) => cell.textContent);
+    const cell = (name: RegExp, column: string): HTMLElement => {
+      const cells = within(within(table).getByRole("row", { name })).getAllByRole("cell");
+      // The name is the row header, so the cells start one column later.
+      const found = cells.at(headers.indexOf(column) - 1);
+      if (found === undefined) {
+        throw new Error(`no ${column} cell`);
+      }
+      return found;
+    };
+    expect(cell(/Streaming/, "Kind")).toHaveTextContent("Subscription");
+    expect(cell(/Streaming/, "State")).toHaveTextContent("Found for you");
+    expect(cell(/Harbor Water/, "Kind")).toHaveTextContent("Bill");
+    expect(cell(/Harbor Water/, "State")).toHaveTextContent("Confirmed");
+    expect(cell(/Payday/, "Kind")).toHaveTextContent("Income");
+    expect(cell(/Payday/, "State")).toHaveTextContent("Paused");
+    expect(cell(/Puzzle Post/, "Kind")).toHaveTextContent("Other");
+    expect(cell(/Puzzle Post/, "State")).toHaveTextContent("Might be recurring");
+    expect(cell(/Old Gym/, "State")).toHaveTextContent("Not a subscription");
+
+    // The view of subscriptions and bills is one step away.
+    expect(screen.getByRole("link", { name: "Subscriptions and bills" })).toHaveAttribute("href", "/subscriptions");
+
+    // A found item is not deleted: the person says it is not recurring, and that sticks.
+    const streaming = within(table).getByRole("row", { name: /Streaming/ });
+    expect(within(streaming).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    // One the person added is still deleted; one already dismissed has nothing left to dismiss.
+    expect(within(within(table).getByRole("row", { name: /Garden Club/ })).getByRole("button", { name: "Delete Garden Club" })).toBeInTheDocument();
+    expect(within(within(table).getByRole("row", { name: /Old Gym/ })).queryByRole("button", { name: /Not recurring|Delete/ })).not.toBeInTheDocument();
+    // A suggestion is confirmed, a paused item resumed, a dismissed one brought back: each is `active: true` by a person.
+    expect(within(within(table).getByRole("row", { name: /Puzzle Post/ })).getByRole("button", { name: "Confirm Puzzle Post" })).toBeInTheDocument();
+    expect(within(within(table).getByRole("row", { name: /Payday/ })).getByRole("button", { name: "Resume Payday" })).toBeInTheDocument();
+    expect(within(within(table).getByRole("row", { name: /Old Gym/ })).getByRole("button", { name: "Reopen Old Gym" })).toBeInTheDocument();
+
+    await user.click(within(streaming).getByRole("button", { name: "Not recurring: Streaming" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/recurring/:id")).toHaveLength(1); });
+    expect(api.callsTo("DELETE", "/api/v1/recurring/:id")[0]?.path).toBe("/api/v1/recurring/s-1");
+
+    await user.click(within(within(table).getByRole("row", { name: /Puzzle Post/ })).getByRole("button", { name: "Confirm Puzzle Post" }));
+    await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
+    expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.path).toBe("/api/v1/recurring/s-4");
+    expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.body).toEqual({ active: true });
   });
 });

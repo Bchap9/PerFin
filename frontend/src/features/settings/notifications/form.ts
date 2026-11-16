@@ -12,6 +12,10 @@ export const KINDS: readonly { kind: Kind; label: string }[] = [
   { kind: "review_waiting", label: "Items are waiting in Review (daily)" },
   { kind: "tax_reminder", label: "Expected tax documents are still missing" },
   { kind: "backup_failed", label: "A backup failed" },
+  { kind: "subscription_new", label: "A new subscription is found" },
+  { kind: "subscription_price_changed", label: "A subscription's price changes" },
+  { kind: "subscription_missed", label: "An expected charge does not arrive" },
+  { kind: "subscription_renewal", label: "A subscription or bill renews within a week" },
 ];
 
 export const TYPES: readonly { value: ChannelType; label: string }[] = [
@@ -222,6 +226,11 @@ function checkName(form: ChannelForm, errors: Record<string, string>): void {
   }
 }
 
+/** The ticked kinds as the request's `events`; the server refuses a kind it does not know. */
+function eventsOf(form: ChannelForm): Kind[] {
+  return form.kinds;
+}
+
 /** The POST body of a new channel. */
 export function buildCreate(form: ChannelForm): Built<ChannelCreate> {
   const errors: Record<string, string> = {};
@@ -232,7 +241,7 @@ export function buildCreate(form: ChannelForm): Built<ChannelCreate> {
   }
   return {
     errors,
-    body: { name: form.name.trim(), enabled: form.enabled, events: form.kinds, config: config as ChannelCreate["config"] },
+    body: { name: form.name.trim(), enabled: form.enabled, events: eventsOf(form), config: config as ChannelCreate["config"] },
   };
 }
 
@@ -244,7 +253,7 @@ export function buildUpdate(form: ChannelForm, channel: Channel): Built<ChannelU
   if (Object.keys(errors).length > 0) {
     return { body: null, errors };
   }
-  return { errors, body: { name: form.name.trim(), enabled: form.enabled, events: form.kinds, config } };
+  return { errors, body: { name: form.name.trim(), enabled: form.enabled, events: eventsOf(form), config } };
 }
 
 const OUTCOMES: Readonly<Record<Outcome, string>> = {

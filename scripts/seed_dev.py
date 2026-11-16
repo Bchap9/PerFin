@@ -27,8 +27,15 @@ database that has real users). On an empty database it
   in this process (sandboxed extraction, so Linux), which leaves items in the
   review queue.
 
-A second run finds the seed and changes nothing. Every name, number and
-amount is generated; nothing here is real.
+The card account's rows are posted without a category, and a few of them
+name merchants the bundled dictionary knows, so the demo shows what the
+categorisation engine and subscription detection make of a ledger nobody
+has touched: facts, a suggestion, rows it leaves alone, and two
+subscriptions.
+
+A second run finds the seed and changes nothing. Every person, number and
+amount is generated; the only real names are the public brand names of a few
+merchants on the card (the dictionary is a list of real merchants).
 """
 
 from __future__ import annotations
@@ -241,6 +248,39 @@ LEDGER_CATEGORY = {
 }
 
 
+#: Charged to the card on the same day every month: (day, amount, descriptor).
+CARD_SUBSCRIPTIONS = (
+    (12, "15.49", "NETFLIX.COM"),
+    (4, "10.99", "SPOTIFY USA"),
+)
+#: One-off card purchases: (days before today, amount, descriptor). The store
+#: numbers and towns are invented. The marketplace sells everything, so its
+#: category is only suggested.
+CARD_PURCHASES = (
+    (41, "64.20", "KROGER #0412 ASHGROVE OH"),
+    (33, "40.11", "SHELL OIL 57442190041 ASHGROVE OH"),
+    (27, "5.45", "STARBUCKS STORE 08213 ASHGROVE OH"),
+    (19, "31.18", "AMZN Mktp US*MB5ZH9ZC"),
+    (13, "58.90", "KROGER #0412 ASHGROVE OH"),
+    (6, "9.87", "MCDONALD'S F12841 ASHGROVE OH"),
+)
+
+
+def known_card_rows(today: date) -> list[synth.SynthTxn]:
+    """Card rows that name merchants the dictionary knows, oldest first."""
+    rows = [
+        synth.SynthTxn(day, -Decimal(amount), payee, "", "")
+        for number, amount, payee in CARD_SUBSCRIPTIONS
+        for back in range(HISTORY_MONTHS, -1, -1)
+        if (day := month_start(today, back) + timedelta(days=number - 1)) <= today
+    ]
+    rows += [
+        synth.SynthTxn(today - timedelta(days=back), -Decimal(amount), payee, "", "")
+        for back, amount, payee in CARD_PURCHASES
+    ]
+    return sorted(rows, key=lambda row: row.posted)
+
+
 def _account(seeding: Seeding, **body: Any) -> dict[str, Any]:
     created: dict[str, Any] = seeding.api.post("/accounts", body)
     seeding.count("accounts")
@@ -302,7 +342,10 @@ def build_ledger(seeding: Seeding) -> dict[str, dict[str, Any]]:
         ),
     }
 
-    def post_all(account: dict[str, Any], ledger: Sequence[synth.SynthTxn]) -> None:
+    def post_all(
+        account: dict[str, Any], ledger: Sequence[synth.SynthTxn], *, categorised: bool = True
+    ) -> None:
+        """Post ``ledger``; without ``categorised`` no row is given a category by hand."""
         for txn in ledger:
             body: dict[str, Any] = {
                 "account_id": account["id"],
@@ -312,7 +355,7 @@ def build_ledger(seeding: Seeding) -> dict[str, dict[str, Any]]:
                 "memo": txn.memo,
                 "status": "cleared",
             }
-            category = _category_for(txn, categories)
+            category = _category_for(txn, categories) if categorised else None
             if category is not None:
                 body["category_id"] = category
             api.post("/transactions", body)
@@ -327,7 +370,9 @@ def build_ledger(seeding: Seeding) -> dict[str, dict[str, Any]]:
             )
     post_all(accounts["checking"], checking)
     post_all(accounts["savings"], savings_side)
-    post_all(accounts["card"], synth.synth_ledger(2, start=first, days=days, credit_card=True))
+    # The card is left to the engine: no category is chosen for any of its rows.
+    card = synth.synth_ledger(2, start=first, days=days, credit_card=True)
+    post_all(accounts["card"], [*card, *known_card_rows(today)], categorised=False)
     cash = [
         synth.SynthTxn(
             first + timedelta(days=12 * i + 3), -Decimal(f"{9 + 3 * i}.50"), payee, "", ""

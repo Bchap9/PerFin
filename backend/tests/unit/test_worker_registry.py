@@ -34,7 +34,7 @@ from app.workers.registry import (
     validate_job_type,
 )
 from app.workers.runner import WorkerConfig, default_worker_id, describe_exception
-from app.workers.scheduler import RecurringJob, Schedule
+from app.workers.scheduler import SCHEDULE, RecurringJob, Schedule
 
 
 class Thing(BaseModel):
@@ -156,6 +156,22 @@ def test_discover_imports_noop_handler() -> None:
     assert spec.payload_model is NoopPayload
     assert spec.timeout == 30
     assert spec.max_attempts == 3
+
+
+def test_categorise_jobs_are_registered_and_dispatched_hourly() -> None:
+    discover_handlers()
+    dispatch = REGISTRY.require("categorise.dispatch")
+    assert (dispatch.timeout, dispatch.max_attempts) == (300, 3)
+    refresh = REGISTRY.require("categorise.refresh")
+    assert (refresh.timeout, refresh.max_attempts) == (900, 3)
+    # Other code queues a refresh with just this, whatever else the payload holds.
+    assert refresh.payload_model.model_validate({"force": True}).model_dump()["force"] is True
+    with pytest.raises(ValidationError):
+        refresh.payload_model.model_validate({"force": True, "unexpected": 1})
+    [hourly] = [job for job in SCHEDULE.jobs() if job.job_type == "categorise.dispatch"]
+    assert hourly.interval == timedelta(hours=1)
+    # Only the dispatcher is on the clock: a refresh is queued per household.
+    assert not [job for job in SCHEDULE.jobs() if job.job_type == "categorise.refresh"]
 
 
 def test_noop_payload_is_strict() -> None:

@@ -3,6 +3,7 @@
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
 export { Card, type CardProps } from "./Card";
+export { CategoryPicker, type CategoryPickerProps, type PickerCategory } from "./CategoryPicker";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
 export { cx } from "./cx";
 export { Dialog, type DialogProps } from "./Dialog";

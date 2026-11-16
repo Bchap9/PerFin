@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -19,6 +20,9 @@ from sqlalchemy import select
 from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.budgets.models import BudgetLine
+from app.domain.categorisation import engine as categorisation
+from app.domain.categorisation import memory
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.transactions.models import (
     Category,
     Payee,
@@ -147,6 +151,69 @@ def test_category_delete_rules(
     assert len(household_audit(factories, household_id, "category.delete")) == 2
 
 
+def test_deleting_a_category_makes_its_guessed_rows_undecided_again(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    household_id = _hid(owner)
+    doomed = ledger.category(household_id, name="Takeaway")
+    kept = ledger.category(household_id, name="Quick bites")
+    account = ledger.account(household_id)
+    confidence = Decimal("0.90")
+
+    def row(source: str, **fields: Any) -> Transaction:
+        fields.setdefault("category", doomed)
+        return ledger.transaction(
+            account, category_source=source, category_confidence=confidence, **fields
+        )
+
+    guessed = {source: row(source) for source in ("learned", "dictionary", "keyword")}
+    decided = {source: row(source) for source in ("person", "file", "rule", "payee", "legacy")}
+    suggested = row("learned", category=None, suggested_category_id=doomed.id)
+    elsewhere = row("dictionary", category=kept)
+    before = {
+        txn.id: txn.updated_at
+        for txn in (*guessed.values(), *decided.values(), suggested, elsewhere)
+    }
+
+    assert owner.delete(f"{CATEGORIES}/{doomed.id}").status_code == 204
+
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        stored = {
+            txn.id: txn
+            for txn in db.execute(select(Transaction).where(Transaction.id.in_(before))).scalars()
+        }
+        undecided = set(
+            db.execute(
+                select(Transaction.id).where(
+                    Transaction.id.in_(before), categorisation.undecided_clause()
+                )
+            ).scalars()
+        )
+
+    def state(txn: Transaction) -> tuple[Any, ...]:
+        found = stored[txn.id]
+        return (
+            found.category_id,
+            found.suggested_category_id,
+            found.category_source,
+            found.category_confidence,
+        )
+
+    # A guess about a category that is gone is no decision: the next pass looks again.
+    for source, txn in guessed.items():
+        assert state(txn) == (None, None, None, None), source
+    assert state(suggested) == (None, None, None, None)
+    assert undecided == {txn.id for txn in (*guessed.values(), suggested)}
+    # What a person, a file, a rule or a payee decided stays a decided "no category".
+    for source, txn in decided.items():
+        assert state(txn) == (None, None, source, confidence), source
+    assert state(elsewhere) == (kept.id, None, "dictionary", confidence)
+    # None of it looks like a person's edit.
+    assert {row_id: found.updated_at for row_id, found in stored.items()} == before
+
+
 def test_category_merge_reassigns_everything(
     actors: Actors, factories: Factories, ledger: LedgerFactories
 ) -> None:
@@ -199,6 +266,70 @@ def test_category_merge_reassigns_everything(
     assert len(audit) == 1
     assert audit[0].after is not None
     assert audit[0].after["moved"]["transactions"] == 1
+
+
+def test_merge_moves_the_key_the_suggestions_and_the_memory(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    household_id = _hid(owner)
+    source = ledger.category(household_id, name="Takeaway", system_key="food.fast_food")
+    target = ledger.category(household_id, name="Quick bites")
+    account = ledger.account(household_id)
+    suggested = ledger.transaction(account, suggested_category_id=source.id)
+    decided = datetime(2026, 4, 6, 9, 0, tzinfo=UTC)
+    diner, cinema = "corner diner", "lamplight cinema"
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        for key, category, days in (
+            (diner, target, 0),
+            (diner, target, 1),
+            (diner, target, 2),
+            (diner, source, 5),
+            (diner, source, 9),
+            (cinema, source, 3),
+        ):
+            memory.record(
+                db, household_id, key, "out", category.id, at=decided + timedelta(days=days)
+            )
+
+    merged = owner.post(f"{CATEGORIES}/{source.id}/merge", json={"into": str(target.id)})
+    assert merged.status_code == 200, merged.text
+    # The key is the dictionary's handle on the category: it goes with the merge.
+    assert merged.json()["system_key"] == "food.fast_food"
+
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        row = db.execute(select(Transaction).where(Transaction.id == suggested.id)).scalar_one()
+        # Re-pointed, still only a suggestion, and the row is not touched by it.
+        assert (row.suggested_category_id, row.category_id) == (target.id, None)
+        assert row.updated_at == suggested.updated_at
+        remembered = {
+            (m.merchant_key, m.direction, m.category_id): (m.decisions, m.last_decided_at)
+            for m in db.execute(select(MerchantMemory)).scalars()
+        }
+    assert remembered == {
+        (diner, "out", target.id): (5, decided + timedelta(days=9)),
+        (cinema, "out", target.id): (1, decided + timedelta(days=3)),
+    }
+    moved = household_audit(factories, household_id, "category.merge")[0].after
+    assert moved is not None
+    # Counts only: one suggestion, and the source's two memory rows.
+    assert (moved["moved"]["suggestions"], moved["moved"]["memory"]) == (1, 2)
+
+    # A target that has a key of its own keeps it; the source's key goes with the source.
+    keyed = ledger.category(household_id, name="Pizza", system_key="food.delivery")
+    again = owner.post(f"{CATEGORIES}/{keyed.id}/merge", json={"into": str(target.id)})
+    assert again.status_code == 200, again.text
+    assert again.json()["system_key"] == "food.fast_food"
+    assert (
+        _scalar(
+            factories,
+            household_id,
+            select(Category.id).where(Category.system_key == "food.delivery"),
+        )
+        is None
+    )
 
 
 def test_category_merge_refusals(actors: Actors, ledger: LedgerFactories) -> None:

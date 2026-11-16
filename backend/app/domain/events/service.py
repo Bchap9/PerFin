@@ -18,8 +18,9 @@ the membership, stops.
   delivered only if at least one of them is visible;
 * an event whose payload has ``all_account_ids`` (goals: readable only when
   every account is visible) is delivered only if all of them are visible;
-* fail closed (review finding P2-SR-03): a ``transaction.*``, ``balance.*``
-  or ``goal.*`` event that names no account is dropped;
+* fail closed (review finding P2-SR-03): a ``transaction.*``, ``balance.*``,
+  ``goal.*``, ``schedule.*`` or ``subscription.*`` event (and the others in
+  :data:`ACCOUNT_SCOPED_PREFIXES`) that names no account is dropped;
 * a ``document.*`` event (payload ``id``) or ``review.*`` event (payload
   ``document_id``) about a document that exists and is hidden is dropped;
   ``document.deleted`` (the row is gone) names the document's
@@ -66,6 +67,7 @@ ACCOUNT_SCOPED_PREFIXES: Final = (
     "loan.",
     "asset.",
     "schedule.",
+    "subscription.",
     "networth.",
 )
 

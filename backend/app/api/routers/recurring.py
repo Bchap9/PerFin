@@ -2,14 +2,18 @@
 """Recurring transactions and the cash-flow calendar (API.md ``/recurring``, ``/cashflow``).
 
 * ``GET /recurring?origin=&active=&account=``: any role; schedules of visible
-  accounts (detected and manual), soonest first, at most 500.
+  accounts (detected and manual), soonest first, at most 500. A dismissed
+  series is not listed.
 * ``GET /recurring/candidates?account=``: any role; detection over the
   visible accounts, nothing written.
 * ``POST /recurring/detect``: member or above; writes detected schedules for
   the accounts the caller may edit.
 * ``POST /recurring`` (``Idempotency-Key`` honoured), ``GET`` / ``PATCH`` /
   ``DELETE /recurring/{id}``: reads any role, writes member or above on an
-  account the caller may edit.
+  account the caller may edit. ``PATCH`` with ``active`` is a person's pause
+  or confirmation, with ``kind`` their word on what the series is.
+  ``DELETE`` removes a manual schedule and dismisses a detected one, which
+  detection then never brings back.
 * ``GET /cashflow/calendar?days=&account=``: any role; expected income and
   bills for the next ``days`` days (1-366, default 30).
 

@@ -31,6 +31,7 @@ from app.core.errors import ProblemError
 from app.core.money import Money, MoneyIn
 from app.domain.transactions.models import (
     MEMO_MAX,
+    MERCHANT_KEY_MAX,
     NOTES_MAX,
     PAYEE_MAX,
     ReviewState,
@@ -94,6 +95,16 @@ def _unique_optional_ids(values: list[uuid.UUID] | None) -> list[uuid.UUID] | No
 
 
 TagIds = Annotated[list[uuid.UUID], Field(max_length=TAGS_MAX), AfterValidator(_unique_ids)]
+
+#: How a category was decided (``app.domain.transactions.models.CATEGORY_SOURCES``).
+CategorySource = Literal[
+    "person", "file", "rule", "payee", "learned", "dictionary", "keyword", "legacy"
+]
+#: A merchant key: lower-case ``a-z0-9`` tokens joined by single spaces
+#: (``MERCHANT_KEY_PATTERN``, written out because the API schema needs a literal).
+MerchantKey = Annotated[
+    str, Field(pattern=r"^[a-z0-9]+( [a-z0-9]+)*$", max_length=MERCHANT_KEY_MAX)
+]
 
 
 class _In(BaseModel):
@@ -180,7 +191,7 @@ class SplitSet(_In):
         return self
 
 
-BulkActionName = Literal["categorise", "tag", "untag", "delete", "confirm"]
+BulkActionName = Literal["categorise", "tag", "untag", "delete", "confirm", "accept_suggestions"]
 
 
 class BulkAction(_In):
@@ -190,7 +201,10 @@ class BulkAction(_In):
       transactions are skipped (their categories live on the splits);
     * ``tag`` / ``untag``: add / remove ``tag_ids``;
     * ``delete``: delete (each deletion is audited);
-    * ``confirm``: set ``review_state`` to ``confirmed``.
+    * ``confirm``: set ``review_state`` to ``confirmed``;
+    * ``accept_suggestions``: make each row's suggested category its category,
+      as the person's own choice (no ``category_id``, no ``tag_ids``); a row
+      without a suggestion is skipped with the reason ``suggestion-missing``.
     """
 
     action: BulkActionName
@@ -270,6 +284,17 @@ class TransferOut(BaseModel):
 
 
 class TransactionOut(BaseModel):
+    """A transaction.
+
+    How its category was decided: ``category_source`` (``null`` while nobody
+    and nothing decided) with ``category_confidence`` (decimal text, two
+    places) and, for ``rule``, ``category_rule_id``. ``suggested_category_id``
+    is a guess PerFin is not sure enough of to state: it is set only while
+    ``category_id`` is ``null`` and counts in no report. ``merchant_key`` is
+    who was paid, ``merchant`` the name to show for it; ``subscription_id``
+    is the recurring series the row is a charge of.
+    """
+
     id: uuid.UUID
     account_id: uuid.UUID
     posted_date: date
@@ -289,6 +314,13 @@ class TransactionOut(BaseModel):
     splits: list[SplitOut]
     created_at: datetime
     updated_at: datetime
+    merchant_key: str | None = None
+    merchant: str | None = None
+    category_source: CategorySource | None = None
+    category_confidence: str | None = None
+    category_rule_id: uuid.UUID | None = None
+    suggested_category_id: uuid.UUID | None = None
+    subscription_id: uuid.UUID | None = None
 
 
 class TransactionPage(BaseModel):

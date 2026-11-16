@@ -41,7 +41,27 @@ and an integration test checks that a delivered webhook names nobody
 | `review_waiting` | daily job `notify_review_waiting`: the household has open review items | Items are waiting for you in the review queue. |
 | `tax_reminder` | `tax.reminder` on the `PERFIN_TAX_REMINDER_DATES` days | Expected tax documents for last year are still missing. |
 | `backup_failed` | `perfin notify backup-failed` (see below) | A backup did not complete. Please check the server. |
+| `subscription_new` | detection found a new subscription or bill, or a trial became a paid one (`subscription.new`, `subscription.trial_converted`) | A new subscription was found. Open PerFin to see it. |
+| `subscription_price_changed` | a fixed-price series was charged a different amount (`subscription.price_changed`) | A subscription's price changed. Open PerFin to see it. |
+| `subscription_missed` | an expected charge did not arrive, a series stopped, or a series a person ended was charged again (`subscription.missed`, `subscription.ended`, `subscription.charged_after_end`) | An expected subscription or bill charge did not arrive. Open PerFin to see it. |
+| `subscription_renewal` | the daily detection job, seven days before a half-yearly or yearly charge (`subscription.renewal_due`) | A subscription or bill renews within a week. Open PerFin to see it. |
 | (test) | `POST .../channels/{id}/test` | This is a test notification. The channel works. |
+
+The four subscription kinds (1.0.0-rc.10, CATEGORISATION.md "What it
+reports") are raised by `app.domain.recurring.subscriptions` when
+detection runs: in the daily `recurring.detect` job (which also announces
+renewals) and on `POST /recurring/detect`. Each change is
+stored once as a `subscription_event` row and announced once. The sentence
+is fixed text: it carries no merchant, no name, no amount, no count, no
+account and no date, like every other kind; which subscription, what it
+costs and when are in the app, behind sign-in
+(`backend/tests/integration/test_notifications.py::test_subscription_sentences_carry_no_detail`).
+Income and "other" series are watched but never announced, a suggested
+series is announced only when it is new, and the first detection after
+the upgrade announces nothing about series that were already running.
+There is no new channel type and no new destination. A channel created
+before rc.10 keeps the kinds it was subscribed to: tick the new ones in
+Settings, Notifications to receive them.
 
 A security event about one user (lock, recovery code, new device, MFA reset)
 is sent to the channels of **every household the user belongs to**: the

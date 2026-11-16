@@ -24,6 +24,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/assets", label: "Assets", summary: "Property, vehicles and other manually valued assets." },
   { to: "/net-worth", label: "Net worth", summary: "Assets and liabilities over time." },
   { to: "/calendar", label: "Calendar", summary: "Recurring bills and income, and the cash-flow calendar." },
+  { to: "/subscriptions", label: "Subscriptions", summary: "Subscriptions and bills: what they cost and what changed." },
   { to: "/documents", label: "Documents", summary: "Statements and records, encrypted at rest." },
   { to: "/review", label: "Review", summary: "Items from imports that need a decision." },
   { to: "/tax", label: "Tax", summary: "Tax-year checklists and exports." },

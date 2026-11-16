@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "../accounts/ledger.css";
+import "./transactions.css";
 
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -19,14 +20,19 @@ import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, isIsoDate } from "../../lib/dates";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { canManageMembers, useAuthSession } from "../auth/session";
+import { AlwaysCategoriseDialog, RuleSavedNotice, type SavedRule } from "./AlwaysCategoriseDialog";
 import {
   autoPairTransfers,
+  canTeach,
   EMPTY_FILTERS,
+  getTransaction,
   invalidateLedger,
   listTransactions,
+  merchantName,
   txKeys,
   useCategories,
+  useCategorisationSummary,
+  useRuleNames,
   usePayees,
   useTags,
   type ReviewState,
@@ -38,9 +44,10 @@ import { BulkBar } from "./BulkBar";
 import { CategoryCell, NotesCell, PayeeCell, rowLabel, TagsCell } from "./cells";
 import { DeleteTransactionDialog } from "./DeleteTransactionDialog";
 import { useEditTransaction } from "./optimistic";
-import { RememberCategoryDialog } from "./RememberCategoryDialog";
+import { isSuggestion } from "./provenance";
 import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
+import { dismissTeach, teachDismissed, TeachPrompt, type TeachOffer } from "./TeachPrompt";
 import { TransactionDialog } from "./TransactionDialog";
 import { TransferDialog } from "./TransferDialog";
 
@@ -57,8 +64,10 @@ function isReviewState(value: string): value is ReviewState | "" {
 function initialFilters(search: Record<string, unknown>): TransactionFilters {
   // A link from a report, an account page or a document narrows the list:
   // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
-  // `document` (the file the rows were imported from), named like the filters
-  // of GET /transactions.
+  // `document` (the file the rows were imported from) and `subscription` (the
+  // series the charges belong to), named like the filters of GET
+  // /transactions. `suggested=true` shows only the rows with a suggestion.
+  // (`always` is not a filter: see `linkedTransactionId`.)
   const given = new Map(Object.entries(search));
   const text = (key: string): string => {
     const value = given.get(key);
@@ -72,11 +81,23 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
     dateFrom: day("date_from"),
     dateTo: day("date_to"),
     document: text("document"),
+    subscription: text("subscription"),
+    suggested: given.get("suggested") === true || text("suggested") === "true",
   };
+}
+
+/**
+ * `?always=<transaction id>`: "Make it a rule" on the learned page links here
+ * to open "Always categorise <merchant> as..." for that transaction.
+ */
+function linkedTransactionId(search: Record<string, unknown>): string | null {
+  const value = new Map(Object.entries(search)).get("always");
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 export function TransactionsPage() {
   const search: Record<string, unknown> = useSearch({ strict: false });
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
   const canWrite = useCanWrite();
@@ -92,10 +113,23 @@ export function TransactionsPage() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [deleting, setDeleting] = useState<Transaction | null>(null);
-  const [remembering, setRemembering] = useState<Transaction | null>(null);
-  // Rules belong to owners and admins (POST /rules).
-  const { session } = useAuthSession();
-  const canMakeRules = canManageMembers(session?.household?.role);
+  // "Always categorise <merchant> as...": the dialog, the offer after a
+  // correction in the grid (one at a time) and the rule that was just saved.
+  const [always, setAlways] = useState<TeachOffer | { transaction: Transaction; categoryId?: undefined } | null>(null);
+  const [offer, setOffer] = useState<TeachOffer | null>(null);
+  const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
+  // A link that names a transaction opens the dialog for it until it is
+  // closed: the row is asked for by id because it need not be on the first
+  // page of the grid. Closing also takes `always` out of the address, so a
+  // reload or the back button does not open it again.
+  const linkedId = canWrite ? linkedTransactionId(search) : null;
+  const [linkClosed, setLinkClosed] = useState(false);
+  const linked = useQuery({
+    queryKey: txKeys.one(linkedId ?? ""),
+    queryFn: () => getTransaction(linkedId ?? ""),
+    enabled: linkedId !== null && !linkClosed,
+  });
+  const linkedRow = linkClosed ? undefined : linked.data;
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -116,6 +150,8 @@ export function TransactionsPage() {
     getNextPageParam: (last) => last.next_cursor,
   });
   const rows = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
+  const summary = useCategorisationSummary();
+  const ruleNames = useRuleNames(rows.some((row) => row.category_source === "rule" && row.category_rule_id != null));
   const accountsById = useMemo(() => new Map((accounts.data ?? []).map((account) => [account.id, account])), [accounts.data]);
   const accountLabelOf = (id: string): string | undefined => {
     const account = accountsById.get(id);
@@ -145,8 +181,32 @@ export function TransactionsPage() {
     setFilters((current) => ({ ...current, document: "" }));
     setSelected(new Set());
   };
+  // Likewise the charges of one subscription ("See in transactions").
+  const showEverySeries = (): void => {
+    setDraft((current) => ({ ...current, subscription: "" }));
+    setFilters((current) => ({ ...current, subscription: "" }));
+    setSelected(new Set());
+  };
+
+  // The two quick filters apply at once and leave the rest of the form as it is.
+  const toggleSuggested = (): void => {
+    const next = !filters.suggested;
+    setDraft((current) => ({ ...current, suggested: next }));
+    setFilters((current) => ({ ...current, suggested: next }));
+    setSelected(new Set());
+  };
+  const toggleUncategorised = (): void => {
+    const next = filters.category === "none" ? "" : "none";
+    setDraft((current) => ({ ...current, category: next }));
+    setFilters((current) => ({ ...current, category: next }));
+    setSelected(new Set());
+  };
+  const counted = (label: string, count: number | undefined): string => (count === undefined ? label : `${label} (${String(count)})`);
 
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
+  // The link opens the dialog only where the row's own menu would offer it.
+  const alwaysOpen =
+    always ?? (linkedRow !== undefined && canTeach(linkedRow) && editable(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const selectableRows = rows.filter(editable);
   const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selected.has(row.id));
   const canAdd = canWrite && (accounts.data ?? []).some((account) => account.can_edit);
@@ -185,13 +245,14 @@ export function TransactionsPage() {
         setTransferring(row);
       },
     },
-    ...(canMakeRules && row.splits.length === 0 && (row.raw_payee ?? "").trim() !== ""
+    // A merchant rule is for members and above, which is everyone who has this menu.
+    ...(canTeach(row)
       ? [
           {
-            id: "remember",
-            label: "Always categorise like this…",
+            id: "always",
+            label: `Always categorise ${merchantName(row) ?? "this merchant"} as…`,
             onSelect: () => {
-              setRemembering(row);
+              setAlways({ transaction: row });
             },
           },
         ]
@@ -216,6 +277,14 @@ export function TransactionsPage() {
       },
     },
   ];
+
+  // A correction on a row that names a merchant may be worth a rule; the
+  // prompt asks the server and stays silent when it is not.
+  const offerRule = (row: Transaction, categoryId: string): void => {
+    if (canTeach(row) && !teachDismissed(row.merchant_key ?? "")) {
+      setOffer({ transaction: row, categoryId });
+    }
+  };
 
   const columns: TableColumn<Transaction>[] = [
     ...(canWrite
@@ -267,7 +336,16 @@ export function TransactionsPage() {
     {
       id: "category",
       header: "Category",
-      cell: (row) => <CategoryCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} categories={categoryList} />,
+      cell: (row) => (
+        <CategoryCell
+          row={row}
+          editable={editable(row)}
+          label={rowLabel(row, payeeList)}
+          categories={categoryList}
+          ruleNames={ruleNames}
+          onCategorised={offerRule}
+        />
+      ),
     },
     {
       id: "tags",
@@ -439,9 +517,50 @@ export function TransactionsPage() {
           </Button>
         </p>
       )}
+      {filters.subscription === "" ? null : (
+        <p className="ledger-actions">
+          <Link to="/subscriptions/$id" params={{ id: filters.subscription }}>
+            Charges of one subscription
+          </Link>
+          <Button variant="ghost" size="sm" aria-label="Remove the subscription filter" onClick={showEverySeries}>
+            Remove
+          </Button>
+        </p>
+      )}
+      <div className="tx-quick-filters" role="group" aria-label="Quick filters">
+        <Button size="sm" aria-pressed={filters.suggested} onClick={toggleSuggested}>
+          {counted("Suggestions", summary.data?.suggestions)}
+        </Button>
+        <Button size="sm" aria-pressed={filters.category === "none"} onClick={toggleUncategorised}>
+          {counted("No category", summary.data?.uncategorised)}
+        </Button>
+      </div>
+      {savedRule === null ? null : (
+        <RuleSavedNotice
+          key={`${savedRule.result.rule.id}:${savedRule.result.rule.updated_at}`}
+          saved={savedRule}
+          onDone={() => {
+            setSavedRule(null);
+          }}
+        />
+      )}
+      {offer === null ? null : (
+        <TeachPrompt
+          offer={offer}
+          categories={categoryList}
+          onAlways={() => {
+            setAlways(offer);
+          }}
+          onDismiss={() => {
+            dismissTeach(offer.transaction.merchant_key ?? "");
+            setOffer(null);
+          }}
+        />
+      )}
       {selected.size > 0 ? (
         <BulkBar
           ids={[...selected]}
+          suggestionIds={rows.filter((row) => selected.has(row.id) && isSuggestion(row)).map((row) => row.id)}
           onDone={() => {
             setSelected(new Set());
           }}
@@ -519,12 +638,23 @@ export function TransactionsPage() {
           }}
         />
       )}
-      {remembering === null ? null : (
-        <RememberCategoryDialog
-          transaction={remembering}
+      {alwaysOpen === null ? null : (
+        <AlwaysCategoriseDialog
+          transaction={alwaysOpen.transaction}
           categories={categoryList}
+          categoryId={alwaysOpen.categoryId}
           onClose={() => {
-            setRemembering(null);
+            setAlways(null);
+            setLinkClosed(true);
+            if (linkedId !== null) {
+              const rest = Object.fromEntries(Object.entries(search).filter(([name]) => name !== "always"));
+              void navigate({ to: "/transactions", search: rest, replace: true });
+            }
+          }}
+          onSaved={(saved) => {
+            setSavedRule(saved);
+            // The merchant has its rule: the offer for it is answered.
+            setOffer((current) => (current?.transaction.merchant_key === alwaysOpen.transaction.merchant_key ? null : current));
           }}
         />
       )}

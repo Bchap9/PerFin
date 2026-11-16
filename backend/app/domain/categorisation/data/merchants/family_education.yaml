@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Family and personal: pets, hair and grooming, childcare, schooling, gifts
+# and giving. Format and sources: ../README.md. One entry a line here: the
+# lists are long.
+#
+# Beauty shops are in shopping.yaml; course and learning subscriptions have
+# their own file. A charity is here only under a name nobody else trades by.
+merchants:
+  # Pets.
+  - {key: petco, name: Petco, category: family.pets, match: [petco]}
+  - {key: petsmart, name: PetSmart, category: family.pets, match: [petsmart]}
+  - {key: chewy, name: Chewy, category: family.pets, match: [chewy =]}
+  - {key: pet supplies plus, name: Pet Supplies Plus, category: family.pets, match: [pet supplies plus]}
+  - {key: petland, name: Petland, category: family.pets, match: [petland]}
+  - {key: pet valu, name: Pet Valu, category: family.pets, match: [pet valu]}
+  - {key: petsense, name: Petsense, category: family.pets, match: [petsense]}
+  - {key: hollywood feed, name: Hollywood Feed, category: family.pets, match: [hollywood feed]}
+  - {key: banfield pet hospital, name: Banfield Pet Hospital, category: family.pets, match: [banfield =, banfield pet]}
+  - {key: vca animal hospitals, name: VCA Animal Hospitals, category: family.pets, match: [vca]}
+  - {key: bluepearl, name: BluePearl Pet Hospital, category: family.pets, match: [bluepearl]}
+  - {key: rover, name: Rover, category: family.pets, match: [rover =]}
+
+  # Hair, grooming and the like.
+  - {key: great clips, name: Great Clips, category: family.personal_care, match: [great clips]}
+  - {key: supercuts, name: Supercuts, category: family.personal_care, match: [supercuts]}
+  - {key: sport clips, name: Sport Clips, category: family.personal_care, match: [sport clips, sportclips]}
+  - {key: fantastic sams, name: Fantastic Sams, category: family.personal_care, match: [fantastic sams, fantastic sam]}
+  - {key: cost cutters, name: Cost Cutters, category: family.personal_care, match: [cost cutters]}
+  - {key: smartstyle, name: SmartStyle, category: family.personal_care, match: [smartstyle]}
+  - {key: hair cuttery, name: Hair Cuttery, category: family.personal_care, match: [hair cuttery]}
+  - {key: regis salons, name: Regis Salons, category: family.personal_care, match: [regis salon, regis salons]}
+  - {key: drybar, name: Drybar, category: family.personal_care, match: [drybar =]}
+  - {key: european wax center, name: European Wax Center, category: family.personal_care, match: [european wax]}
+  - {key: waxing the city, name: Waxing the City, category: family.personal_care, match: [waxing the city]}
+  - {key: massage envy, name: Massage Envy, category: family.personal_care, match: [massage envy]}
+  - {key: hand and stone, name: Hand & Stone Massage and Facial Spa, category: family.personal_care, match: [hand stone, hand and stone]}
+  - {key: elements massage, name: Elements Massage, category: family.personal_care, match: [elements massage]}
+  - {key: amazing lash studio, name: Amazing Lash Studio, category: family.personal_care, match: [amazing lash]}
+  - {key: ideal image, name: Ideal Image, category: family.personal_care, match: [ideal image]}
+  - {key: laseraway, name: LaserAway, category: family.personal_care, match: [laseraway]}
+  - {key: palm beach tan, name: Palm Beach Tan, category: family.personal_care, match: [palm beach tan]}
+  - {key: sun tan city, name: Sun Tan City, category: family.personal_care, match: [sun tan city]}
+  - {key: madison reed, name: Madison Reed, category: family.personal_care, match: [madison reed]}
+
+  # Childcare and activities for children.
+  - {key: kindercare, name: KinderCare, category: family.childcare, match: [kindercare]}
+  - {key: bright horizons, name: Bright Horizons, category: family.childcare, match: [bright horizons]}
+  - {key: the goddard school, name: The Goddard School, category: family.childcare, match: [goddard school, the goddard school]}
+  - {key: primrose schools, name: Primrose Schools, category: family.childcare, match: [primrose school, primrose schools]}
+  - {key: la petite academy, name: La Petite Academy, category: family.childcare, match: [la petite academy]}
+  - {key: childtime, name: Childtime, category: family.childcare, match: [childtime]}
+  - {key: tutor time, name: Tutor Time, category: family.childcare, match: [tutor time]}
+  - {key: the learning experience, name: The Learning Experience, category: family.childcare, match: [the learning experience]}
+  - {key: kiddie academy, name: Kiddie Academy, category: family.childcare, match: [kiddie academy]}
+  - {key: brightwheel, name: brightwheel, category: family.childcare, match: [brightwheel]}
+  - {key: sittercity, name: Sittercity, category: family.childcare, match: [sittercity]}
+  - {key: urbansitter, name: UrbanSitter, category: family.childcare, match: [urbansitter]}
+  - {key: the little gym, name: The Little Gym, category: family.childcare, match: [the little gym, little gym]}
+  - {key: goldfish swim school, name: Goldfish Swim School, category: family.childcare, match: [goldfish swim]}
+  - {key: aqua tots, name: Aqua-Tots Swim Schools, category: family.childcare, match: [aqua tots]}
+
+  # Schooling, tutoring, tests and books for them.
+  - {key: kumon, name: Kumon, category: family.education, match: [kumon]}
+  - {key: sylvan learning, name: Sylvan Learning, category: family.education, match: [sylvan learning]}
+  - {key: mathnasium, name: Mathnasium, category: family.education, match: [mathnasium]}
+  - {key: huntington learning center, name: Huntington Learning Center, category: family.education, match: [huntington learning]}
+  - {key: code ninjas, name: Code Ninjas, category: family.education, match: [code ninjas]}
+  - {key: varsity tutors, name: Varsity Tutors, category: family.education, match: [varsity tutors]}
+  - {key: outschool, name: Outschool, category: family.education, match: [outschool]}
+  - {key: college board, name: College Board, category: family.education, match: [college board, collegeboard]}
+  - {key: common app, name: Common App, category: family.education, match: [common app, commonapp]}
+  - {key: parchment, name: Parchment, category: family.education, match: [parchment =]}
+  - {key: princeton review, name: The Princeton Review, category: family.education, match: [princeton review, the princeton review]}
+  - {key: kaplan, name: Kaplan, category: family.education, match: [kaplan test, kaplan prep]}
+  - {key: pearson, name: Pearson, category: family.education, match: [pearson education, pearson ed]}
+  - {key: mcgraw hill, name: McGraw Hill, category: family.education, match: [mcgraw hill, mheducation]}
+  - {key: cengage, name: Cengage, category: family.education, match: [cengage]}
+  - {key: scholastic, name: Scholastic, category: family.education, match: [scholastic =, scholastic book, scholastic books]}
+  - {key: follett, name: Follett, category: family.education, match: [follett =, follett higher, follett bookstore]}
+  - {key: barnes and noble college, name: Barnes & Noble College, category: family.education, match: [bncollege, bkstr, barnes noble college]}
+  - {key: lakeshore learning, name: Lakeshore Learning, category: family.education, match: [lakeshore learning]}
+  - {key: myschoolbucks, name: MySchoolBucks, category: family.education, match: [myschoolbucks]}
+  - {key: schoolcafe, name: SchoolCafe, category: family.education, match: [schoolcafe]}
+  - {key: payschools, name: PaySchools, category: family.education, match: [payschools]}
+  - {key: udemy, name: Udemy, category: family.education, match: [udemy]}
+  - {key: edx, name: edX, category: family.education, match: [edx]}
+
+  # Gifts, flowers and cards.
+  - {key: 1 800 flowers, name: 1-800-Flowers, category: family.gifts, match: [1 800 flowers, 1800 flowers, 1800flowers]}
+  - {key: ftd, name: FTD, category: family.gifts, match: [ftd]}
+  - {key: proflowers, name: ProFlowers, category: family.gifts, match: [proflowers]}
+  - {key: teleflora, name: Teleflora, category: family.gifts, match: [teleflora]}
+  - {key: edible arrangements, name: Edible Arrangements, category: family.gifts, match: [edible arrangements, edible arrangement]}
+  - {key: shutterfly, name: Shutterfly, category: family.gifts, match: [shutterfly]}
+  - {key: snapfish, name: Snapfish, category: family.gifts, match: [snapfish]}
+  - {key: minted, name: Minted, category: family.gifts, match: [minted =]}
+  - {key: hallmark, name: Hallmark, category: family.gifts, match: [hallmark =, hallmark cards, hallmark gold crown, hallmark store]}
+  - {key: american greetings, name: American Greetings, category: family.gifts, match: [american greetings]}
+  - {key: paper source, name: Paper Source, category: family.gifts, match: [paper source]}
+  - {key: things remembered, name: Things Remembered, category: family.gifts, match: [things remembered]}
+  - {key: harry and david, name: Harry & David, category: family.gifts, match: [harry david, harry and david]}
+  - {key: sees candies, name: See's Candies, category: family.gifts, match: [sees candies, see candies]}
+  - {key: godiva, name: Godiva, category: family.gifts, match: [godiva =, godiva chocolatier]}
+  - {key: spencers, name: Spencer's, category: family.gifts, match: [spencer gifts, spencers =]}
+
+  # Giving.
+  - {key: american red cross, name: American Red Cross, category: family.donations, match: [american red cross, red cross]}
+  - {key: the salvation army, name: The Salvation Army, category: family.donations, match: [salvation army, the salvation army]}
+  - {key: st jude, name: St. Jude Children's Research Hospital, category: family.donations, match: [st jude children, st jude childrens, alsac, stjude]}
+  - {key: unicef, name: UNICEF, category: family.donations, match: [unicef]}
+  - {key: united way, name: United Way, category: family.donations, match: [united way]}
+  - {key: habitat for humanity, name: Habitat for Humanity, category: family.donations, match: [habitat for humanity]}
+  - {key: doctors without borders, name: Doctors Without Borders, category: family.donations, match: [doctors without borders, msf usa]}
+  - {key: feeding america, name: Feeding America, category: family.donations, match: [feeding america]}
+  - {key: aspca, name: ASPCA, category: family.donations, match: [aspca]}
+  - {key: world vision, name: World Vision, category: family.donations, match: [world vision]}
+  - {key: wikimedia, name: Wikimedia Foundation, category: family.donations, match: [wikimedia, wikipedia]}
+  - {key: aclu, name: ACLU, category: family.donations, match: [aclu]}
+  - {key: sierra club, name: Sierra Club, category: family.donations, match: [sierra club]}
+  - {key: the nature conservancy, name: The Nature Conservancy, category: family.donations, match: [nature conservancy, the nature conservancy]}
+  - {key: wounded warrior project, name: Wounded Warrior Project, category: family.donations, match: [wounded warrior]}
+  - {key: american cancer society, name: American Cancer Society, category: family.donations, match: [american cancer]}
+  - {key: march of dimes, name: March of Dimes, category: family.donations, match: [march of dimes]}
+  - {key: make a wish, name: Make-A-Wish, category: family.donations, match: [make a wish]}
+  - {key: compassion international, name: Compassion International, category: family.donations, match: [compassion international, compassion intl]}
+  - {key: samaritans purse, name: Samaritan's Purse, category: family.donations, match: [samaritans purse, samaritan purse]}
+  - {key: catholic charities, name: Catholic Charities, category: family.donations, match: [catholic charities]}
+  - {key: gofundme, name: GoFundMe, category: family.donations, match: [gofundme]}
+  - {key: actblue, name: ActBlue, category: family.donations, match: [actblue]}
+  - {key: winred, name: WinRed, category: family.donations, match: [winred]}
+  - {key: tithe ly, name: Tithe.ly, category: family.donations, match: [tithe ly, tithely]}
+  - {key: pushpay, name: Pushpay, category: family.donations, match: [pushpay]}
+  - {key: givelify, name: Givelify, category: family.donations, match: [givelify]}

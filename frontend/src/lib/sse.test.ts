@@ -116,6 +116,12 @@ describe("event type mapping", () => {
     expect(keys).toContain('["net-worth"]');
   });
 
+  it("a change to a subscription or a schedule refreshes the subscriptions view", () => {
+    expect(invalidationsFor("subscription.changed")).toEqual([["subscriptions"], ["recurring"]]);
+    expect(invalidationsFor("schedule.updated")).toEqual([["recurring"], ["subscriptions"]]);
+    expect(allMappedKeys(DEFAULT_EVENT_MAPPING)).toContainEqual(["subscriptions"]);
+  });
+
   it("maps the Phase 2 ledger event families", () => {
     expect(invalidationsFor("rule.created")).toEqual([["rules"]]);
     expect(invalidationsFor("goal.updated")).toEqual([["goals"], ["dashboard"]]);

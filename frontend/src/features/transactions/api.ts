@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Typed calls for transactions and the category/payee/tag lookups. */
 import { useQuery, type QueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { api, unwrap } from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { queryRoots } from "../../lib/queryKeys";
+import { getCategorisationSummary } from "../categories/api";
+import { listRules, previewMerchantRule, ruleKeys } from "../rules/api";
 
 export { newIdempotencyKey } from "../../lib/idempotency";
 
@@ -29,7 +32,29 @@ export const txKeys = {
   list: (filters: TransactionFilters) => [...queryRoots.transactions, "list", filters],
   one: (id: string) => [...queryRoots.transactions, "one", id],
   candidates: (id: string) => [...queryRoots.transactions, "candidates", id],
+  /** Under the transactions root, so every change to the ledger refreshes the counts. */
+  summary: [...queryRoots.transactions, "categorisation-summary"],
+  /** Also under the root: the counts of a merchant-rule preview move with the ledger. */
+  merchantPreview: (id: string, categoryId: string) => [...queryRoots.transactions, "merchant-preview", id, categoryId],
 } as const;
+
+/**
+ * The merchant of a row by the name the server gave it, else its key with
+ * capitals; `null` when no merchant was recognised.
+ */
+export function merchantName(row: Pick<Transaction, "merchant" | "merchant_key">): string | null {
+  const name = (row.merchant ?? "").trim();
+  if (name !== "") {
+    return name;
+  }
+  const key = (row.merchant_key ?? "").trim();
+  return key === "" ? null : key.replace(/(^| )[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+/** A merchant rule can be made from a row that names a merchant and is not split (the server checks the rest). */
+export function canTeach(row: Pick<Transaction, "merchant_key" | "splits">): boolean {
+  return (row.merchant_key ?? "") !== "" && row.splits.length === 0;
+}
 
 export const taxonomyKeys = {
   categories: [...queryRoots.taxonomy, "categories"],
@@ -49,6 +74,10 @@ export interface TransactionFilters {
   q: string;
   /** A document id: only the rows imported from that file. Empty for all. */
   document: string;
+  /** A recurring series id: only the charges linked to it. Empty for all. */
+  subscription: string;
+  /** Only rows that carry a suggestion and no category. */
+  suggested: boolean;
 }
 
 export const EMPTY_FILTERS: TransactionFilters = {
@@ -61,6 +90,8 @@ export const EMPTY_FILTERS: TransactionFilters = {
   reviewState: "",
   q: "",
   document: "",
+  subscription: "",
+  suggested: false,
 };
 
 export const PAGE_SIZE = 50;
@@ -77,6 +108,8 @@ export function filterQuery(filters: TransactionFilters) {
     ...(filters.reviewState === "" ? {} : { review_state: [filters.reviewState] }),
     ...(filters.q.trim() === "" ? {} : { q: filters.q.trim() }),
     ...(filters.document === "" ? {} : { document: filters.document }),
+    ...(filters.subscription === "" ? {} : { subscription: filters.subscription }),
+    ...(filters.suggested ? { suggested: true } : {}),
   };
 }
 
@@ -208,6 +241,32 @@ export function useCategories() {
 
 export function usePayees() {
   return useQuery({ queryKey: taxonomyKeys.payees, queryFn: listAllPayees });
+}
+
+/** The counts beside the "Suggestions" and "No category" toggles. */
+export function useCategorisationSummary() {
+  return useQuery({ queryKey: txKeys.summary, queryFn: getCategorisationSummary });
+}
+
+/**
+ * Rule names by id, for "Rule: <name>". Asked for only when a row on screen
+ * was categorised by a rule; `undefined` until the answer is there.
+ */
+export function useRuleNames(enabled: boolean): ReadonlyMap<string, string> | undefined {
+  const rules = useQuery({ queryKey: ruleKeys.list, queryFn: listRules, enabled });
+  return useMemo(() => (rules.data === undefined ? undefined : new Map(rules.data.map((rule) => [rule.id, rule.name]))), [rules.data]);
+}
+
+/**
+ * What a merchant rule from `transactionId` to `categoryId` would do. Asked
+ * only when there is a category to ask about.
+ */
+export function useMerchantRulePreview(transactionId: string, categoryId: string, enabled = true) {
+  return useQuery({
+    queryKey: txKeys.merchantPreview(transactionId, categoryId),
+    queryFn: () => previewMerchantRule({ transaction_id: transactionId, category_id: categoryId }),
+    enabled: enabled && categoryId !== "",
+  });
 }
 
 export function useTags() {

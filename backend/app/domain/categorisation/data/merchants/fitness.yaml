@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Gyms, studios and the fitness and wellness services paid by the month.
+# Format and sources: ../README.md. One entry a line here.
+#
+# A gym bills dues monthly and an "annual fee" once a year. A name that is
+# an everyday word ("Curves", "Crunch", "Calm", "Equinox", "Mirror") is matched
+# only by a form that is the club's own, or left out.
+merchants:
+  # Gyms.
+  - {key: planet fitness, name: Planet Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [planet fitness, planet fit, planetfitness, pf club fees]}
+  - {key: la fitness, name: LA Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [la fitness, l a fitness, lafitness]}
+  - {key: 24 hour fitness, name: 24 Hour Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [24 hour fitness, 24 hr fitness, 24hr fitness, 24hourfitness, 24hourfit]}
+  - {key: anytime fitness, name: Anytime Fitness, category: health.fitness, series: subscription, cadences: [biweekly, monthly, annual], match: [anytime fitness, anytime fit, anytimefitness]}
+  - {key: golds gym, name: Gold's Gym, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [golds gym, gold gym, goldsgym]}
+  - {key: crunch fitness, name: Crunch Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [crunch fitness, crunch fit, crunch gym]}
+  - {key: equinox, name: Equinox, category: health.fitness, series: subscription, cadences: [monthly], match: [equinox fitness, equinox club, equinox membership]}
+  - {key: life time fitness, name: Life Time, category: health.fitness, series: subscription, cadences: [monthly], match: [life time fitness, life time fit, lifetime fitness, lifetime fit, life time athletic]}
+  - {key: ymca, name: YMCA, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [ymca ~]}
+  - {key: ywca, name: YWCA, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [ywca]}
+  - {key: snap fitness, name: Snap Fitness, category: health.fitness, series: subscription, cadences: [biweekly, monthly], match: [snap fitness, snapfitness]}
+  - {key: blink fitness, name: Blink Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [blink fitness]}
+  - {key: eos fitness, name: EoS Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [eos fitness]}
+  - {key: chuze fitness, name: Chuze Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [chuze fitness, chuze]}
+  - {key: retro fitness, name: Retro Fitness, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [retro fitness]}
+
+  # Studios.
+  - {key: orangetheory, name: Orangetheory Fitness, category: health.fitness, series: subscription, cadences: [monthly], match: [orangetheory, orange theory]}
+  - {key: f45 training, name: F45 Training, category: health.fitness, series: subscription, cadences: [weekly, biweekly, monthly], match: [f45, f45 training]}
+  - {key: crossfit, name: CrossFit, category: health.fitness, series: subscription, cadences: [monthly], match: [crossfit ~]}
+  - {key: pure barre, name: Pure Barre, category: health.fitness, series: subscription, cadences: [monthly], match: [pure barre, purebarre]}
+  - {key: soulcycle, name: SoulCycle, category: health.fitness, series: subscription, cadences: [monthly], match: [soulcycle, soul cycle]}
+  - {key: barrys, name: Barry's, category: health.fitness, series: subscription, cadences: [monthly], match: [barrys bootcamp, barry bootcamp]}
+  - {key: club pilates, name: Club Pilates, category: health.fitness, series: subscription, cadences: [monthly], match: [club pilates, clubpilates]}
+  - {key: corepower yoga, name: CorePower Yoga, category: health.fitness, series: subscription, cadences: [monthly], match: [corepower, core power yoga]}
+  - {key: cyclebar, name: CycleBar, category: health.fitness, series: subscription, cadences: [monthly], match: [cyclebar]}
+  - {key: 9round, name: 9Round, category: health.fitness, series: subscription, cadences: [monthly], match: [9round, 9 round]}
+  - {key: burn boot camp, name: Burn Boot Camp, category: health.fitness, series: subscription, cadences: [monthly], match: [burn boot camp, burn bootcamp]}
+  - {key: stretchlab, name: StretchLab, category: health.fitness, series: subscription, cadences: [monthly], match: [stretchlab, stretch lab]}
+  - {key: classpass, name: ClassPass, category: health.fitness, series: subscription, cadences: [monthly], match: [classpass]}
+  # A booking system many studios charge through: a class or a membership.
+  - {key: mindbody, name: Mindbody, category: health.fitness, match: [mindbody, mindbodyonline]}
+
+  # Fitness at home and on the wrist.
+  - {key: peloton, name: Peloton, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [peloton =, onepeloton, peloton interactive, peloton membership, peloton app]}
+  - {key: ifit, name: iFIT, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [ifit]}
+  - {key: beachbody, name: Beachbody (BODi), category: health.fitness, series: subscription, cadences: [monthly, quarterly, annual], match: [beachbody, teambeachbody]}
+  - {key: zwift, name: Zwift, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [zwift]}
+  - {key: strava, name: Strava, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [strava]}
+  - {key: myfitnesspal, name: MyFitnessPal, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [myfitnesspal]}
+  - {key: fitbit, name: Fitbit, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [fitbit]}
+  - {key: whoop, name: WHOOP, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [whoop =, whoop membership]}
+  - {key: oura, name: Oura, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [oura ring, ouraring, oura health]}
+  - {key: alltrails, name: AllTrails, category: health.fitness, series: subscription, cadences: [annual], match: [alltrails]}
+
+  # Weight, mind and care by subscription.
+  - {key: noom, name: Noom, category: health.fitness, series: subscription, cadences: [monthly, two_monthly, quarterly, half_yearly, annual], match: [noom]}
+  - {key: weightwatchers, name: WeightWatchers, category: health.fitness, series: subscription, cadences: [monthly], match: [weightwatchers, weight watchers, ww intl, ww international]}
+  - {key: headspace, name: Headspace, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [headspace]}
+  - {key: calm, name: Calm, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [calm com, calm subscription]}
+  - {key: betterhelp, name: BetterHelp, category: health.medical, series: subscription, cadences: [weekly, monthly], match: [betterhelp]}
+  - {key: talkspace, name: Talkspace, category: health.medical, series: subscription, cadences: [monthly, quarterly], match: [talkspace]}
+  - {key: hims and hers, name: Hims & Hers, category: health.pharmacy, series: subscription, cadences: [monthly, quarterly], match: [hims, forhims, forhers, hims hers]}
+  - {key: curology, name: Curology, category: family.personal_care, series: subscription, cadences: [monthly, two_monthly], match: [curology]}

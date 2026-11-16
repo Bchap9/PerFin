@@ -1,0 +1,109 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The transactions grid: how a category was decided, suggestions, and the
+   merchant beside the bank's own wording. Shared ledger styles are in
+   ../accounts/ledger.css. */
+
+.cat-cell,
+.payee-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* A suggestion is a question, not a category: set apart from a chosen one. */
+.cat-cell__suggestion {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.cat-cell__choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cat-cell__why {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.payee-cell__merchant {
+  font-weight: 600;
+}
+
+.payee-cell__raw {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.tx-quick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tx-quick-filters .btn[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+/* A line under the toolbar that never blocks the grid: the offer to make a
+   correction the merchant's rule, and what was just saved with its undo. */
+.tx-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.tx-notice__text {
+  margin: 0;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.tx-notice__job,
+.tx-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tx-notice__job p {
+  margin: 0;
+}
+
+/* The "always categorise" dialog; its preview shows the counts as a short list. */
+.tx-rule-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tx-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tx-preview p,
+.tx-preview__counts {
+  margin: 0;
+}
+
+.tx-preview__counts {
+  padding-inline-start: var(--space-5);
+}

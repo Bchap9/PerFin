@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Airlines, places to stay, booking sites, car hire, long-distance rail and
+# coach, cruises. Format and sources: ../README.md. One entry a line here:
+# the lists are long.
+#
+# Many of these names are everyday words or places ("United", "Delta",
+# "American", "Frontier", "Spirit", "Budget", "Enterprise", "National",
+# "Dollar", "Alamo", "Carnival", "Princess"): each is matched only together
+# with the word that makes it the carrier or the hire firm, and by the
+# shortened form a ticket prints ("AIRL", never "AIR" alone for those:
+# "... AIR CONDITIONING" is somebody else).
+merchants:
+  # Airlines.
+  - {key: delta air lines, name: Delta Air Lines, category: leisure.travel, match: [delta air, delta airlines]}
+  - {key: american airlines, name: American Airlines, category: leisure.travel, match: [american airlines, american airl, american air =]}
+  - {key: united airlines, name: United Airlines, category: leisure.travel, match: [united airlines, united airl, united =]}
+  - {key: southwest airlines, name: Southwest Airlines, category: leisure.travel, match: [southwest airlines, southwest airl, southwes]}
+  - {key: jetblue, name: JetBlue, category: leisure.travel, match: [jetblue]}
+  - {key: alaska airlines, name: Alaska Airlines, category: leisure.travel, match: [alaska air, alaska airlines, alaska airl]}
+  - {key: spirit airlines, name: Spirit Airlines, category: leisure.travel, match: [spirit airlines, spirit airl]}
+  - {key: frontier airlines, name: Frontier Airlines, category: leisure.travel, match: [frontier airlines, frontier airl]}
+  - {key: allegiant air, name: Allegiant Air, category: leisure.travel, match: [allegiant =, allegiant air, allegiant travel]}
+  - {key: hawaiian airlines, name: Hawaiian Airlines, category: leisure.travel, match: [hawaiian airlines, hawaiian airl]}
+  - {key: sun country airlines, name: Sun Country Airlines, category: leisure.travel, match: [sun country]}
+  - {key: breeze airways, name: Breeze Airways, category: leisure.travel, match: [breeze airways]}
+  - {key: avelo airlines, name: Avelo Airlines, category: leisure.travel, match: [avelo]}
+  - {key: air canada, name: Air Canada, category: leisure.travel, match: [air canada]}
+  - {key: westjet, name: WestJet, category: leisure.travel, match: [westjet]}
+  - {key: british airways, name: British Airways, category: leisure.travel, match: [british airways, british air]}
+  - {key: lufthansa, name: Lufthansa, category: leisure.travel, match: [lufthansa]}
+  - {key: air france, name: Air France, category: leisure.travel, match: [air france]}
+  - {key: klm, name: KLM, category: leisure.travel, match: [klm]}
+  - {key: emirates, name: Emirates, category: leisure.travel, match: [emirates =, emirates airline, emirates airlines, emirates air]}
+  - {key: qatar airways, name: Qatar Airways, category: leisure.travel, match: [qatar airways, qatar air]}
+  - {key: aeromexico, name: Aeromexico, category: leisure.travel, match: [aeromexico]}
+  - {key: volaris, name: Volaris, category: leisure.travel, match: [volaris]}
+  - {key: virgin atlantic, name: Virgin Atlantic, category: leisure.travel, match: [virgin atlantic]}
+  - {key: turkish airlines, name: Turkish Airlines, category: leisure.travel, match: [turkish airlines, turkish air]}
+  - {key: japan airlines, name: Japan Airlines, category: leisure.travel, match: [japan airlines, japan air]}
+  - {key: singapore airlines, name: Singapore Airlines, category: leisure.travel, match: [singapore airlines, singapore air]}
+  - {key: qantas, name: Qantas, category: leisure.travel, match: [qantas]}
+  - {key: aer lingus, name: Aer Lingus, category: leisure.travel, match: [aer lingus]}
+  - {key: icelandair, name: Icelandair, category: leisure.travel, match: [icelandair]}
+  - {key: copa airlines, name: Copa Airlines, category: leisure.travel, match: [copa airlines, copa air]}
+  - {key: avianca, name: Avianca, category: leisure.travel, match: [avianca]}
+  - {key: korean air, name: Korean Air, category: leisure.travel, match: [korean air]}
+  - {key: cathay pacific, name: Cathay Pacific, category: leisure.travel, match: [cathay pacific]}
+  - {key: etihad airways, name: Etihad Airways, category: leisure.travel, match: [etihad]}
+  - {key: ryanair, name: Ryanair, category: leisure.travel, match: [ryanair]}
+  - {key: easyjet, name: easyJet, category: leisure.travel, match: [easyjet]}
+
+  # Hotels and resorts.
+  - {key: marriott, name: Marriott, category: leisure.travel, match: [marriott]}
+  - {key: courtyard by marriott, name: Courtyard by Marriott, category: leisure.travel, match: [courtyard by]}
+  - {key: residence inn, name: Residence Inn, category: leisure.travel, match: [residence inn]}
+  - {key: fairfield inn, name: Fairfield Inn & Suites, category: leisure.travel, match: [fairfield inn]}
+  - {key: springhill suites, name: SpringHill Suites, category: leisure.travel, match: [springhill suites]}
+  - {key: towneplace suites, name: TownePlace Suites, category: leisure.travel, match: [towneplace suites]}
+  - {key: westin, name: Westin, category: leisure.travel, match: [westin]}
+  - {key: sheraton, name: Sheraton, category: leisure.travel, match: [sheraton]}
+  - {key: ritz carlton, name: The Ritz-Carlton, category: leisure.travel, match: [ritz carlton, the ritz carlton]}
+  - {key: hilton, name: Hilton, category: leisure.travel, match: [hilton =, hilton garden, hilton hotels, hilton hotel, hilton honors, hilton grand, hilton resort, hilton suites]}
+  - {key: hampton inn, name: Hampton Inn, category: leisure.travel, match: [hampton inn]}
+  - {key: doubletree, name: DoubleTree by Hilton, category: leisure.travel, match: [doubletree]}
+  - {key: embassy suites, name: Embassy Suites, category: leisure.travel, match: [embassy suites]}
+  - {key: homewood suites, name: Homewood Suites, category: leisure.travel, match: [homewood suites]}
+  - {key: home2 suites, name: Home2 Suites, category: leisure.travel, match: [home2 suites]}
+  - {key: hyatt, name: Hyatt, category: leisure.travel, match: [hyatt =, hyatt regency, hyatt place, hyatt house, hyatt hotels, hyatt hotel, hyatt centric, grand hyatt, park hyatt]}
+  - {key: holiday inn, name: Holiday Inn, category: leisure.travel, match: [holiday inn]}
+  - {key: ihg, name: IHG Hotels & Resorts, category: leisure.travel, match: [ihg]}
+  - {key: crowne plaza, name: Crowne Plaza, category: leisure.travel, match: [crowne plaza]}
+  - {key: candlewood suites, name: Candlewood Suites, category: leisure.travel, match: [candlewood suites]}
+  - {key: staybridge suites, name: Staybridge Suites, category: leisure.travel, match: [staybridge suites]}
+  - {key: best western, name: Best Western, category: leisure.travel, match: [best western]}
+  - {key: wyndham, name: Wyndham, category: leisure.travel, match: [wyndham]}
+  - {key: la quinta, name: La Quinta, category: leisure.travel, match: [la quinta]}
+  - {key: days inn, name: Days Inn, category: leisure.travel, match: [days inn]}
+  - {key: super 8, name: Super 8, category: leisure.travel, match: [super 8]}
+  - {key: ramada, name: Ramada, category: leisure.travel, match: [ramada]}
+  - {key: motel 6, name: Motel 6, category: leisure.travel, match: [motel 6]}
+  - {key: red roof inn, name: Red Roof Inn, category: leisure.travel, match: [red roof]}
+  - {key: comfort inn, name: Comfort Inn, category: leisure.travel, match: [comfort inn, comfort suites]}
+  - {key: quality inn, name: Quality Inn, category: leisure.travel, match: [quality inn]}
+  - {key: choice hotels, name: Choice Hotels, category: leisure.travel, match: [choice hotels]}
+  - {key: extended stay america, name: Extended Stay America, category: leisure.travel, match: [extended stay]}
+  - {key: drury hotels, name: Drury Hotels, category: leisure.travel, match: [drury inn, drury plaza, drury hotels]}
+  - {key: omni hotels, name: Omni Hotels & Resorts, category: leisure.travel, match: [omni hotels, omni hotel]}
+  - {key: four seasons, name: Four Seasons Hotels and Resorts, category: leisure.travel, match: [four seasons hotel, four seasons resort]}
+  - {key: loews hotels, name: Loews Hotels, category: leisure.travel, match: [loews hotel, loews hotels]}
+  - {key: kimpton, name: Kimpton Hotels, category: leisure.travel, match: [kimpton]}
+  - {key: great wolf lodge, name: Great Wolf Lodge, category: leisure.travel, match: [great wolf]}
+  - {key: disney resorts, name: Disney Parks and Resorts, category: leisure.travel, match: [disney resort, disney resorts, walt disney world, disneyland, disney world]}
+
+  # Booking sites and home stays.
+  - {key: expedia, name: Expedia, category: leisure.travel, match: [expedia]}
+  - {key: booking com, name: Booking.com, category: leisure.travel, match: [booking com, booking =, hotel at booking]}
+  - {key: hotels com, name: Hotels.com, category: leisure.travel, match: [hotels com, hotelscom, hotels =]}
+  - {key: priceline, name: Priceline, category: leisure.travel, match: [priceline]}
+  - {key: orbitz, name: Orbitz, category: leisure.travel, match: [orbitz]}
+  - {key: travelocity, name: Travelocity, category: leisure.travel, match: [travelocity]}
+  - {key: hotwire, name: Hotwire, category: leisure.travel, match: [hotwire]}
+  - {key: tripadvisor, name: Tripadvisor, category: leisure.travel, match: [tripadvisor]}
+  - {key: airbnb, name: Airbnb, category: leisure.travel, match: [airbnb]}
+  - {key: vrbo, name: Vrbo, category: leisure.travel, match: [vrbo, homeaway]}
+  - {key: agoda, name: Agoda, category: leisure.travel, match: [agoda]}
+  - {key: viator, name: Viator, category: leisure.travel, match: [viator]}
+  - {key: getyourguide, name: GetYourGuide, category: leisure.travel, match: [getyourguide]}
+  - {key: costco travel, name: Costco Travel, category: leisure.travel, match: [costco travel]}
+
+  # Car hire.
+  - {key: hertz, name: Hertz, category: leisure.travel, match: [hertz, the hertz]}
+  - {key: avis, name: Avis, category: leisure.travel, match: [avis]}
+  - {key: budget rent a car, name: Budget Rent a Car, category: leisure.travel, match: [budget rent, budget car rental]}
+  - {key: enterprise rent a car, name: Enterprise Rent-A-Car, category: leisure.travel, match: [enterprise rent, enterprise car rental]}
+  - {key: national car rental, name: National Car Rental, category: leisure.travel, match: [national car rental, national car rent]}
+  - {key: alamo rent a car, name: Alamo Rent A Car, category: leisure.travel, match: [alamo rent, alamo car rental]}
+  - {key: dollar rent a car, name: Dollar Car Rental, category: leisure.travel, match: [dollar rent, dollar car rental]}
+  - {key: thrifty car rental, name: Thrifty Car Rental, category: leisure.travel, match: [thrifty car rental, thrifty rent]}
+  - {key: sixt, name: SIXT, category: leisure.travel, match: [sixt]}
+  - {key: turo, name: Turo, category: leisure.travel, match: [turo]}
+  - {key: zipcar, name: Zipcar, category: leisure.travel, match: [zipcar]}
+
+  # Long-distance rail and coach.
+  - {key: amtrak, name: Amtrak, category: leisure.travel, match: [amtrak]}
+  - {key: greyhound, name: Greyhound, category: leisure.travel, match: [greyhound =, greyhound lines, greyhound bus]}
+  - {key: megabus, name: megabus, category: leisure.travel, match: [megabus]}
+  - {key: flixbus, name: FlixBus, category: leisure.travel, match: [flixbus]}
+  - {key: brightline, name: Brightline, category: leisure.travel, match: [brightline]}
+
+  # Cruises.
+  - {key: carnival cruise line, name: Carnival Cruise Line, category: leisure.travel, match: [carnival cruise]}
+  - {key: royal caribbean, name: Royal Caribbean, category: leisure.travel, match: [royal caribbean]}
+  - {key: norwegian cruise line, name: Norwegian Cruise Line, category: leisure.travel, match: [norwegian cruise]}
+  - {key: princess cruises, name: Princess Cruises, category: leisure.travel, match: [princess cruise, princess cruises]}
+  - {key: disney cruise line, name: Disney Cruise Line, category: leisure.travel, match: [disney cruise]}
+  - {key: celebrity cruises, name: Celebrity Cruises, category: leisure.travel, match: [celebrity cruise, celebrity cruises]}
+  - {key: holland america, name: Holland America Line, category: leisure.travel, match: [holland america]}

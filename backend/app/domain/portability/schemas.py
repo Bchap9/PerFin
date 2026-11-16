@@ -17,10 +17,14 @@ EXPIRE_JOB_TYPE: Final = "portability.expire"
 
 #: The archive format this code writes; :data:`SUPPORTED_FORMAT_VERSIONS` it reads.
 ARCHIVE_FORMAT: Final = "perfin-export"
-#: Version 2 added the Phase 3-6 tables (``EntitySpec.since``); version 1
-#: archives are still imported (those tables are simply absent).
-FORMAT_VERSION: Final = 2
-SUPPORTED_FORMAT_VERSIONS: Final = frozenset({1, 2})
+#: Version 2 added the Phase 3-6 tables (``EntitySpec.since``). Version 3
+#: added how a category was decided, what a recurring series is and where it
+#: stands (``EntitySpec.added``) and what the household's corrections taught
+#: (``merchant_memory``). Version 1 and 2 archives are still imported: the
+#: tables they lack are simply absent, the columns they lack are filled as the
+#: migration that added them did.
+FORMAT_VERSION: Final = 3
+SUPPORTED_FORMAT_VERSIONS: Final = frozenset({1, 2, 3})
 
 PASSPHRASE_MIN: Final = 12
 PASSPHRASE_MAX: Final = 1024

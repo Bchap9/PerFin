@@ -46,6 +46,7 @@ describe("app shell", () => {
       "Assets",
       "Net worth",
       "Calendar",
+      "Subscriptions",
       "Documents",
       "Review",
       "Tax",
@@ -58,6 +59,18 @@ describe("app shell", () => {
     expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Skip to content" })).toHaveAttribute("href", "#main");
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
+  });
+
+  it("the nav has a Subscriptions entry and its route renders", async () => {
+    const user = userEvent.setup();
+    renderAt("/calendar");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const link = within(nav).getByRole("link", { name: "Subscriptions" });
+    expect(link).toHaveAttribute("href", "/subscriptions");
+    await user.click(link);
+    expect(await screen.findByRole("heading", { level: 1, name: "Subscriptions" })).toBeInTheDocument();
+    expect(link).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
   });
 
   it("navigates between sections", async () => {
