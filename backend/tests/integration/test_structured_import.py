@@ -543,6 +543,26 @@ def test_qif_opening_balance_record_is_no_transaction(env: Env) -> None:
     assert env.open_reviews(document_id) == []
 
 
+def test_qif_record_made_of_column_names_waits_for_review(env: Env) -> None:
+    """A record whose text is the header's words keeps its money, pending."""
+    account = env.ledger.account(env.household_id)  # QIF names no account number
+    data = (
+        "!Type:Bank\n"
+        "D03/14/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/21/2026\nT-40.00\nPDescription\nMReference\nLDebit\n^\n"
+    ).encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+
+    states = {t.raw_payee: t.review_state for t in env.transactions(account)}
+    assert states == {"Harbor Lane Bakery": ReviewState.NONE, "Description": ReviewState.PENDING}
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload["reason"] == "low_confidence"
+    assert item.payload["fields"] == ["payee"]
+    assert item.payload["count"] == 1
+
+
 def test_rerunning_a_statement_that_lost_records_does_not_repeat_the_item(env: Env) -> None:
     account = _variant_account(env)
     document_id = env.ingest(ofx_variants.sgml_with_unreadable_amount())

@@ -186,6 +186,11 @@ migration, no new setting, no new container, nothing new leaves the host
   opening one further down, is left out and counted in the document's
   warnings. QIF files read before are read this way on "Process again"
   (extractor `qif/2`).
+- **A QIF record made only of column names waits for review.** A record
+  whose payee, memo and category are the words of a header (`Description`,
+  `Reference`, `Debit`) was posted quietly. Its date and amount are kept, as
+  they may be money that moved, but it is imported pending with a
+  low-confidence item on its payee.
 
 ### Security
 

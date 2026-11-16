@@ -33,6 +33,12 @@
   Any other such record (a closing balance, an opening one further down) is
   left out and counted in one ``balance_record_skipped:<n>`` warning for the
   file: a figure, not money that moved, and not a record the file lost.
+* **A record made of column names is in doubt**: its payee and every other
+  text field it has (memo, category, check number) are names of statement
+  columns (``Description``, ``Reference``, ``Debit``: a converter that
+  wrote the header into the rows). Its date and amount may still be money
+  that moved, so it is kept, with ``low_confidence = ["payee"]``: the
+  importer brings it in pending, with a ``low_confidence_field`` item.
 * Text fields are whitespace-collapsed, cut and formula-neutralised (C7).
 """
 
@@ -44,7 +50,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Final, Literal
 
-from app.ingestion.balance_lines import balance_line
+from app.ingestion.balance_lines import balance_line, column_name
 from app.ingestion.extract.common import ExtractFailure, clean_text, decode_text, parse_amount
 from app.ingestion.extract.ofx import skipped_warnings
 from app.ingestion.extract.registry import register
@@ -234,6 +240,14 @@ def _balance_record(record: _Record) -> str | None:
     return end
 
 
+def _column_names(record: _Record) -> bool:
+    """Whether the record's text is only names of statement columns (module doc)."""
+    if not column_name(record.payee):
+        return False
+    others = (record.memo, record.category, record.number)
+    return all(column_name(text) for text in others if (text or "").strip())
+
+
 def _splits(raw: list[dict[str, str]], warnings: set[str]) -> list[SplitLine]:
     lines: list[SplitLine] = []
     for item in raw[:1000]:
@@ -301,6 +315,7 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
                     check_number=clean_text(record.number, limit=64),
                     cleared=_CLEARED.get(record.cleared or ""),
                     splits=splits,
+                    low_confidence=["payee"] if _column_names(record) else [],
                 )
             )
         if section.truncated:
