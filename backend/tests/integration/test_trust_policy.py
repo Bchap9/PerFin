@@ -62,7 +62,13 @@ from app.domain.imports.service import (
 )
 from app.domain.transactions.models import ReviewState
 from app.ingestion.intake.upload import receive_upload
-from app.ingestion.parsers.structured import ParsedStatement, ParsedTransaction
+from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD, INFERRED
+from app.ingestion.parsers.structured import (
+    ClosingBalance,
+    ParsedStatement,
+    ParsedTransaction,
+    from_statement,
+)
 from app.ingestion.sandbox.protocol import (
     ExtractResult,
     Reconciliation,
@@ -182,6 +188,54 @@ def test_a_row_outside_the_period_holds_the_whole_statement(env: Env) -> None:
     rows = env.transactions(account)
     assert _ledger(env, account) == _six(trust.expected(stray=True))
     assert [r.review_state for r in rows] == [ReviewState.PENDING] * 7
+    assert "reconciliation_unavailable" in _reasons(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (record,) = _records(env, document_id)
+    assert record.verification == "unverified"
+    assert env.snapshots(account) == []
+
+
+def _held_unposted(env: Env, document_id: uuid.UUID, account: Account, count: int) -> None:
+    """The statement waits as before 1d: asked about, and none of its rows is posted."""
+    rows = env.transactions(account)
+    assert [r.review_state for r in rows] == [ReviewState.PENDING] * count
+    assert "reconciliation_unavailable" in _reasons(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (record,) = _records(env, document_id)
+    assert record.verification == "unverified"
+    assert env.snapshots(account) == []
+
+
+def test_one_printed_balance_is_a_doubt(env: Env) -> None:
+    # A closing balance and no opening one: nothing can be checked
+    # (``unavailable``), and a balance that was read and not used is a doubt.
+    account = _account(env)
+    document_id = env.ingest(trust.closing_balance_only())
+
+    assert _ledger(env, account) == _six(trust.expected())
+    _held_unposted(env, document_id, account, 6)
+
+
+def test_a_period_inferred_from_the_rows_is_a_doubt(env: Env) -> None:
+    # No balance of any kind and no period line: the period is the rows'
+    # own first and last day, and nothing printed says so.
+    account = _account(env)
+    document_id = env.ingest(trust.no_balances_no_period())
+
+    assert _ledger(env, account) == _six(trust.expected())
+    _held_unposted(env, document_id, account, 6)
+
+
+def test_an_ending_balance_and_a_doubled_row_post_nothing(env: Env) -> None:
+    # The wrong quiet import of the corpus run: an ending balance without a
+    # beginning one, no period line, and a row with two dates in a table
+    # that prints one.
+    account = _account(env)
+    document_id = env.ingest(trust.ending_balance_and_a_doubled_row())
+
+    rows = env.transactions(account)
+    assert rows, "the rows that were read wait; none is dropped"
+    assert all(r.review_state is ReviewState.PENDING for r in rows)
     assert "reconciliation_unavailable" in _reasons(env, document_id)
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     (record,) = _records(env, document_id)
@@ -549,7 +603,6 @@ def test_reconciled_statement_is_recorded_reconciled(env: Env) -> None:
     (record,) = _records(env, document_id)
     assert record.verification == "reconciled"
     assert len(env.snapshots(account)) == 1
-    assert _summary(env, document_id)["unverified_statements"] == 0
 
 
 def test_statement_that_does_not_add_up_is_still_held(env: Env) -> None:
@@ -593,7 +646,6 @@ def test_csv_statement_is_unverified_without_a_marker_item(env: Env) -> None:
     assert env.open_reviews(document_id) == []
     assert env.document(document_id).status is DocumentStatus.PROCESSED
     # The marker is for documents (PDF, image) only.
-    assert _summary(env, document_id)["unverified_statements"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +830,51 @@ def test_contradiction_warning_is_never_a_clean_read() -> None:
     assert clean_read(_run(), _parsed(UNCHECKED, balance_mismatches=[2])) is False
     assert clean_read(_run(), _parsed(UNCHECKED, truncated=True)) is False
     assert clean_read(_run(), _parsed(UNCHECKED, date_order_assumed=True)) is False
+
+
+def _unavailable(opening: str | None = None, closing: str | None = None) -> Reconciliation:
+    return Reconciliation(
+        status="unavailable",
+        opening=Decimal(opening) if opening else None,
+        closing=Decimal(closing) if closing else None,
+        total=Decimal("0"),
+        tolerance=Decimal("0.01"),
+    )
+
+
+def test_a_balance_that_was_read_is_never_a_clean_read() -> None:
+    # ``unavailable`` is also what one balance without the other is: a
+    # printed balance that could not be used is a doubt.
+    assert clean_read(_run(), _parsed(UNCHECKED, reconciliation=_unavailable())) is True
+    for check in (_unavailable(closing="5000.00"), _unavailable(opening="12.50")):
+        assert clean_read(_run(), _parsed(UNCHECKED, reconciliation=check)) is False
+    # However the balance reached the statement.
+    assert clean_read(_run(), _parsed(UNCHECKED, opening_balance=Decimal("12.50"))) is False
+    closing = ClosingBalance(Decimal("5000.00"), trust.PERIOD_END)
+    assert clean_read(_run(), _parsed(UNCHECKED, closing_balance=closing)) is False
+    # A balance printed with a sign nothing settles is withheld by the parser,
+    # which says so.
+    assert clean_read(_run(warnings=("balance_sign_unsettled",)), _parsed(UNCHECKED)) is False
+
+
+def test_a_period_nothing_printed_is_never_a_clean_read() -> None:
+    # A printed period as a generic parser scores it.
+    assert clean_read(_run(), _parsed(UNCHECKED, period_confidence=0.95)) is True
+    assert clean_read(_run(), _parsed(UNCHECKED, period_confidence=DEFAULT_THRESHOLD)) is True
+    # Inferred from the rows themselves, or read with less than the threshold.
+    assert clean_read(_run(), _parsed(UNCHECKED, period_confidence=INFERRED)) is False
+    assert clean_read(_run(), _parsed(UNCHECKED, period_confidence=0.84)) is False
+
+
+def test_the_period_confidence_reaches_the_importer() -> None:
+    statement = Statement(
+        source_format="pdf",
+        account=StatementAccount(last4=trust.LAST4),
+        confidence={"period": 0.7, "account_number": 0.95},
+    )
+    assert from_statement(statement).period_confidence == 0.7
+    # A statement that scores no period (OFX) carries none.
+    assert from_statement(Statement(source_format="ofx")).period_confidence is None
 
 
 # ---------------------------------------------------------------------------

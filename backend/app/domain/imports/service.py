@@ -161,8 +161,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      agree with the rows and the document's own summary or a section total
      does not, which of them (``cause``).
      The exception is a **clean read** (:func:`clean_read`): a statement
-     that prints nothing to check against (reconciliation ``unavailable``),
-     whose rows carry no other doubt and whose document the parser neither
+     that prints nothing to check against (reconciliation ``unavailable``
+     and no balance read at all: one balance without the other is a
+     doubt), whose period was printed and not inferred from its rows, whose
+     rows carry no other doubt and whose document the parser neither
      skipped a line of nor warned about (:data:`CONTRADICTION_WARNINGS`).
      It is imported as posted (a row waits only as a near duplicate), no
      item is raised for it and no snapshot is written; its record says
@@ -372,6 +374,7 @@ from app.ingestion.parsers.brokerage_table import (
     read_activity_table,
     suggest_activity_mapping,
 )
+from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.positions_table import PARSER_NAME as POSITIONS_PARSER
 from app.ingestion.parsers.positions_table import PARSER_VERSION as POSITIONS_PARSER_VERSION
 from app.ingestion.parsers.positions_table import TABLE_KINDS as POSITIONS_TABLE_KINDS
@@ -428,6 +431,11 @@ SUGGESTED_NAME_MAX: Final = 120
 CONTRADICTION_WARNINGS: Final = frozenset(
     {"summary_totals_mismatch", "section_total_mismatch", "rows_outside_account"}
 )
+#: Parse warnings that say a balance was printed and not used: its sign was
+#: open (``Ending Balance - $992.50``) and no row settled it
+#: (``table_statement``). A printed balance nothing could be checked
+#: against is a doubt: never a clean read (:func:`clean_read`).
+UNUSED_BALANCE_WARNINGS: Final = frozenset({"balance_sign_unsettled"})
 #: The same, in the order a ``reconciliation_failed`` item names its ``cause``.
 _CAUSE_ORDER: Final = ("summary_totals_mismatch", "section_total_mismatch", "rows_outside_account")
 #: The one doubt a clean read may carry on a row: nothing to check it against.
@@ -1120,6 +1128,18 @@ def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
     imported as posted when that is its **only** doubt. It is one only when
     all of this holds:
 
+    * **no balance was read at all**: neither an opening nor a closing one.
+      ``unavailable`` is also what one balance without the other is, and a
+      balance the statement printed and nothing could be checked against is
+      a doubt, not a silence. Nor one the parser withheld because nothing
+      settled its sign (:data:`UNUSED_BALANCE_WARNINGS`);
+    * **the period was printed**: its confidence
+      (``ParsedStatement.period_confidence``) is not below
+      ``confidence.DEFAULT_THRESHOLD``. A period that is only the rows' own
+      first and last day scores ``confidence.INFERRED`` at most: nothing on
+      the page then says which statement this is, or that its rows are
+      dated right. A statement nothing scored a period of (hand-built) is
+      not refused for it;
     * it has at least one row, and every row's ``low_confidence`` is empty
       or exactly ``reconciliation`` (the parser's cap for an unchecked row);
     * the importer skipped no row of it, no running balance disagrees, it
@@ -1137,6 +1157,15 @@ def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
         return False
     if check is None or check.status != "unavailable":
         return False
+    if (
+        check.opening is not None
+        or check.closing is not None
+        or parsed.opening_balance is not None
+        or parsed.closing_balance is not None
+    ):
+        return False
+    if parsed.period_confidence is not None and parsed.period_confidence < DEFAULT_THRESHOLD:
+        return False
     if not parsed.transactions:
         return False
     if any(set(t.low_confidence) - {UNCHECKED_FIELD} for t in parsed.transactions):
@@ -1147,6 +1176,8 @@ def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
         or parsed.truncated
         or parsed.date_order_assumed
     ):
+        return False
+    if UNUSED_BALANCE_WARNINGS.intersection(run.parse_warnings):
         return False
     return not run.parse_skipped and not CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
 

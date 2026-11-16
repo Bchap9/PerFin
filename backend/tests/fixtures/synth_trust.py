@@ -40,6 +40,17 @@ account number and the same six dated rows with signed amounts.
   row, whose date is no doubt.
 * :func:`no_balances_without_digits`: the first without the account number
   line: nothing on the page names an account but the bank's own name.
+* :func:`closing_balance_only`: the first plus a closing balance and no
+  opening one. One printed balance checks nothing (reconciliation
+  ``unavailable``), and a balance that was read and could not be used is a
+  doubt: never a clean read.
+* :func:`no_balances_no_period`: the first without the period line. The
+  period is then the rows' own first and last day (inferred): nothing
+  printed says which statement this is, so it is no clean read either.
+* :func:`ending_balance_and_a_doubled_row`: a different page altogether
+  (:data:`DOUBLED_ROWS`): a summary with an ending balance and no beginning
+  one, no period line, and a table of two rows of which the second prints
+  two dates where the table prints one (text laid over text).
 * :func:`mixed_sign_accounts_csv`: not a PDF but a CSV export of two
   accounts under one ``Account Number`` column and one signed ``Amount``
   column: a checking account (:data:`CSV_CHECKING`, money out negative) and
@@ -127,13 +138,16 @@ def _pdf(
     running: bool = True,
     closing: Decimal = CLOSING,
     digits: bool = True,
+    opening: bool = True,
+    period: bool = True,
 ) -> bytes:
     """One page: heading, period, account, a table of ``rows``.
 
     ``balances`` prints the opening and closing balances (``closing`` is
     the closing balance printed) and, with ``running``, a running balance
     column; ``unread_after`` prints the unreadable dated line after that
-    many rows; ``digits=False`` leaves the account number line out.
+    many rows; ``digits=False`` leaves the account number line out,
+    ``opening=False`` the opening balance and ``period=False`` the period line.
     """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
@@ -141,11 +155,13 @@ def _pdf(
     c.drawString(72, 750, INSTITUTION)
     c.setFont(FONT, 10)
     c.drawString(72, 732, "Account statement")
-    c.drawString(72, 716, f"Statement period: {_us(PERIOD_START)} - {_us(PERIOD_END)}")
+    if period:
+        c.drawString(72, 716, f"Statement period: {_us(PERIOD_START)} - {_us(PERIOD_END)}")
     if digits:
         c.drawString(72, 700, f"Account number: ****{LAST4}")
     if balances:
-        c.drawString(72, 684, f"Opening balance: {_money(OPENING)}")
+        if opening:
+            c.drawString(72, 684, f"Opening balance: {_money(OPENING)}")
         c.drawString(300, 684, f"Closing balance: {_money(closing)}")
     top = 652
     c.setFont(BOLD, 9)
@@ -185,6 +201,58 @@ def no_balances_statement() -> bytes:
 def no_balances_without_digits() -> bytes:
     """The same six rows and period; no account number is printed."""
     return _pdf(ROWS, digits=False)
+
+
+def closing_balance_only() -> bytes:
+    """The six rows, a period, a closing balance; no opening and no running balance."""
+    return _pdf(ROWS, balances=True, running=False, opening=False)
+
+
+def no_balances_no_period() -> bytes:
+    """The six rows and an account number; no balance and no period line."""
+    return _pdf(ROWS, period=False)
+
+
+#: The two table lines of :func:`ending_balance_and_a_doubled_row` as
+#: printed: the date column's text, the description and the amount.
+DOUBLED_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("07/30/12", "Monthly fee", "0.00"),
+    ("05/10/13 07/10/12", "Overdraft fee", "-35.00"),
+)
+#: The ending balance its summary prints.
+DOUBLED_ENDING: Final = Decimal("5000.00")
+
+
+def ending_balance_and_a_doubled_row() -> bytes:
+    """A summary with an ending balance only, no period, and a row that prints two dates."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.setFont(BOLD, 14)
+    c.drawString(72, 750, INSTITUTION)
+    c.setFont(FONT, 10)
+    c.drawString(72, 732, "Account statement")
+    c.drawString(72, 716, f"Account number: ****{LAST4}")
+    c.setFont(BOLD, 10)
+    c.drawString(72, 692, "Account summary")
+    c.setFont(FONT, 10)
+    c.drawString(72, 676, f"Ending balance ${DOUBLED_ENDING:,.2f}")
+    top = 644
+    c.setFont(BOLD, 9)
+    c.drawString(_DATE_X, top, "Date")
+    c.drawString(_DESC_X + 30, top, "Description")
+    c.drawRightString(_AMOUNT_X, top, "Amount")
+    c.setFont(FONT, 9)
+    y = top - 16
+    for dates, text, amount in DOUBLED_ROWS:
+        c.drawString(_DATE_X, y, dates)
+        c.drawString(_DESC_X + 30, y, text)
+        c.drawRightString(_AMOUNT_X, y, amount)
+        y -= 14
+    c.setFont(FONT, 7)
+    c.drawString(72, 60, "Synthetic test document. Not a real statement.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def no_balances_with_a_stray_row() -> bytes:

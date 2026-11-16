@@ -180,6 +180,12 @@ class ParsedStatement:
     reconciliation: Reconciliation | None = None
     #: Which parser read it (``name/version``), for review items.
     parser: str | None = None
+    #: How sure a document parser is of the statement's period
+    #: (``Statement.confidence["period"]``, 0..1): what a printed period
+    #: line scores, or at most ``confidence.INFERRED`` when the period is
+    #: only the rows' own first and last day. None when nothing scored it
+    #: (OFX, QIF and tables, which no document parser read).
+    period_confidence: float | None = None
 
     @property
     def reconciled(self) -> bool:
@@ -232,6 +238,7 @@ def from_statement(statement: Statement) -> ParsedStatement:
         opening_balance=statement.opening_balance.amount if statement.opening_balance else None,
         reconciliation=statement.reconciliation,
         parser=f"{parser.name}/{parser.version}" if parser is not None else None,
+        period_confidence=statement.confidence.get("period"),
     )
 
 
