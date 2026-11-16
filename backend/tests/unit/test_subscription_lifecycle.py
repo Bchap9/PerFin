@@ -155,6 +155,12 @@ class Book:
             ).scalars()
             return [job.payload["event_type"] for job in jobs]
 
+    def kinds_of(self, schedule_id: uuid.UUID) -> list[str]:
+        return [event.kind for event in self.events() if event.schedule_id == schedule_id]
+
+    def get(self, schedule_id: uuid.UUID) -> ScheduledTransaction:
+        return next(row for row in self.series() if row.id == schedule_id)
+
     def by_key(self, key: str) -> ScheduledTransaction:
         return next(row for row in self.series() if row.merchant_key == key)
 
@@ -500,6 +506,14 @@ def _dated(amounts: list[str], *, months: int = 1) -> list[Charge]:
         pytest.param(
             _facts(None), _dated(["-10.99", "-12.99"]), None, id="no earlier amount to compare"
         ),
+        pytest.param(
+            # Raised in July and back in August, read from the charges at the old price
+            # alone (the July one sits in another amount cluster).
+            _facts("-12.99", previous="-10.99", changed_on=date(2026, 7, 7)),
+            [c for i, c in enumerate(_dated(["-10.99"] * 8)) if i != 6],
+            (True, True, D("-12.99"), D("-10.99"), date(2026, 8, 7)),
+            id="back to an earlier price: dated where it changed back",
+        ),
     ],
 )
 def test_price_change(
@@ -837,6 +851,7 @@ def test_renewal_is_announced_once_a_week_ahead(book: Book) -> None:
     # the clock is the data.
     _run_daily_job(book, date(2026, 6, 15))
     assert book.kinds() == []
+    book.charge(date(2026, 6, 7), "-9.99", "TUNEBOX 7781", "tunebox")
     book.tick(date(2026, 6, 14))
     for _ in range(2):
         _run_daily_job(book, date(2026, 6, 15))
@@ -848,3 +863,359 @@ def test_renewal_is_announced_once_a_week_ahead(book: Book) -> None:
     )
     assert event.amount_after == D("-99.00")
     assert {row.merchant_key for row in book.series()} == {"lantern press", "tunebox"}
+
+
+# ---------------------------------------------------------------------------
+# Review findings, stage 2 lane S
+# ---------------------------------------------------------------------------
+
+#: A person-to-person payment: its series has no merchant key (the key is the service).
+TO_A_PERSON = "ZELLE PAYMENT TO IMRE CASTELLAN"
+
+
+def test_a_suggested_series_that_stops_and_resumes_stays_suggested(book: Book) -> None:
+    book.monthly(date(2025, 1, 5), ["-650.00"] * 5, TO_A_PERSON, None)
+    book.detect(date(2025, 5, 6))
+    series = book.one()
+    assert (series.status, series.kind, series.merchant_key) == ("suggested", "bill", None)
+    book.tick(date(2025, 9, 20))
+    book.detect(date(2025, 9, 21))
+    assert (book.one().status, book.one().status_source) == ("ended", "detector")
+    for i in range(3):
+        day = add_months(date(2025, 10, 5), i)
+        book.charge(day, "-650.00", TO_A_PERSON, None)
+        (candidate,) = book.found(day)
+        assert candidate.status == "suggested"
+        book.detect(day + timedelta(days=1))
+        again = book.one()
+        assert again.id == series.id
+        # What the detector reopens is what it finds: a suggestion stays one.
+        assert (again.status, again.status_source, again.active) == ("suggested", "detector", False)
+        assert again.ended_on is None
+
+
+def test_a_series_without_a_merchant_key_that_still_charges_is_not_ended(book: Book) -> None:
+    # A keyed series next to it, so the household's runs are ordinary (not quiet) ones.
+    book.monthly(date(2025, 1, 7), ["-9.99"] * 6, "TUNEBOX 7781", "tunebox")
+    book.monthly(date(2025, 1, 5), ["-650.00"] * 3, TO_A_PERSON, None)
+    book.detect(date(2025, 3, 8))
+    rent = next(row for row in book.series() if row.merchant_key is None)
+    book.decide(rent.id, status="confirmed", status_source="person", active=True)
+    # April is skipped; May and June are paid. Detection sees no rhythm in that,
+    # but the payments go on.
+    for month in (5, 6):
+        book.charge(date(2025, month, 5), "-650.00", TO_A_PERSON, None)
+        assert [c.payee_key for c in book.found(date(2025, month, 6))] == ["merchant:tunebox"]
+        book.detect(date(2025, month, 6))
+        after = book.get(rent.id)
+        assert (after.status, after.status_source, after.active) == ("confirmed", "person", True)
+    assert book.kinds_of(rent.id) == []
+    # Once they really stop, the series ends as any other.
+    book.tick(date(2025, 9, 20))
+    book.detect(date(2025, 9, 21))
+    assert (book.get(rent.id).status, book.get(rent.id).status_source) == ("ended", "detector")
+    assert book.kinds_of(rent.id) == ["ended"]
+
+
+def test_one_stray_charge_after_a_person_ended_it_is_reported(book: Book) -> None:
+    book.monthly(date(2025, 1, 8), ["-8.00"] * 4, "FILMHUT 220", "filmhut")
+    book.detect(date(2025, 4, 9))
+    series = book.one()
+    book.decide(
+        series.id, status="ended", status_source="person", active=False, ended_on=date(2025, 4, 20)
+    )
+    # Something else bought there, at another price: not a charge of the series.
+    other = book.charge(date(2025, 6, 2), "-23.75", "FILMHUT 220", "filmhut")
+    book.detect(date(2025, 6, 3))
+    assert book.kinds() == []
+    # Months later the old price is charged once more. One charge has no rhythm,
+    # so detection finds no series in it.
+    stray = book.charge(date(2025, 8, 8), "-8.00", "FILMHUT 220", "filmhut")
+    book.as_imported()
+    assert book.found(date(2025, 8, 9)) == []
+    for _ in range(2):
+        book.detect(date(2025, 8, 9))
+    (event,) = book.events()
+    assert (event.kind, event.occurred_on, event.transaction_id) == (
+        "charged_after_end",
+        date(2025, 8, 8),
+        stray,
+    )
+    assert event.amount_after == D("-8.00")
+    after = book.one()
+    assert (after.status, after.status_source, after.ended_on) == (
+        "ended",
+        "person",
+        date(2025, 4, 20),
+    )
+    # The charge is filed with its series, and no row looks touched.
+    charges = book.charges()
+    assert charges[stray].scheduled_transaction_id == series.id
+    assert charges[other].scheduled_transaction_id is None
+    assert all(row.updated_at == row.created_at for row in charges.values())
+
+
+def test_a_price_that_goes_back_is_dated_where_it_went_back(book: Book) -> None:
+    book.monthly(date(2025, 1, 8), ["-10.99"] * 6 + ["-12.99"], "TUNEBOX 7781", "tunebox")
+    book.detect(date(2025, 6, 9))
+    book.detect(date(2025, 7, 9))
+    back = book.charge(date(2025, 8, 8), "-10.99", "TUNEBOX 7781", "tunebox")
+    for _ in range(2):
+        book.detect(date(2025, 8, 9))
+    up, down = book.events()
+    assert (up.kind, up.occurred_on) == ("price_changed", date(2025, 7, 8))
+    assert (down.kind, down.occurred_on, down.transaction_id) == (
+        "price_changed",
+        date(2025, 8, 8),
+        back,
+    )
+    assert (down.amount_before, down.amount_after) == (D("-12.99"), D("-10.99"))
+    series = book.one()
+    assert (series.last_amount, series.previous_amount, series.price_changed_on) == (
+        D("-10.99"),
+        D("-12.99"),
+        date(2025, 8, 8),
+    )
+    # The next charge at that price says nothing new.
+    book.charge(date(2025, 9, 8), "-10.99", "TUNEBOX 7781", "tunebox")
+    book.detect(date(2025, 9, 9))
+    assert book.kinds() == ["price_changed", "price_changed"]
+    assert book.one().price_changed_on == date(2025, 8, 8)
+
+
+def test_missed_is_said_when_the_grace_has_passed(book: Book) -> None:
+    with book.factories.transaction() as db:
+        make_channel(db, book.household_id, book.factories.keyring)
+    due = date(2026, 7, 7)
+    book.monthly(JAN, ["-9.99"] * 6, "TUNEBOX 7781", "tunebox")
+    book.detect(date(2026, 6, 10))
+    long_after = date(2027, 3, 1)
+    # Five days late is inside the grace of a monthly charge.
+    book.tick(due + timedelta(days=5))
+    book.detect(long_after)
+    assert book.kinds() == []
+    # The sixth day: detection still counts the series as running, and the charge is missed.
+    book.tick(due + timedelta(days=6))
+    assert [c.payee_key for c in book.found(long_after)] == ["merchant:tunebox"]
+    for _ in range(2):
+        book.detect(long_after)
+    (missed,) = book.events()
+    assert (missed.kind, missed.occurred_on, missed.schedule_id) == (
+        "missed",
+        due,
+        book.by_key("tunebox").id,
+    )
+    assert book.sends() == ["subscription.missed"]
+    assert (book.by_key("tunebox").status, book.by_key("tunebox").active) == ("active", True)
+    # Later, when detection no longer finds it, the same missed charge is not said again.
+    book.tick(due + timedelta(days=28))
+    book.detect(long_after)
+    assert book.kinds() == ["missed"]
+    # A charge that arrives late after all: the series simply goes on.
+    book.charge(due + timedelta(days=29), "-9.99", "TUNEBOX 7781", "tunebox")
+    book.detect(long_after)
+    assert book.kinds() == ["missed"]
+    assert book.by_key("tunebox").occurrences == 7
+
+
+def test_an_annual_charge_that_did_not_come_is_missed_after_three_weeks(book: Book) -> None:
+    book.charge(date(2023, 3, 10), "-99.00", "LANTERN PRESS", "lantern press")
+    book.charge(date(2024, 3, 10), "-99.00", "LANTERN PRESS", "lantern press")
+    for _ in range(2):  # the second run is an ordinary one
+        book.detect(date(2024, 3, 12))
+    due = date(2025, 3, 10)
+    assert (book.one().status, book.one().next_due) == ("active", due)
+    book.tick(due + timedelta(days=21))
+    book.detect(due + timedelta(days=21))
+    assert book.kinds() == []
+    book.tick(due + timedelta(days=22))
+    for _ in range(2):
+        book.detect(due + timedelta(days=22))
+    (missed,) = book.events()
+    assert (missed.kind, missed.occurred_on) == ("missed", due)
+    # One missed charge ends nothing.
+    assert book.by_key("lantern press").status == "active"
+
+
+def test_a_new_plan_after_a_dismissed_one_is_suggested_not_swallowed(book: Book) -> None:
+    book.monthly(date(2025, 1, 8), ["-4.99"] * 4, "GLYPHCLOUD STORAGE", "glyphcloud")
+    book.detect(date(2025, 4, 9))
+    dismissed = book.one()
+    book.decide(dismissed.id, status="dismissed", status_source="person", active=False)
+    # The small plan stops. Five months later the merchant bills another one.
+    book.monthly(date(2025, 9, 15), ["-29.99"] * 5, "GLYPHCLOUD PRO", "glyphcloud")
+    on = date(2026, 1, 16)
+    (candidate,) = book.found(on)
+    assert candidate.status == "active"
+    counts = book.detect(on)
+    assert (counts.created, counts.skipped_dismissed) == (1, 0)
+    tombstone = book.get(dismissed.id)
+    assert (tombstone.status, tombstone.status_source) == ("dismissed", "person")
+    assert (tombstone.amount_min, tombstone.amount_max) == (D("-4.99"), D("-4.99"))
+    (plan,) = [row for row in book.series() if row.id != dismissed.id]
+    # The person said "not a subscription" about this merchant once: it is only asked.
+    assert (plan.status, plan.status_source, plan.active) == ("suggested", "detector", False)
+    assert plan.last_amount == D("-29.99")
+    # ... on every later run too, until a person says so.
+    again = book.detect(on)
+    assert (again.created, again.skipped_dismissed) == (0, 0)
+    assert book.get(plan.id).status == "suggested"
+    book.decide(plan.id, status="confirmed", status_source="person", active=True)
+    book.detect(on)
+    assert len(book.series()) == 2
+    assert book.get(plan.id).status == "confirmed"
+
+
+def test_a_dismissed_series_whose_price_rises_stays_dismissed(book: Book) -> None:
+    book.monthly(date(2025, 1, 8), ["-9.99"] * 4, "TUNEBOX 7781", "tunebox")
+    book.detect(date(2025, 4, 9))
+    book.decide(book.one().id, status="dismissed", status_source="person", active=False)
+    # It goes on charging, and from July at a higher price: the same series.
+    book.monthly(date(2025, 5, 8), ["-9.99"] * 2 + ["-11.99"] * 3, "TUNEBOX 7781", "tunebox")
+    for on in (date(2025, 7, 9), date(2025, 9, 9), date(2025, 9, 9)):
+        counts = book.detect(on)
+        assert (counts.created, counts.skipped_dismissed) == (0, 1)
+    tombstone = book.one()
+    assert (tombstone.status, tombstone.status_source) == ("dismissed", "person")
+    # The tombstone follows the price, so it still matches when the old charges
+    # have left the look-back window.
+    assert (tombstone.amount_min, tombstone.amount_max) == (D("-11.99"), D("-11.99"))
+    assert book.kinds() == []
+
+
+def test_the_first_run_says_nothing_about_a_price_or_an_end(book: Book) -> None:
+    with book.factories.transaction() as db:
+        make_channel(db, book.household_id, book.factories.keyring)
+    # Two series from before merchant keys whose facts were kept: one whose price
+    # rose since, one whose charges stopped.
+    priced = book.ledger.run(
+        make_scheduled_transaction,
+        book.account,
+        name="TUNEBOX 7781",
+        origin=ScheduleOrigin.DETECTED,
+        next_due=date(2026, 6, 7),
+        amount_min="-13.00",
+        amount_max="-9.00",
+    )
+    gone = book.ledger.run(
+        make_scheduled_transaction,
+        book.account,
+        name="Granite Gym",
+        origin=ScheduleOrigin.DETECTED,
+        next_due=date(2026, 2, 1),
+        amount_min="-20.00",
+        amount_max="-20.00",
+    )
+    book.decide(priced.id, last_amount=D("-9.99"), occurrences=5, last_seen_on=date(2026, 5, 7))
+    book.decide(gone.id, last_amount=D("-20.00"), occurrences=9, last_seen_on=date(2026, 1, 1))
+    book.monthly(JAN, ["-9.99"] * 5 + ["-12.99"], "TUNEBOX 7781", "tunebox")
+    book.detect(date(2026, 6, 10))
+    tunebox = book.by_key("tunebox")
+    assert tunebox.id == priced.id
+    assert (tunebox.last_amount, tunebox.previous_amount, tunebox.price_changed_on) == (
+        D("-12.99"),
+        D("-9.99"),
+        date(2026, 6, 7),
+    )
+    assert (book.get(gone.id).status, book.get(gone.id).status_source) == ("ended", "detector")
+    # The household's first run: the facts are written and nothing is announced.
+    assert book.kinds() == []
+    assert book.sends() == []
+    # From the second run on a change is said.
+    book.charge(date(2026, 7, 7), "-15.99", "TUNEBOX 7781", "tunebox")
+    book.detect(date(2026, 7, 10))
+    assert book.kinds() == ["price_changed"]
+    assert book.sends() == ["subscription.price_changed"]
+
+
+def test_a_series_entered_by_hand_is_never_settled(book: Book) -> None:
+    manual = book.ledger.run(
+        make_scheduled_transaction,
+        book.account,
+        name="Ironworks Gym",
+        next_due=date(2026, 2, 1),
+        amount_min="-36.00",
+        amount_max="-34.00",
+    )
+    before = book.get(manual.id)
+    assert (before.origin, before.status) == (ScheduleOrigin.MANUAL, "confirmed")
+    # No charge of it ever arrives, and the clock runs months past its due date.
+    book.monthly(JAN, ["-9.99"] * 6, "TUNEBOX 7781", "tunebox")
+    for on in (date(2026, 6, 10), date(2026, 6, 11)):
+        book.detect(on)
+    after = book.get(manual.id)
+    for column in ScheduledTransaction.__table__.columns:
+        assert getattr(after, column.name) == getattr(before, column.name), column.name
+    assert book.kinds() == []
+
+
+def test_only_a_counted_long_cycle_series_is_announced_as_renewing(book: Book) -> None:
+    for text, key in (("LANTERN PRESS", "lantern press"), ("HARBOR CLUB", "harbor club")):
+        book.charge(date(2024, 6, 20), "-99.00", text, key)
+        book.charge(date(2025, 6, 20), "-99.00", text, key)
+    # A monthly charge due on the 18th: inside the week too, and never a renewal.
+    book.monthly(date(2025, 12, 18), ["-9.99"] * 6, "TUNEBOX 7781", "tunebox")
+    assert book.detect(date(2026, 5, 20)).created == 3
+    for row in book.series():
+        assert row.status == "active"
+        book.decide(row.id, kind="subscription", kind_source="person")
+    paused = book.by_key("harbor club")
+    book.decide(paused.id, status="paused", status_source="person", active=False)
+    assert book.by_key("tunebox").next_due == date(2026, 6, 18)
+    assert paused.next_due == book.by_key("lantern press").next_due == date(2026, 6, 20)
+    book.tick(date(2026, 6, 14))
+    for stored in (1, 0):
+        with book.factories.transaction() as db:
+            set_context(db, book.household_id)
+            assert subscriptions.renewals(db, book.household_id, date(2026, 6, 15)) == stored
+    (event,) = book.events()
+    assert (event.kind, event.schedule_id, event.occurred_on) == (
+        "renewal_due",
+        book.by_key("lantern press").id,
+        date(2026, 6, 20),
+    )
+
+
+def test_a_small_first_charge_at_an_unknown_merchant_is_no_trial(book: Book) -> None:
+    streaming = book.ledger.category(
+        book.household_id, name="Streaming", system_key="leisure.subscriptions"
+    )
+    text, key = "QUARRY LANE STUDIO", "quarry lane studio"
+    book.charge(date(2026, 5, 2), "-1.00", text, key, category=streaming)
+    for week in range(4):
+        book.charge(
+            date(2026, 5, 9) + timedelta(days=7 * week), "-15.49", text, key, category=streaming
+        )
+    for _ in range(2):
+        book.detect(date(2026, 6, 1))
+    series = book.one()
+    assert (series.kind, series.status, series.last_amount) == (
+        "subscription",
+        "active",
+        D("-15.49"),
+    )
+    # New, yes. A trial that became a paid plan is only read for a dictionary subscription.
+    assert book.kinds() == ["new"]
+
+
+def test_a_bill_whose_amount_varies_has_no_price_to_change(book: Book) -> None:
+    power = book.ledger.category(
+        book.household_id, name="Electricity", system_key="utilities.electricity"
+    )
+    amounts = ["-80.00", "-91.00", "-74.00", "-82.00"]
+    book.monthly(JAN, amounts, "HILL POWER CO", "hill power", category=power)
+    for _ in range(2):
+        book.detect(date(2026, 4, 10))
+    bill = book.one()
+    assert (bill.kind, bill.status, bill.last_amount) == ("bill", "active", D("-82.00"))
+    # A fifth more than last month: a variable bill does that.
+    book.charge(date(2026, 5, 7), "-99.00", "HILL POWER CO", "hill power", category=power)
+    for _ in range(2):
+        book.detect(date(2026, 5, 10))
+    after = book.one()
+    assert (after.last_amount, after.previous_amount, after.price_changed_on) == (
+        D("-99.00"),
+        None,
+        None,
+    )
+    assert book.kinds() == []

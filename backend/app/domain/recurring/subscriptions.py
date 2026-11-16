@@ -22,22 +22,34 @@ its latest row), never against today.
   ``max(PRICE_MIN_ABS, PRICE_MIN_SHARE)`` the amount is updated without a
   word; more is a ``price_changed`` event, with ``previous_amount``,
   ``last_amount`` and ``price_changed_on`` (the first charge at the new
-  price) written. The change is *pending* while one charge shows it and the
-  cadence is shorter than half a year (:func:`price_change`). A series whose
-  cadence changed in the same run (a monthly plan that became annual) takes
-  the new amount without an event.
-* **Missed, ended.** Judged only when detection no longer finds the series
-  and no charge of its merchant is newer than its last one (a merchant that
-  still charges without a rhythm is not "missed"). :func:`missed_cycles`
-  counts 1 once the due date plus its grace (:func:`grace_days`) passed, and
-  one for every whole cycle that went by after the due date. One: a
-  ``missed`` event, once per due date. Two: the series is ``ended`` by the
-  detector, with one ``ended`` event. This is the one status the detector
-  takes from a person: a *confirmed* series that stopped is ended too. A
-  series the detector ended that charges again is ``active`` again.
+  price) written. The new price is read back from the latest charge through
+  every charge of the series, so a price that returns to an earlier amount
+  is dated where it returned, never before the change on record. The change
+  is *pending* while one charge shows it and the cadence is shorter than
+  half a year (:func:`price_change`). A series whose cadence changed in the
+  same run (a monthly plan that became annual) takes the new amount without
+  an event.
+* **Missed, ended.** :func:`missed_cycles` counts 1 once the due date plus
+  its grace (:func:`grace_days`) passed on the data clock, and one for every
+  whole cycle that went by after the due date. One: a ``missed`` event, once
+  per due date, also while detection still finds the series (it calls a
+  series running for one and a half cycles after its last charge). Two: the
+  series is ``ended`` by the detector, with one ``ended`` event; by then
+  detection no longer finds it. This is the one status the detector takes
+  from a person: a *confirmed* series that stopped is ended too. A merchant
+  that still charges without a rhythm is not "missed": when a charge of the
+  series, or one of its group (the merchant, or the person paid) that
+  belongs to no series, is newer than its last one, the next charge is
+  expected one cycle after the newest. A series the detector ended that
+  charges again is reopened as detection finds it now: ``active``, or only
+  ``suggested`` (a person-to-person series is never more).
 * **A person's word.** A paused or dismissed series is left alone. A series
   a person ended stays ended; a charge after ``ended_on`` is a
-  ``charged_after_end`` event. A series entered by hand is never touched.
+  ``charged_after_end`` event, whether detection sees a series in it or it
+  is one stray charge of the group at the series' price (in its amount
+  range, or within detection's cluster tolerance of its latest amount; the
+  caller links that charge to the series). A series entered by hand is never
+  touched.
 * **New.** A series created in this run whose first charge is at most
   :data:`NEW_WINDOW_DAYS` before ``as_of`` is a ``new`` event; when its
   merchant is a dictionary subscription and a charge of at most
@@ -121,7 +133,13 @@ from app.domain.categorisation import engine as categorisation
 from app.domain.fx.service import FxConverter, base_currency
 from app.domain.notifications.routing import notify
 from app.domain.recurring import service as recurring_service
-from app.domain.recurring.detection import Candidate, monthly_cost, yearly_cost
+from app.domain.recurring.detection import (
+    CLUSTER_SLACK,
+    CLUSTER_TOLERANCE,
+    Candidate,
+    monthly_cost,
+    yearly_cost,
+)
 from app.domain.recurring.models import SubscriptionEvent
 from app.domain.recurring.schemas import (
     MAX_CHARGES,
@@ -340,6 +358,8 @@ def price_change(series: SeriesFacts, charges: Sequence[Charge]) -> PriceVerdict
     for charge in reversed(ordered[:-1]):
         if not _same_price(charge.amount, latest.amount):
             break
+        if series.price_changed_on is not None and charge.posted_date <= series.price_changed_on:
+            break  # at this price before the change on record: an earlier time, not this one
         run.append(charge)
     first = run[-1]
     with localcontext(calc_context()):
@@ -465,7 +485,7 @@ def _reprice(
     if series.last_amount is None or moved or not candidate.fixed:
         series.last_amount = latest
         return None
-    own = set(candidate.transaction_ids)
+    found = set(candidate.transaction_ids)
     verdict = price_change(
         SeriesFacts(
             cadence=candidate.cadence,
@@ -475,7 +495,9 @@ def _reprice(
             previous_amount=series.previous_amount,
             price_changed_on=series.price_changed_on,
         ),
-        [c for c in charges if c.id in own],
+        # Every charge of the series up to the candidate's latest: one at another
+        # price in between (another amount cluster) is where a run at this price began.
+        [c for c in charges if c.id in found or c.posted_date < candidate.last_seen],
     )
     if verdict is None:
         return None
@@ -500,6 +522,35 @@ def _reprice(
     )
 
 
+def _expected(
+    last: date, due: date, cycle: tuple[Cadence, int], charges: Iterable[Charge]
+) -> tuple[date, date]:
+    """The last charge and the next due date, given every charge of the group.
+
+    A charge newer than ``last`` means it still charges and detection just
+    sees no rhythm: the next one is expected a cycle after the newest.
+    """
+    newest = max((charge.posted_date for charge in charges), default=last)
+    if newest <= last:
+        return last, due
+    return newest, max(due, step(newest, *cycle, 1))
+
+
+def _late(
+    db: Session,
+    series: ScheduledTransaction,
+    candidate: Candidate,
+    charges: Sequence[Charge],
+    as_of: date,
+) -> SubscriptionEvent | None:
+    """``missed`` for a series detection still finds: its next charge is past its grace."""
+    cycle = (candidate.cadence, candidate.interval_count)
+    _, due = _expected(candidate.last_seen, candidate.next_due, cycle, charges)
+    if missed_cycles(due, *cycle, as_of) == 0:
+        return None
+    return _record(db, series, "missed", due)
+
+
 def _absent(
     db: Session,
     series: ScheduledTransaction,
@@ -510,20 +561,32 @@ def _absent(
 ) -> SubscriptionEvent | None:
     """The missed-and-ended part of :func:`settle` for a series detection did not find.
 
-    ``charges`` are the series' own and the merchant's unclaimed ones.
+    ``charges`` are the series' own and its group's unclaimed ones.
     """
     cycle = (series.cadence, series.interval_count)
-    last = series.last_seen_on or step(series.next_due, *cycle, -1)
-    if any(charge.posted_date > last for charge in charges):
-        return None  # it still charges; detection just sees no rhythm
-    missed = missed_cycles(series.next_due, *cycle, as_of)
+    last, due = _expected(
+        series.last_seen_on or step(series.next_due, *cycle, -1), series.next_due, cycle, charges
+    )
+    missed = missed_cycles(due, *cycle, as_of)
     if missed == 0:
         return None
     if missed == 1:
-        return _record(db, series, "missed", series.next_due) if loud else None
+        return _record(db, series, "missed", due) if loud else None
     _set_status(series, "ended")
     series.ended_on = last
-    return _record(db, series, "ended", series.next_due) if loud else None
+    return _record(db, series, "ended", due) if loud else None
+
+
+def _priced_like(series: ScheduledTransaction, charge: Charge) -> bool:
+    """Whether a charge of the group is at the series' price (module doc)."""
+    if series.amount_min <= charge.amount <= series.amount_max:
+        return True
+    last = series.last_amount
+    if last is None or (last > 0) != (charge.amount > 0):
+        return False
+    with localcontext(calc_context()):
+        size = abs(last)
+        return abs(abs(charge.amount) - size) <= max(size * CLUSTER_TOLERANCE, CLUSTER_SLACK)
 
 
 def _first_seen(
@@ -574,10 +637,12 @@ def settle(
     ``candidate`` is what detection found for the series in this run, before
     its facts are refreshed from it (``None``: not found). ``charges`` are
     the rows of the series (linked to it, or in the candidate); ``loose``
-    are rows of the same merchant, account and direction that belong to no
-    series. ``as_of`` is the account's data clock. ``created``: the series
-    was written in this run. ``quiet``: the household's first run (only
-    what is new is announced). Returns the events stored now.
+    are rows of the same group (the merchant, or the text of a series without
+    a key), account and direction that belong to no series. ``as_of`` is the
+    account's data clock. ``created``: the series was written in this run.
+    ``quiet``: the household's first run (only what is new is announced).
+    Returns the events stored now; the caller links the charge of a
+    ``charged_after_end`` event to the series.
     """
     if series.household_id != household_id:
         raise ValueError("the series belongs to another household")
@@ -593,7 +658,8 @@ def settle(
             series.last_amount = to_storage(candidate.last_amount)
         events: list[SubscriptionEvent] = []
         if series.status == "ended" and series.ended_on is not None and loud:
-            for charge in own:
+            stray = [charge for charge in _ordered(loose) if _priced_like(series, charge)]
+            for charge in [*own, *stray]:
                 if charge.posted_date > series.ended_on:
                     _keep(
                         events,
@@ -612,7 +678,8 @@ def settle(
         ended_on = series.ended_on
         if candidate is None or (ended_on is not None and candidate.last_seen <= ended_on):
             return []
-        _set_status(series, "active")  # what the detector ended, it reopens
+        # What the detector ended, it reopens: as it finds it now, a suggestion or a fact.
+        _set_status(series, candidate.status)
         series.ended_on = None
     events = []
     counted = before in ACTIVE_STATUSES
@@ -621,6 +688,8 @@ def settle(
             events.extend(_first_seen(db, series, candidate, [*loose, *own], as_of))
     elif candidate is not None:
         _keep(events, _reprice(db, series, candidate, own, loud=loud and counted))
+        if loud and counted:
+            _keep(events, _late(db, series, candidate, [*own, *loose], as_of))
     elif series.status in WATCHED:
         seen = series.occurrences > 0  # the detector of this release knows the series
         _keep(

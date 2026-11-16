@@ -37,6 +37,20 @@ judged against what was uploaded, never against today.
    makes a series, a group that is a bill or income by step 7 is tried once
    more as a whole without the "no two charges close together" condition (a
    bill paid late and then on time).
+
+   **Plans told apart by their day of the month.** Money out only. Charges
+   are sorted into days of the month (a day and the :data:`FIXED_DAY_SPREAD`
+   days after it; a day that wraps around the end of a month is not
+   followed). When every such day has at least :data:`FIXED_DAY_MIN_COUNT`
+   charges on a monthly or longer rhythm without one irregular gap, and there
+   are two days or more, each day is a series of its own: the ones that still
+   run are reported. This is tried in two places. Rows that read as
+   *fortnightly* (the whole group, or a cluster) are two monthly plans when
+   they sit on two days of the month: a charge every fourteen days moves
+   through the month instead. And a cluster *without* a cadence is tried this
+   way when the dictionary names the merchant as a subscription or a bill
+   (two plans at one price behind one descriptor); at any other merchant two
+   charges per cycle stay what step 5 says, a habit.
 5. **Cadence** by the median gap between consecutive charges
    (:data:`PATTERNS`), with at least :data:`MIN_REGULARITY` of the gaps inside
    the pattern's window. Every row counts, also two on one day: a second
@@ -115,6 +129,10 @@ FIXED_SLACK: Final = Decimal("0.50")
 ACTIVE_MIN: Final = Decimal("0.80")
 #: Charges a fixed, perfectly regular series in a habit category needs to be suggested.
 HABIT_MIN_COUNT: Final = 6
+#: Charges on "one day of the month" land at most this many days after its earliest.
+FIXED_DAY_SPREAD: Final = 2
+#: Charges each day of the month needs before days tell plans apart (step 4).
+FIXED_DAY_MIN_COUNT: Final = 3
 CONFIDENCE_QUANTUM: Final = Decimal("0.01")
 PAYEE_KEY_MAX: Final = 64
 _NOT_WORD: Final = re.compile(r"[^a-z]+")
@@ -274,7 +292,8 @@ def normalize_payee(text: str | None) -> str:
 
 
 def _matches(key: str | None, prefixes: tuple[str, ...]) -> bool:
-    return key is not None and key.startswith(prefixes)
+    """Whether ``key`` is under one of ``prefixes``; ``food`` itself is under ``food.``."""
+    return key is not None and (key.startswith(prefixes) or f"{key}." in prefixes)
 
 
 def _most_common[T: Hashable](values: Iterable[T | None]) -> T | None:
@@ -399,8 +418,13 @@ class _Shape:
     short: int
 
 
-def _shape(rows: Sequence[Observed], as_of: date, known: bool) -> _Shape | None:
-    """The cadence of ``rows`` (date order), if they have one and still run."""
+def _shape(
+    rows: Sequence[Observed], as_of: date, known: bool, *, stopped: bool = False
+) -> _Shape | None:
+    """The cadence of ``rows`` (date order), if they have one and still run.
+
+    ``stopped``: a series that no longer runs has a shape too.
+    """
     if len(rows) < 2:
         return None
     gaps = [(b.posted_date - a.posted_date).days for a, b in itertools.pairwise(rows)]
@@ -409,7 +433,7 @@ def _shape(rows: Sequence[Observed], as_of: date, known: bool) -> _Shape | None:
         return None
     if len(rows) < (spec.min_count_known if known else spec.min_count):
         return None
-    if not spec.running(rows[-1].posted_date, as_of):
+    if not stopped and not spec.running(rows[-1].posted_date, as_of):
         return None
     with localcontext(calc_context()):
         regularity = Decimal(sum(1 for g in gaps if spec.low <= g <= spec.high)) / len(gaps)
@@ -506,6 +530,45 @@ def _seen_once(group: _Group, row: Observed, as_of: date) -> Candidate | None:
     return _candidate(group, [row], _ANNUAL, Decimal(0), once=True)
 
 
+def _by_day_of_month(rows: Iterable[Observed]) -> list[list[Observed]]:
+    """``rows`` sorted into days of the month (a day and :data:`FIXED_DAY_SPREAD` after it)."""
+    parts: list[list[Observed]] = []
+    for row in sorted(rows, key=lambda r: (r.posted_date.day, r.posted_date, r.id.bytes)):
+        if parts and row.posted_date.day - parts[-1][0].posted_date.day <= FIXED_DAY_SPREAD:
+            parts[-1].append(row)
+        else:
+            parts.append([row])
+    return parts
+
+
+def _plans_by_day(group: _Group, rows: Sequence[Observed], as_of: date) -> list[Candidate]:
+    """The running plans of ``rows`` when their days of the month tell plans apart, else none.
+
+    Module doc, step 4: every day of the month must be a series in its own
+    right, or the rows are not read this way at all.
+    """
+    if group.inflow:
+        return []
+    parts = _by_day_of_month(rows)
+    if len(parts) < 2:
+        return []
+    out: list[Candidate] = []
+    for part in parts:
+        ordered = _by_date(part)
+        if len(ordered) < FIXED_DAY_MIN_COUNT:
+            return []
+        shape = _shape(ordered, as_of, group.known, stopped=True)
+        if shape is None or shape.spec.step_months is None or shape.regularity < 1:
+            return []
+        if not shape.spec.running(ordered[-1].posted_date, as_of):
+            continue  # a plan that was cancelled: it told the days apart, and is not reported
+        found = _candidate(group, ordered, shape.spec, shape.regularity)
+        if found is None:
+            return []
+        out.append(found)
+    return out
+
+
 def _series(group: _Group, members: Sequence[Observed], as_of: date) -> list[Candidate]:
     """The series of one group (module doc, steps 3 to 5)."""
     rows = _by_date(members)
@@ -514,6 +577,8 @@ def _series(group: _Group, members: Sequence[Observed], as_of: date) -> list[Can
         return [once] if once is not None else []
     whole = _shape(rows, as_of, group.known)
     if whole is not None and whole.short == 0:
+        if whole.spec.pattern is Pattern.BIWEEKLY and (plans := _plans_by_day(group, rows, as_of)):
+            return plans
         found = _candidate(group, rows, whole.spec, whole.regularity)
         if found is not None:
             return [found]
@@ -521,6 +586,11 @@ def _series(group: _Group, members: Sequence[Observed], as_of: date) -> list[Can
     for cluster in cluster_amounts(rows):
         ordered = _by_date(cluster)
         shape = _shape(ordered, as_of, group.known)
+        by_day = group.known if shape is None else shape.spec.pattern is Pattern.BIWEEKLY
+        plans = _plans_by_day(group, ordered, as_of) if by_day else []
+        if plans:
+            out.extend(plans)
+            continue
         if shape is None:
             continue
         found = _candidate(group, ordered, shape.spec, shape.regularity)
@@ -544,8 +614,8 @@ def _excluded(row: Observed) -> bool:
     )
 
 
-def _group_key(row: Observed) -> str | None:
-    """Module doc, step 2."""
+def group_key(row: Observed) -> str | None:
+    """The group ``row`` belongs to (module doc, step 2), ``None`` for a row without one."""
     if row.kind == "p2p":
         return f"p2p:{row.text_key}" if row.text_key else None
     if row.merchant_key:
@@ -585,7 +655,7 @@ def detect(rows: Iterable[Observed], as_of: Mapping[uuid.UUID, date]) -> list[Ca
             clock[row.account_id] = max(clock.get(row.account_id, row.posted_date), row.posted_date)
     groups: dict[tuple[uuid.UUID, str, bool], list[Observed]] = defaultdict(list)
     for row in kept:
-        key = _group_key(row)
+        key = group_key(row)
         if key is None or row.posted_date > clock[row.account_id]:
             continue
         groups[(row.account_id, key, row.amount > 0)].append(row)

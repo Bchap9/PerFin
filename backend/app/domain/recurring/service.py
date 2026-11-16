@@ -37,7 +37,14 @@ match: a plan that moves from monthly to annual is the same series. The best
 pairs are taken first and a series matches at most one candidate per run.
 
 * A **dismissed** match: the candidate is dropped. A dismissed series never
-  returns and no second one is created for it.
+  returns and no second one is created for it. It matches on (0) and (2),
+  and on (1) only when the candidate is that series at a new price: its
+  charges ran on from the dismissed amount without a break (the tombstone
+  then takes the new amount range). A plan the merchant starts after the
+  dismissed one stopped is not that series: it is created, as ``suggested``
+  whatever the evidence, and stays a suggestion until a person decides, like
+  every other series detection finds while a dismissed one of the same
+  merchant (or name) stands on the account.
 * A **manual** match wins over a detected one and is never rewritten
   (``skipped_manual``); its charges are linked to it.
 * Any other match has its facts refreshed (the cadence, the amount range,
@@ -51,6 +58,11 @@ pairs are taken first and a series matches at most one candidate per run.
   stays so.
 * No match: a detected series is created with the candidate's kind and
   status (``active`` or ``suggested``), both decided by the detector.
+
+What detection found once and finds no more is settled too. Its charges, and
+the rows of the same group (``detection.group_key``: the merchant, or for a
+series without a merchant key the person paid or the text) that belong to no
+series, tell whether it still charges.
 
 The charges of a candidate are linked to its series
 (``transaction.scheduled_transaction_id``) through the pinned write, which
@@ -88,6 +100,7 @@ updated|deleted`` with ids and the ``account_id`` only.
 
 from __future__ import annotations
 
+import itertools
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -156,6 +169,8 @@ if TYPE_CHECKING:
 LIQUID_TYPES: Final = frozenset({AccountType.CHECKING, AccountType.SAVINGS, AccountType.CASH})
 DEFAULT_NAME: Final = "Recurring"
 DISMISSED: Final = "dismissed"
+#: An account, detection's group key and the direction (money in).
+type _GroupKey = tuple[uuid.UUID, str, bool]
 DETECTOR: Final = "detector"
 PERSON: Final = "person"
 ZERO: Final = Decimal(0)
@@ -591,6 +606,11 @@ def _name(candidate: Candidate, payees: dict[uuid.UUID, str]) -> str:
     return (name or DEFAULT_NAME)[:NAME_MAX]
 
 
+def _overlaps(row: ScheduledTransaction, candidate: Candidate) -> bool:
+    """Whether the amount ranges of ``row`` and ``candidate`` overlap."""
+    return max(row.amount_min, candidate.amount_min) <= min(row.amount_max, candidate.amount_max)
+
+
 def _linked(
     candidate: Candidate, links: Mapping[uuid.UUID, uuid.UUID | None]
 ) -> Counter[uuid.UUID]:
@@ -618,9 +638,7 @@ def _match_rank(
         return None
     if (row.amount_min >= 0) != candidate.inflow:
         return None
-    overlaps = max(row.amount_min, candidate.amount_min) <= min(
-        row.amount_max, candidate.amount_max
-    )
+    overlaps = _overlaps(row, candidate)
     if row.merchant_key is not None and row.merchant_key == candidate.merchant_key:
         return 0 if overlaps else 1
     if row.merchant_key is None and overlaps:
@@ -651,17 +669,44 @@ def _existing(
     )
 
 
+def _continues(
+    row: ScheduledTransaction, candidate: Candidate, rows: Mapping[uuid.UUID, Observed]
+) -> bool:
+    """Whether ``candidate`` is the series ``row`` at a new price.
+
+    True when the candidate's charges leave the amount range of ``row`` from
+    one charge to the next without a break (at most one and a half cycles
+    plus the grace apart): a price that was raised. A plan that starts after
+    the old one stopped is another series.
+    """
+    cycle = (candidate.cadence, candidate.interval_count)
+    longest = subscriptions.cycle_days(*cycle) * 3 // 2 + subscriptions.grace_days(*cycle)
+    charges = sorted(
+        (rows[row_id] for row_id in candidate.transaction_ids if row_id in rows),
+        key=lambda charge: (charge.posted_date, charge.id.bytes),
+    )
+    left: bool | None = None
+    for before, after in itertools.pairwise(charges):
+        inside = row.amount_min <= before.amount <= row.amount_max
+        if inside and not row.amount_min <= after.amount <= row.amount_max:
+            left = (after.posted_date - before.posted_date).days <= longest
+    return bool(left)
+
+
 def _match(
     schedules: Sequence[ScheduledTransaction],
     found: Sequence[Candidate],
     links: Mapping[uuid.UUID, uuid.UUID | None],
+    rows: Mapping[uuid.UUID, Observed],
 ) -> dict[int, ScheduledTransaction]:
     """The series of each candidate that has one, by the candidate's index.
 
     Every possible pair is ranked (:func:`_match_rank`) and the best are taken
     first: a manual series before a detected one, then the rank, then the
     series holding more of the candidate's charges. A series matches at most
-    one candidate, and a candidate at most one series.
+    one candidate, and a candidate at most one series. A dismissed series
+    matches by its merchant key alone (rank 1) only a candidate that
+    continues it (:func:`_continues`).
     """
     pairs: list[tuple[bool, int, int, bytes, int, ScheduledTransaction]] = []
     for index, candidate in enumerate(found):
@@ -670,6 +715,8 @@ def _match(
         for schedule in schedules:
             count = linked.get(schedule.id, 0)
             rank = _match_rank(schedule, candidate, holds_most=2 * count > total)
+            if rank == 1 and schedule.status == DISMISSED:
+                rank = 1 if _continues(schedule, candidate, rows) else None
             if rank is not None:
                 detected = schedule.origin is not ScheduleOrigin.MANUAL
                 pairs.append((detected, rank, -count, schedule.id.bytes, index, schedule))
@@ -738,7 +785,9 @@ def candidates(
     found = detection.detect(ledger.rows, ledger.as_of)
     payees = _payee_names(db, household_id, found)
     currencies = _currencies(db, household_id, scope)
-    matches = _match(_existing(db, household_id, scope), found, ledger.links)
+    matches = _match(
+        _existing(db, household_id, scope), found, ledger.links, {r.id: r for r in ledger.rows}
+    )
     items = []
     for index, candidate in enumerate(found):
         match = matches.get(index)
@@ -765,10 +814,23 @@ class DetectCounts:
     skipped_dismissed: int = 0
 
 
+def _shadowed(schedules: Iterable[ScheduledTransaction], candidate: Candidate) -> bool:
+    """Whether a person dismissed a series of the candidate's merchant (or name) on the account."""
+    return any(
+        row.status == DISMISSED and _match_rank(row, candidate) is not None for row in schedules
+    )
+
+
 def _create(
-    db: Session, household_id: uuid.UUID, candidate: Candidate, name: str, currency: str
+    db: Session,
+    household_id: uuid.UUID,
+    candidate: Candidate,
+    name: str,
+    currency: str,
+    *,
+    status: str,
 ) -> ScheduledTransaction:
-    """A detected series as the detector found it."""
+    """A detected series as the detector found it (``status``: the candidate's, or less)."""
     row = ScheduledTransaction(
         household_id=household_id,
         account_id=candidate.account_id,
@@ -782,11 +844,11 @@ def _create(
         payee_id=candidate.payee_id,
         category_id=candidate.category_id,
         origin=ScheduleOrigin.DETECTED,
-        active=candidate.status in ACTIVE_STATUSES,
+        active=status in ACTIVE_STATUSES,
         last_seen_on=candidate.last_seen,
         kind=candidate.kind,
         kind_source=DETECTOR,
-        status=candidate.status,
+        status=status,
         status_source=DETECTOR,
         merchant_key=candidate.merchant_key,
         first_seen_on=candidate.first_seen,
@@ -799,12 +861,13 @@ def _create(
     return row
 
 
-def _refresh(row: ScheduledTransaction, candidate: Candidate) -> bool:
+def _refresh(row: ScheduledTransaction, candidate: Candidate, *, rise: bool = True) -> bool:
     """Write what detection found onto a matched series; whether anything changed.
 
     Facts are always refreshed (the latest amount by ``subscriptions.settle``,
     which runs first). The kind and the status are the detector's to write
-    only while no person decided them, and the status only rises.
+    only while no person decided them, and the status only rises; not even
+    that without ``rise`` (a dismissed series of the same merchant stands).
     """
     first_seen = min(row.first_seen_on or candidate.first_seen, candidate.first_seen)
     wanted: dict[str, Any] = {
@@ -828,7 +891,10 @@ def _refresh(row: ScheduledTransaction, candidate: Candidate) -> bool:
     for key, value in changed.items():
         setattr(row, key, value)
     rises = (
-        row.status_source == DETECTOR and row.status == "suggested" and candidate.status == "active"
+        rise
+        and row.status_source == DETECTOR
+        and row.status == "suggested"
+        and candidate.status == "active"
     )
     if rises:
         _set_status(row, "active", DETECTOR)
@@ -875,7 +941,8 @@ def persist(
     payees = _payee_names(db, household_id, found)
     currencies = _currencies(db, household_id, account_ids)
     existing = _existing(db, household_id, account_ids)
-    matches = _match(existing, found, ledger.links)
+    by_id = {row.id: row for row in ledger.rows}
+    matches = _match(existing, found, ledger.links, by_id)
     counts = DetectCounts()
     items: list[CandidateOut] = []
     charges: dict[uuid.UUID, dict[str, Any]] = {}
@@ -884,19 +951,28 @@ def persist(
         row_id: schedule_id for row_id, schedule_id in ledger.links.items() if schedule_id
     }
     resolved: list[tuple[Candidate, ScheduledTransaction, bool]] = []
+    #: Series that stay a suggestion: a dismissed one of the same merchant stands.
+    held: set[uuid.UUID] = set()
     for index, candidate in enumerate(found):
         match = matches.get(index)
         if match is not None and match.status == DISMISSED:
             counts.skipped_dismissed += 1
+            if not _overlaps(match, candidate):  # the tombstone follows its price
+                match.amount_min = to_storage(candidate.amount_min)
+                match.amount_max = to_storage(candidate.amount_max)
             continue
         name = _name(candidate, payees)
         currency = currencies[candidate.account_id]
+        shadowed = _shadowed(existing, candidate)
         if match is None:
-            row = _create(db, household_id, candidate, name, currency)
+            status = "suggested" if shadowed else candidate.status
+            row = _create(db, household_id, candidate, name, currency, status=status)
             counts.created += 1
             _event(db, row, "created")
         else:
             row = match
+        if shadowed:
+            held.add(row.id)
         for row_id in candidate.transaction_ids:
             if ledger.links.get(row_id) != row.id:
                 charges[row_id] = {"scheduled_transaction_id": row.id}
@@ -905,13 +981,19 @@ def persist(
         items.append(_candidate_out(candidate, name, currency, row.id))
 
     own: dict[uuid.UUID, list[subscriptions.Charge]] = defaultdict(list)
-    loose: dict[tuple[uuid.UUID, str, bool], list[subscriptions.Charge]] = defaultdict(list)
+    #: The groups (account, detection's group key, money in) of each series' charges...
+    groups: dict[uuid.UUID, set[_GroupKey]] = defaultdict(set)
+    #: ...and per group the rows that belong to no series.
+    loose: dict[_GroupKey, list[subscriptions.Charge]] = defaultdict(list)
     for observed_row in ledger.rows:
         schedule_id = owner.get(observed_row.id)
+        group = detection.group_key(observed_row)
+        key = (observed_row.account_id, group or "", observed_row.amount > 0)
         if schedule_id is not None:
             own[schedule_id].append(_charge(observed_row))
-        elif observed_row.merchant_key is not None:
-            key = (observed_row.account_id, observed_row.merchant_key, observed_row.amount > 0)
+            if group is not None:
+                groups[schedule_id].add(key)
+        elif group is not None:
             loose[key].append(_charge(observed_row))
 
     def settle(row: ScheduledTransaction, candidate: Candidate | None, created: bool) -> bool:
@@ -920,8 +1002,12 @@ def persist(
         if as_of is None:
             return False
         before = _settled(row)
-        merchant = (row.account_id, row.merchant_key or "", row.amount_min >= 0)
-        subscriptions.settle(
+        # A series without a merchant key (a person paid, or a text) has its group
+        # from its charges.
+        keys = set(groups.get(row.id, ()))
+        if row.merchant_key is not None:
+            keys.add((row.account_id, f"merchant:{row.merchant_key}", row.amount_min >= 0))
+        events = subscriptions.settle(
             db,
             household_id,
             row,
@@ -930,8 +1016,13 @@ def persist(
             as_of,
             quiet=quiet,
             created=created,
-            loose=loose.get(merchant, ()),
+            loose=[charge for key in sorted(keys) for charge in loose.get(key, ())],
         )
+        for event in events:
+            # One stray charge after a person's "ended" is filed with its series.
+            stray = event.transaction_id if event.kind == "charged_after_end" else None
+            if stray is not None and owner.get(stray) != row.id:
+                charges[stray] = {"scheduled_transaction_id": row.id}
         return _settled(row) != before
 
     found_again: set[uuid.UUID] = set()
@@ -943,7 +1034,7 @@ def persist(
         settled = settle(row, candidate, created)
         if created:
             continue
-        refreshed = _refresh(row, candidate)
+        refreshed = _refresh(row, candidate, rise=row.id not in held)
         if settled or refreshed:
             counts.updated += 1
             _event(db, row, "updated")

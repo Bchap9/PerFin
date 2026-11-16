@@ -339,6 +339,81 @@ def test_two_charges_per_cycle_are_dropped() -> None:
     assert only(detect(doubled)).pattern is Pattern.MONTHLY
 
 
+def test_two_plans_at_one_price_are_told_apart_by_their_day_of_the_month() -> None:
+    firsts = monthly(date(2026, 1, 3), 6)
+    ninth = [d + timedelta(days=9) for d in firsts]
+    # One known merchant bills two plans at one price, on the 3rd and on the 12th.
+    ledger = rows(firsts + ninth, "-15.49", key="apple com bill", hint="subscription")
+    found = detect(ledger)
+    assert len(found) == 2
+    assert all(c.pattern is Pattern.MONTHLY and c.occurrences == 6 for c in found)
+    assert all((c.kind, c.status, c.fixed) == ("subscription", "active", True) for c in found)
+    assert sorted(c.next_due for c in found) == [date(2026, 7, 3), date(2026, 7, 12)]
+    assert not set(found[0].transaction_ids) & set(found[1].transaction_ids)
+
+    # One of the two was cancelled in March: the other is still found.
+    kept = only(
+        detect(rows(firsts + ninth[:3], "-15.49", key="apple com bill", hint="subscription"))
+    )
+    assert (kept.pattern, kept.occurrences, kept.next_due) == (Pattern.MONTHLY, 6, date(2026, 7, 3))
+
+    # At a merchant the dictionary does not know, two charges per cycle are a habit
+    # (test_two_charges_per_cycle_are_dropped), and so are one price on scattered days
+    # at a known one.
+    assert detect(rows(firsts + ninth, "-15.49", key="ferncliff dojo")) == []
+    scattered = [
+        d + timedelta(days=step) for d, step in zip(firsts, (9, 13, 6, 17, 11, 8), strict=True)
+    ]
+    assert (
+        detect(rows(firsts + scattered, "-15.49", key="apple com bill", hint="subscription")) == []
+    )
+
+
+def test_a_fortnightly_reading_of_two_days_of_the_month_is_two_monthly_series() -> None:
+    firsts = monthly(date(2026, 1, 3), 6)
+    later = [d + timedelta(days=15) for d in firsts]
+    # The 3rd and the 18th are 13 to 16 days apart: a fortnightly rhythm on paper,
+    # 26 charges a year instead of 24.
+    found = detect(rows(firsts + later, "-7.00", key="ferncliff dojo", category="health.fitness"))
+    assert len(found) == 2
+    assert all(c.pattern is Pattern.MONTHLY and c.occurrences == 6 for c in found)
+    assert sorted(c.next_due for c in found) == [date(2026, 7, 3), date(2026, 7, 18)]
+
+    # A charge every fourteen days moves through the month: one fortnightly series.
+    fortnight = every(date(2026, 1, 2), 14, 13)
+    one = only(detect(rows(fortnight, "-7.00", key="ferncliff dojo", category="health.fitness")))
+    assert (one.pattern, one.occurrences) == (Pattern.BIWEEKLY, 13)
+    # Too few charges to tell: a February fortnight lands on the same two days twice.
+    short = [date(2026, 2, 3), date(2026, 2, 17), date(2026, 3, 3), date(2026, 3, 17)]
+    brief = only(detect(rows(short, "-7.00", key="ferncliff dojo"), date(2026, 3, 20)))
+    assert brief.pattern is Pattern.BIWEEKLY
+    # Pay on the 15th and the 30th stays one income series.
+    paydays = [date(2026, month, 15) for month in range(1, 7)] + [
+        date(2026, month, 28 if month == 2 else 30) for month in range(1, 6)
+    ]
+    pay = only(detect(rows(paydays, "2500.00", key="brightwater staffing", kind="payroll")))
+    assert (pay.pattern, pay.kind, pay.occurrences) == (Pattern.BIWEEKLY, "income", 11)
+
+
+def test_a_top_level_category_counts_like_its_children() -> None:
+    # Filed under "Food" itself (system key ``food``, no dot): as much a habit as coffee.
+    weekly = every(date(2026, 5, 4), 7, 8)
+    for category in ("food", "food.coffee", "shopping"):
+        habit = only(detect(rows(weekly, "-5.25", key="beanbarn", category=category)))
+        assert (habit.status, habit.kind) == ("suggested", "subscription"), category
+    # Under "Housing" or "Utilities" themselves a fixed charge is a bill.
+    days = monthly(date(2026, 1, 6), 6)
+    for category in ("housing", "utilities"):
+        bill = only(detect(rows(days, "-61.00", key="hill water", category=category)))
+        assert bill.kind == "bill", category
+    # A key that only begins with the same letters is neither.
+    other = only(detect(rows(weekly, "-5.25", key="beanbarn", category="foodbank")))
+    assert (other.status, other.kind) == ("active", "subscription")
+    assert only(detect(rows(days, "-61.00", key="hill water", category="housingfair"))).kind == (
+        "subscription"
+    )
+
+
 def test_a_variable_utility_is_a_bill() -> None:
     days = monthly(date(2025, 7, 20), 12)
     amounts = [
