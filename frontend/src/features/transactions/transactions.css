@@ -16,10 +16,10 @@
 
 .tx-search {
   display: flex;
-  flex: 1 1 14rem;
+  flex: 3 1 18rem;
   align-items: center;
   gap: var(--space-2);
-  min-width: min(100%, 14rem);
+  min-width: min(100%, 18rem);
 }
 
 .tx-search .input {
@@ -29,7 +29,7 @@
 
 .tx-filters {
   display: flex;
-  flex: 999 1 0;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   min-width: min(100%, 28rem);
   align-items: center;
