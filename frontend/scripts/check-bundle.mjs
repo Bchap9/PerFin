@@ -19,14 +19,20 @@
  * bytes gzip: 391,984 in all. CSS was one file of 11,043 bytes gzip. The
  * Latin font files were 61,504 bytes gzip (Figtree 20,127 and Bricolage
  * Grotesque 41,377).
+ *
+ * Route splitting (Task 5) cut the first load from 398 kB to 151 kB gzip
+ * but raised the total to 447,495 bytes gzip (61 files compressed apart;
+ * raw app JS grew 3.3%). The coordinator re-based the total on that split
+ * build, so the 5% allowance measures what the section lanes add, not
+ * the cost of splitting.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
-/** All JS in `dist`, gzip, on the stage 2 head before this stage split the routes. */
-export const BASELINE_TOTAL_JS = 391_984;
+/** All JS in `dist`, gzip, after Task 5 split the routes (c53eb9b). */
+export const BASELINE_TOTAL_JS = 447_495;
 
 /** Bytes, gzip. 1 kB = 1,000 bytes, as Vite reports. */
 export const BUDGET = Object.freeze({
