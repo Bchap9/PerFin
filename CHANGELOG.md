@@ -81,6 +81,12 @@ Stage 4 of four on the way to 1.0.0: the release review.
   before lose the key in the refresh that follows the upgrade (the hourly
   `categorise.dispatch` queues it; clean-up version 3); their categories
   stay, and what was learned under such a key no longer answers.
+- **Bare cash wording names no merchant.** `WITHDRAWAL`, `CASH DEPOSIT`,
+  `TELLER DEPOSIT` and a line that starts with `ATM` became a merchant key,
+  so all of a household's cash lines were one merchant, though the data
+  model says a cash line has none. They now have no key; the suggestion of
+  cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
+  before lose the key in the same refresh after the upgrade.
 - **More of a bank's own lines are read, and more plain wording is
   suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
   fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`

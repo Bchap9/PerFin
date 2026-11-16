@@ -530,6 +530,38 @@ def test_a_rekey_takes_a_short_key_away_and_leaves_what_was_learned_under_it(
     assert _memory_rows(db) == [("e", "out", home.other.id, 1)]
 
 
+def test_a_rekey_takes_the_key_off_bare_cash_wording(db: Session, home: Home) -> None:
+    # Keyed before bare cash wording was withheld: "WITHDRAWAL" was a merchant.
+    mine = home.row(
+        "WITHDRAWAL",
+        merchant_key="withdrawal",
+        category=home.other,
+        category_source="person",
+        category_confidence=Decimal(1),
+        updated_at=T1,
+    )
+    guessed = home.row(
+        "CASH DEPOSIT",
+        amount=Decimal("40.00"),
+        merchant_key="cash deposit",
+        suggested_category_id=home.other.id,
+        category_source="learned",
+        category_confidence=Decimal("0.70"),
+    )
+    memory.record(db, home.household_id, "withdrawal", "out", home.other.id, at=T1)
+
+    summary = engine.reconsider(db, home.household_id, rekey=True)
+
+    assert _stored(db, mine.id)["merchant_key"] is None
+    assert _provenance(db, mine) == (home.other.id, None, "person", Decimal(1))
+    assert _stored(db, guessed.id)["merchant_key"] is None
+    assert summary.renamed == {
+        "withdrawal": frozenset({None}),
+        "cash deposit": frozenset({None}),
+    }
+    assert summary.memory_moved == 0
+
+
 # ---------------------------------------------------------------------------
 # A second look
 # ---------------------------------------------------------------------------

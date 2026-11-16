@@ -65,6 +65,30 @@ KEY_TOKENS: Final = 4
 #: for what is learned, for a rule and for a series. A brand the dictionary
 #: knows by fewer ("BP") keeps the dictionary's key.
 KEY_CHARS_MIN: Final = 3
+#: Words that say only that cash went in or out. A core of these alone (and
+#: numbers), with at least one of :data:`CASH_CORE_WORDS`, or one that starts
+#: with ``atm``, names nobody: "WITHDRAWAL", "CASH DEPOSIT", "TELLER DEPOSIT",
+#: "ATM 0412 <town>". Like the cash lines clean-up reads by their kind, it has
+#: no merchant key; the keywords still read its core.
+CASH_WORDS: Final = frozenset(
+    {
+        "atm",
+        "cash",
+        "deposit",
+        "deposits",
+        "withdrawal",
+        "withdrawals",
+        "withdraw",
+        "withdrwl",
+        "teller",
+        "counter",
+        "branch",
+        "cheque",
+    }
+)
+CASH_CORE_WORDS: Final = frozenset(
+    {"atm", "cash", "deposit", "deposits", "withdrawal", "withdrawals", "withdraw", "withdrwl"}
+)
 
 _PLACES: Final = Decimal("0.01")
 
@@ -232,11 +256,24 @@ class Summary:
     )
 
 
+def cash_wording(core: str) -> bool:
+    """Whether ``core`` says only that cash went in or out (:data:`CASH_WORDS`)."""
+    words = [token for token in core.split() if not token.isdigit()]
+    if not words:
+        return False
+    if words[0] == "atm":
+        return True
+    return all(w in CASH_WORDS for w in words) and any(w in CASH_CORE_WORDS for w in words)
+
+
 def _key_of(core: str) -> str | None:
     """The first :data:`KEY_TOKENS` tokens of ``core`` that fit a merchant key.
 
-    ``None`` when they hold fewer than :data:`KEY_CHARS_MIN` letters and digits.
+    ``None`` when they hold fewer than :data:`KEY_CHARS_MIN` letters and digits,
+    and for bare cash wording (:func:`cash_wording`).
     """
+    if cash_wording(core):
+        return None
     tokens = core.split()[:KEY_TOKENS]
     while tokens and len(" ".join(tokens)) > MERCHANT_KEY_MAX:
         tokens.pop()
