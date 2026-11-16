@@ -15,6 +15,7 @@ merchants:
   - {key: youtube music, name: YouTube Music, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [youtube music ~, youtubemusic ~]}
   - {key: pandora, name: Pandora, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [pandora music, pandora media, pandora internet, pandora plus, pandora premium]}
   - {key: siriusxm, name: SiriusXM, category: leisure.subscriptions, series: subscription, cadences: [monthly, quarterly, half_yearly, annual], match: [siriusxm, sirius xm, sirius radio, sxm]}
+  - {key: napster, name: Napster (formerly Rhapsody), category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [napster, rhapsody =, rhapsody music, rhapsody international]}
   - {key: tidal, name: TIDAL, category: leisure.subscriptions, series: subscription, cadences: [monthly], match: [tidal music, tidalmusic, tidal hifi, tidal com]}
   - {key: iheartradio, name: iHeartRadio, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [iheartradio, iheart radio, iheart]}
   - {key: soundcloud, name: SoundCloud, category: leisure.subscriptions, series: subscription, cadences: [monthly, annual], match: [soundcloud]}

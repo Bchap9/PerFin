@@ -34,7 +34,18 @@ merchants:
   # (above) has the longer match and wins over the cinema.
   - {key: amc theatres, name: AMC Theatres, category: leisure.events, match: [amc =, amc theatres, amc theaters, amc theatre, amc online]}
   - {key: regal, name: Regal, category: leisure.events, match: [regal =, regal cinemas, regal cinema, regal theatres, regal edwards]}
-  - {key: cinemark, name: Cinemark, category: leisure.events, match: [cinemark]}
+  - {key: cinemark, name: Cinemark, category: leisure.events, match: [cinemark, century theatres, century theaters, century theatre]}
+  # A cinema whose name is a surname, a place or a word is matched with the
+  # word that makes it the cinema.
+  - {key: marcus theatres, name: Marcus Theatres, category: leisure.events, match: [marcus theatres, marcus theaters, marcus theatre, marcus cinema]}
+  - {key: harkins theatres, name: Harkins Theatres, category: leisure.events, match: [harkins theatres, harkins theaters, harkins theatre]}
+  - {key: alamo drafthouse, name: Alamo Drafthouse, category: leisure.events, match: [alamo drafthouse, drafthouse cinema]}
+  - {key: landmark theatres, name: Landmark Theatres, category: leisure.events, match: [landmark theatres, landmark theaters, landmark theatre]}
+  - {key: cineplex, name: Cineplex, category: leisure.events, match: [cineplex entertainment, cineplex odeon, cineplex com]}
+  - {key: showcase cinemas, name: Showcase Cinemas, category: leisure.events, match: [showcase cinemas, showcase cinema]}
+  - {key: studio movie grill, name: Studio Movie Grill, category: leisure.events, match: [studio movie grill]}
+  - {key: cinepolis, name: Cinépolis, category: leisure.events, match: [cinepolis]}
+  - {key: megaplex theatres, name: Megaplex Theatres, category: leisure.events, match: [megaplex theatres, megaplex theaters]}
   - {key: fandango, name: Fandango, category: leisure.events, match: [fandango]}
   - {key: ticketmaster, name: Ticketmaster, category: leisure.events, match: [ticketmaster, tm ticketmaster]}
   - {key: stubhub, name: StubHub, category: leisure.events, match: [stubhub]}

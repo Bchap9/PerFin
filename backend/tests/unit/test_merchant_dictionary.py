@@ -781,6 +781,14 @@ NOT_THE_CHAIN = (
     "AMC AUTO REPAIR",
     "H M CONSTRUCTION",
     "JO ANN'S ALTERATIONS",
+    "THE GAP COFFEE HOUSE",
+    "RHAPSODY BRIDAL BOUTIQUE",
+    "MARCUS AUTO REPAIR",
+    "HARKINS PLUMBING",
+    "LANDMARK TITLE AGENCY",
+    "SHOWCASE FLOORING",
+    "CENTURY 21 REALTY",
+    "SHELLS SEAFOOD",
 )
 
 #: The chain itself, as a statement prints it, and its key.
@@ -848,6 +856,23 @@ THE_CHAIN_ITSELF = (
     ("H&M 6211", "h and m"),
     ("JO-ANN STORE #7885 ALDERTON NJ", "joann"),
     ("PARAMOUNT+ 866-555-0127 CA", "paramount plus"),
+    ("THE GAP", "gap"),
+    ("THE GAP #0412", "gap"),
+    ("RHAPSODY", "napster"),
+    ("RHAPSODY.COM", "napster"),
+    ("NAPSTER 888-555-0140", "napster"),
+    ("ITUNES MUSIC 0412", "apple services"),
+    ("ITUNES STORE", "apple services"),
+    ("MARCUS THEATRES 0412", "marcus theatres"),
+    ("HARKINS THEATRES 0412", "harkins theatres"),
+    ("ALAMO DRAFTHOUSE 0412", "alamo drafthouse"),
+    ("LANDMARK THEATRES", "landmark theatres"),
+    ("CINEPLEX ENTERTAINMENT", "cineplex"),
+    ("SHOWCASE CINEMAS 0412", "showcase cinemas"),
+    ("STUDIO MOVIE GRILL 0412", "studio movie grill"),
+    ("CENTURY THEATRES 0412", "cinemark"),
+    ("CINEPOLIS 0412", "cinepolis"),
+    ("MEGAPLEX THEATRES", "megaplex theatres"),
 )
 
 #: Paying the card a store issues is not shopping there. Each names nobody
@@ -1346,3 +1371,24 @@ def test_lookup_is_fast() -> None:
     for index in range(10_000):
         dictionary.lookup(cores[index % len(cores)])
     assert time.perf_counter() - started < 1.0
+
+
+#: A fuel brand whose name is an everyday word: a station's line, when it
+#: says it sells fuel (the tails are invented).
+SHELL_STATIONS = (
+    "SHELL OIL 57440123",
+    "SHELL SERVICE STATION",
+    "SHELL GAS STATION 0412",
+    "SHELL FUEL 0412",
+    "SHELL PETROLEUM",
+)
+#: The word alone, or a business named with it, is nobody's fuel.
+NOT_SHELL = ("SHELL", "SHELL #0412", "SHELL'S SEAFOOD", "SHELL BEACH SURF SHOP", "SEA SHELL GIFTS")
+
+
+def test_a_fuel_brand_that_is_a_word_is_matched_only_with_fuel_on_the_line() -> None:
+    for raw in SHELL_STATIONS:
+        hit = dictionary.lookup(cleanup.clean(raw).core)
+        assert hit is not None, raw
+        assert (hit.merchant.key, hit.merchant.category) == ("shell", "transport.fuel"), raw
+    assert {raw: _found(raw) for raw in NOT_SHELL if _found(raw) is not None} == {}

@@ -217,6 +217,12 @@ migration, no new setting, no new container, nothing new leaves the host
   cinemas (`THEATERS`, `CINEMAS`) are suggested. "Rent" or "electric"
   alone, inside another word or at the start of a shop's name suggests
   nothing; cheques and deposits stay unguessed (merchant list version 8).
+- **The merchant list knows more cinemas and a few more forms.** Marcus,
+  Harkins, Alamo Drafthouse, Landmark, Cineplex, Showcase, Studio Movie
+  Grill, Cinépolis, Megaplex and Century (Cinemark); Napster, also as
+  `RHAPSODY`; `ITUNES MUSIC` and `ITUNES STORE` (Apple); `THE GAP`; Shell
+  with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
+  word names too many other businesses (merchant list version 9).
 
 ### Security
 

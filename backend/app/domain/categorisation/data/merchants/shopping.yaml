@@ -69,7 +69,7 @@ merchants:
 
   # Clothing and shoes.
   - {key: old navy, name: Old Navy, category: shopping.clothing, match: [old navy, oldnavy]}
-  - {key: gap, name: Gap, category: shopping.clothing, match: [gap us, gap outlet, gap online, gap factory, gap kids]}
+  - {key: gap, name: Gap, category: shopping.clothing, match: [gap us, gap outlet, gap online, gap factory, gap kids, the gap =]}
   - {key: banana republic, name: Banana Republic, category: shopping.clothing, match: [banana republic]}
   - {key: athleta, name: Athleta, category: shopping.clothing, match: [athleta]}
   - {key: h and m, name: H&M, category: shopping.clothing, match: [h m =, h m us, h m com, h m online, h m hennes, hm com]}
