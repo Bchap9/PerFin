@@ -9,6 +9,16 @@ same name (compared like payees: case, accents and punctuation ignored).
 Anything else (none, or still several) is not a match: the importer raises an
 ``unknown_account`` review item naming the candidates.
 
+A statement that prints **no digits** at all (many card and savings
+statements mask the whole number) is matched by its institution instead: the
+one open account of the household at ``institution_id``, on the statement's
+side of the balance sheet when the caller knows it (``liability``: a card
+statement never lands on the checking account of the same bank). Several
+such accounts are candidates and none is chosen. Digits that are printed and
+match no account never fall back to the institution: a number the household
+does not have is a new account, not the old one. :attr:`AccountMatch.by` says
+which of the two a match went by.
+
 Several statements of one document may carry the **same** last four digits
 (a checking and a savings account printed under one masked number). The
 digits then say nothing about which is which: :func:`match_shared_number`
@@ -29,12 +39,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import AccountGrant, GrantLevel, HouseholdMember, HouseholdRole
-from app.domain.accounts.models import Account, Institution
+from app.domain.accounts.models import LIABILITY_TYPES, Account, Institution
 from app.ingestion.match.institutions import pick
 
 
@@ -42,6 +53,8 @@ from app.ingestion.match.institutions import pick
 class AccountMatch:
     account_id: uuid.UUID | None
     candidates: tuple[uuid.UUID, ...] = ()
+    #: What a match went by; ``None`` when there is no match.
+    by: Literal["digits", "institution"] | None = None
 
 
 def importable_account_ids(
@@ -82,10 +95,16 @@ def match_account(
     last4: str | None,
     institution: str | None = None,
     allowed: Collection[uuid.UUID] | None = None,
+    institution_id: uuid.UUID | None = None,
+    liability: bool | None = None,
 ) -> AccountMatch:
-    """The account with ``last4`` (and ``institution`` to break ties), if exactly one."""
+    """The account with ``last4`` (and ``institution`` to break ties), if exactly one.
+
+    Without ``last4``: the one open account at ``institution_id``, on the
+    ``liability`` side when that is given (module doc).
+    """
     if not last4:
-        return AccountMatch(None)
+        return _sole_account_of(db, household_id, institution_id, liability, allowed)
     query = (
         select(Account.id, Institution.name)
         .outerjoin(
@@ -102,14 +121,46 @@ def match_account(
         if allowed is None or account_id in allowed
     ]
     if len(rows) == 1:
-        return AccountMatch(rows[0][0])
+        return AccountMatch(rows[0][0], by="digits")
     candidates = tuple(account_id for account_id, _ in rows)
     if institution and rows:
         # Exact name first, else the one account whose institution means the
         # same (``Chase`` / ``JPMorgan Chase Bank, N.A.``; match.institutions).
         chosen = pick(institution, rows)
         if chosen is not None:
-            return AccountMatch(chosen, candidates)
+            return AccountMatch(chosen, candidates, by="digits")
+    return AccountMatch(None, candidates)
+
+
+def _sole_account_of(
+    db: Session,
+    household_id: uuid.UUID,
+    institution_id: uuid.UUID | None,
+    liability: bool | None,
+    allowed: Collection[uuid.UUID] | None,
+) -> AccountMatch:
+    """The match of a statement without digits: the one open account of the
+    household at ``institution_id`` (on the ``liability`` side, by type, when
+    given) among ``allowed``; several are candidates only."""
+    if institution_id is None:
+        return AccountMatch(None)
+    query = (
+        select(Account.id, Account.type)
+        .where(
+            Account.household_id == household_id,
+            Account.institution_id == institution_id,
+            Account.closed_on.is_(None),
+        )
+        .order_by(Account.id)
+    )
+    candidates = tuple(
+        account_id
+        for account_id, account_type in db.execute(query)
+        if (allowed is None or account_id in allowed)
+        and (liability is None or (account_type in LIABILITY_TYPES) is liability)
+    )
+    if len(candidates) == 1:
+        return AccountMatch(candidates[0], candidates, by="institution")
     return AccountMatch(None, candidates)
 
 
@@ -166,5 +217,5 @@ def match_shared_number(
     if len(typed) > 1 and (wanted := _words(name)):
         typed = [row for row in typed if wanted <= _words(row[2]) or _words(row[2]) <= wanted]
     if len(typed) == 1:
-        return AccountMatch(typed[0][0], candidates)
+        return AccountMatch(typed[0][0], candidates, by="digits")
     return AccountMatch(None, candidates)
