@@ -287,6 +287,18 @@
   .app-rail__foot .menu__button {
     max-width: 100%;
   }
+
+  /* Names that do not fit the icon rail end in an ellipsis, not mid-letter. */
+  .app-rail__foot .account-menu__household,
+  .app-rail__foot .account-menu__user {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: var(--font-size-xs);
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* ---- Under 820 px: a top bar and a bottom bar ---- */
