@@ -82,7 +82,7 @@ export function DocumentsPage() {
         title="Document library"
         description="Every file PerFin has received, with the words it read."
         breadcrumbs={[{ to: "/inbox", label: "Inbox" }, { label: "Documents" }]}
-        actions={<Link to="/inbox">Upload files</Link>}
+        actions={<Link to="/inbox" hash="inbox-add-documents">Upload files</Link>}
       />
       <form
         className="ledger-filters"

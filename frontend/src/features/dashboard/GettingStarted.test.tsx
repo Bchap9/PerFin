@@ -21,7 +21,7 @@ describe("getting started", () => {
     expect(steps).toHaveLength(5);
     expect(within(card).getByRole("link", { name: "Upload a statement or an export from your bank" })).toHaveAttribute(
       "href",
-      "/inbox",
+      "/inbox#inbox-add-documents",
     );
     expect(within(card).getByRole("link", { name: "Or add an account by hand" })).toHaveAttribute("href", "/accounts");
     expect(within(card).getByRole("link", { name: "Check the Inbox" })).toHaveAttribute("href", "/inbox");

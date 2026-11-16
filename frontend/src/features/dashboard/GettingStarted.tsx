@@ -27,7 +27,7 @@ export function GettingStarted() {
     <Card title="Start here">
       <ol className="dash-start">
         <li>
-          <Link to="/inbox">Upload a statement or an export from your bank</Link>
+          <Link to="/inbox" hash="inbox-add-documents">Upload a statement or an export from your bank</Link>
           <span className="muted">
             {" "}
             (PDF, CSV, OFX, a photo). PerFin reads the account, its balance and its rows and offers to create the account for

@@ -94,7 +94,7 @@ export function HubDocuments({ account }: { account: Account }) {
         ) : null}
         {query.isSuccess && items.length === 0 ? (
           <p className="ledger-muted">
-            No documents are filed to this account. Upload a statement in the <Link to="/inbox">Inbox</Link>.
+            No documents are filed to this account. Upload a statement in the <Link to="/inbox" hash="inbox-add-documents">Inbox</Link>.
           </p>
         ) : null}
         {items.length === 0 ? null : (

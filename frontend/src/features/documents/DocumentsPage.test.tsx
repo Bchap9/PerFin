@@ -196,7 +196,7 @@ describe("document library", () => {
     });
     renderApp("/inbox/documents");
     expect(await screen.findByRole("link", { name: "march.pdf" })).toHaveAttribute("href", "/inbox/documents/d-1");
-    expect(screen.getByRole("link", { name: "Upload files" })).toHaveAttribute("href", "/inbox");
+    expect(screen.getByRole("link", { name: "Upload files" })).toHaveAttribute("href", "/inbox#inbox-add-documents");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
