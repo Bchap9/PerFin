@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Payee clean-up, first half: canonical text, the kind, labelled ACH, trailers.
+"""Payee clean-up: from the text a bank printed to who was paid.
 
-Every descriptor here is invented in the shapes banks print. The core still
-holds processor prefixes, places and store numbers at this point; what is
-pinned is the kind, the signals and what must already be gone (the bank's
-own wrapping, the individual's name in an ACH line, references and dates).
+Every descriptor here is invented in the shapes banks print; a merchant in
+the labelled set carries its public brand name and nothing else that is real
+(telephone numbers are in the fictional ``555-01xx`` range). First half: the
+canonical text, the kind, labelled ACH lines and the bank's trailers. Second
+half: processors (``via``), places, telephone numbers, store and order
+numbers, web endings and company suffixes, down to the core.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import pytest
 from app.domain.categorisation import cleanup
 from app.domain.categorisation.cleanup import Cleaned, canonical, clean
 from app.domain.transactions.models import PAYEE_MAX
+from tests.fixtures.descriptors import LABELLED
 
 KEY_FORM = re.compile(r"^[a-z0-9]+( [a-z0-9]+)*$")
 DIGIT_RUN = re.compile(r"\d{2,}")
@@ -126,7 +129,7 @@ def test_kind_negatives(raw: str, kind: str) -> None:
 def test_recurring_signal() -> None:
     cleaned = clean("RECURRING PAYMENT AUTHORIZED ON 04/12 STREAMBOX.COM")
     assert cleaned.signals == frozenset({"recurring"})
-    assert cleaned.core == "streambox com"
+    assert cleaned.core == "streambox"
     tail = clean("CHECKCARD 0412 STREAMBOX.COM 24055230412000187654321 RECURRING")
     assert "recurring" in tail.signals
     assert "recurring" not in tail.core.split()
@@ -179,12 +182,12 @@ def test_labelled_ach_in_the_long_layout() -> None:
         (
             "CHASE CREDIT CRD DES:AUTOPAY ID:5512098871 INDN:JORDAN SAMPLE CO ID:1020304050 PPD",
             "card_payment",
-            "chase credit crd",
+            "",
         ),
         (
             "CAPITAL ONE DES:CRCARDPMT ID:A1B2C3D4E5F6 INDN:SAMPLE,JORDAN CO ID:1020304050 WEB",
             "card_payment",
-            "capital one",
+            "",
         ),
         (
             "DEPT EDUCATION DES:STUDENT LN ID:5512098871 INDN:JORDAN SAMPLE CO ID:1020304050 PPD",
@@ -322,6 +325,16 @@ def test_the_patterns_are_constants() -> None:
         "X",
         "9",
         "POS DEBIT ",
+        "SQ *",
+        "#1 ",
+        "*A1B2C3 ",
+        "800-555-0142 ",
+        "STORE 123 ",
+        "A.COM ",
+        "WWW.",
+        "'S ",
+        "ALDER IL ",
+        "INC ",
     ],
 )
 def test_long_and_hostile_input_is_linear(unit: str) -> None:
@@ -336,3 +349,325 @@ def test_long_and_hostile_input_is_linear(unit: str) -> None:
     started = time.perf_counter()
     clean(unit * 20_000)
     assert time.perf_counter() - started < 0.05
+
+
+# --- second half: processors, tails, numbers, the core ------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "core", "via"),
+    [
+        # The twelve the plan names (telephone numbers replaced by invented ones).
+        ("POS DEBIT 0042 QUIET BEAN COFFEE", "quiet bean coffee", None),
+        ("Card Purchase 01/14 Corner Grocer #204 Springfield IL Card 7731", "corner grocer", None),
+        ("SQ *CORNER GROCER 0412 SPRINGFIELD IL", "corner grocer", "square"),
+        # No state follows, so nothing says SPRINGFIELD is a place: it stays.
+        ("TST* HARBOR PIZZA - SPRINGFIELD", "harbor pizza springfield", "toast"),
+        ("PAYPAL *STREAMBOX 402-555-0133 CA", "streambox", "paypal"),
+        ("STREAMBOX.COM", "streambox", None),
+        ("STREAMBOX *MONTHLY", "streambox monthly", None),
+        ("CHECKCARD 0412 LANTERN BOOKS #123 SPRINGFIELD IL", "lantern books", None),
+        ("APPLE.COM/BILL 866-555-0153 CA", "apple com bill", None),
+        ("AMZN MKTP US*7T4TU7Z13 AMZN.COM/BILL WA", "amzn mktp us", None),
+        ("MAPLE BAKERY LLC", "maple bakery", None),
+        ("TRADER JOE S #123", "trader joe", None),
+        # The same shop through other wrappings gives the same core.
+        ("TRADER JOE'S #6089 WINDROW KS", "trader joe", None),
+        ("VISA DDA PUR 448120 CORNER GROCER #204 SPRINGFIELD IL", "corner grocer", None),
+        (
+            "CHECKCARD 0412 CORNER GROCER SPRINGFIELD IL 24055230412000187654321 "
+            "CKCD 5411 XXXXXXXXXXXX7731 XXXX XXXX XXXX 7731",
+            "corner grocer",
+            None,
+        ),
+        ("POS DEBIT SQ *CORNER GROCER SPRINGFIELD IL", "corner grocer", "square"),
+        ("PURCHASE AUTHORIZED ON 04/12 TST* HARBOR PIZZA SPRINGFIELD IL", "harbor pizza", "toast"),
+    ],
+)
+def test_core(raw: str, core: str, via: str | None) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.via) == (core, via)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core", "via"),
+    [
+        ("SQ *SQ *HARBOR PIZZA", "harbor pizza", "square"),
+        ("SQ *HARBOR PIZZA", "harbor pizza", "square"),
+        ("GOSQ.COM HARBOR PIZZA", "harbor pizza", "square"),
+        ("TST*HARBOR PIZZA", "harbor pizza", "toast"),
+        ("TST *HARBOR PIZZA", "harbor pizza", "toast"),
+        ("PP*LANTERN BOOKS", "lantern books", "paypal"),
+        ("DD *HARBOR PIZZA", "harbor pizza", "doordash"),
+        ("DOORDASH*HARBOR PIZZA", "harbor pizza", "doordash"),
+        ("IC* CORNER GROCER", "corner grocer", "instacart"),
+        ("GH *HARBOR PIZZA", "harbor pizza", "grubhub"),
+        ("GRUBHUB*HARBOR PIZZA", "harbor pizza", "grubhub"),
+        ("PADDLE.NET* STREAMBOX", "streambox", "paddle"),
+        ("FS *STREAMBOX", "streambox", "fastspring"),
+        ("DRI*STREAMBOX", "streambox", "digitalriver"),
+        ("BT*LANTERN BOOKS", "lantern books", "braintree"),
+        ("WPY*MAPLE STUDIO", "maple studio", "wepay"),
+        ("IN *MAPLE STUDIO", "maple studio", "intuit"),
+        ("EB *LANTERN FESTIVAL", "lantern festival", "eventbrite"),
+        ("ACT*RIVERBEND SWIM CLUB", "riverbend swim club", "active"),
+        ("ABC*HARBOR FITNESS", "harbor fitness", "abc"),
+        ("ACI*RIVERBEND WATER", "riverbend water", "aci"),
+        ("SP * LANTERN BOOKS", "lantern books", "shopify"),
+        ("SP LANTERN BOOKS", "lantern books", "shopify"),
+    ],
+)
+def test_processors(raw: str, core: str, via: str | None) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.via) == (core, via)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # Marketplaces and platforms are the merchant, not a way to one.
+        ("APPLE.COM/BILL", "apple com bill"),
+        ("GOOGLE *STREAMBOX", "google streambox"),
+        ("AMZN MKTP", "amzn mktp"),
+        ("AMAZON PRIME", "amazon prime"),
+        ("UBER *TRIP", "uber trip"),
+        ("LYFT *RIDE SUN 7PM", "lyft ride sun 7pm"),
+        ("MICROSOFT*STORE", "microsoft store"),
+        # A name that only begins like a processor.
+        ("SQUARE ONE DINER", "square one diner"),
+        ("SQ FT FLOORING", "sq ft flooring"),
+        ("TSTREET TACOS", "tstreet tacos"),
+        ("PAYPAL", "paypal"),
+        ("PPG PAINT SHOP", "ppg paint shop"),
+        ("DDS DISCOUNTS", "dds discounts"),
+        ("DOORDASH", "doordash"),
+        ("GRUBHUB HARBOR PIZZA", "grubhub harbor pizza"),
+        ("INN AT THE HARBOR", "inn at the harbor"),
+        ("IN AND OUT CAR WASH", "in and out car wash"),
+        ("ACT TWO THEATRE", "act two theatre"),
+        ("ABC FINE WINE", "abc fine wine"),
+        ("BT CYCLES", "bt cycles"),
+        ("FS GARAGE", "fs garage"),
+        ("SPORTS HUB", "sports hub"),
+        # Shopify's bare prefix needs two words behind it.
+        ("SP LANTERN", "sp lantern"),
+        # A processor with nobody behind it is all the line names.
+        ("PAYPAL *", "paypal"),
+        ("SQ *", "sq"),
+    ],
+)
+def test_not_a_processor(raw: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.via) == (core, None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # Telephone numbers, delimited and toll-free without delimiters.
+        ("STREAMBOX 800-555-0142", "streambox"),
+        ("STREAMBOX 800.555.0142 CA", "streambox"),
+        ("STREAMBOX (800) 555-0142 CA", "streambox"),
+        ("STREAMBOX 1-800-555-0142", "streambox"),
+        ("STREAMBOX 8005550142 CA", "streambox"),
+        ("STREAMBOX 18885550142", "streambox"),
+        ("LANTERN BOOKS 555-0142 IL", "lantern books"),
+        # A ZIP, with and without the state.
+        ("LANTERN BOOKS SPRINGFIELD IL 62799", "lantern books"),
+        ("LANTERN BOOKS SPRINGFIELD IL 62799-0142", "lantern books"),
+        ("LANTERN BOOKS 62799", "lantern books"),
+        # The state and the city in front of it.
+        ("LANTERN BOOKS SPRINGFIELD IL", "lantern books"),
+        ("LANTERN BOOKS WASHINGTON DC", "lantern books"),
+        ("LANTERN BOOKS PONCE PR", "lantern books"),
+        ("HARBOR FREIGHT DEPOT NEW ALDERTON CT", "harbor freight depot"),
+        ("HARBOR FREIGHT DEPOT ALDER FALLS MT", "harbor freight depot"),
+        ("HARBOR FREIGHT DEPOT ALDERTON MT", "harbor freight depot"),
+        ("LANTERN BOOKS #12 SALT ALDER CITY UT", "lantern books"),
+        ("LANTERN BOOKS 0412 EAST ALDERTON MA", "lantern books"),
+        ("MOTEL 6 ALDERTON TX", "motel 6"),
+        ("LANTERN BOOKS ALDERTON IN", "lantern books"),
+        ("LANTERN BOOKS #12 ALDERTON CO", "lantern books"),
+        ("STREAMBOX 800-555-0142 CO", "streambox"),
+        # Store, terminal and order numbers.
+        ("LANTERN BOOKS #123", "lantern books"),
+        ("LANTERN BOOKS # 123", "lantern books"),
+        ("LANTERN BOOKS #R7731", "lantern books"),
+        ("LANTERN BOOKS STORE 123", "lantern books"),
+        ("LANTERN BOOKS STORE - 0123 ALDERTON MT", "lantern books"),
+        ("LANTERN BOOKS STR 123", "lantern books"),
+        ("LANTERN BOOKS T-1234 ALDERTON OH", "lantern books"),
+        ("LANTERN BOOKS F12345", "lantern books"),
+        ("STREAMBOX *Y90D93VU", "streambox"),
+        ("STREAMBOX*79WC0KSD", "streambox"),
+        ("LANTERN BOOKS 123", "lantern books"),
+        ("LANTERN BOOKS 4729-01", "lantern books"),
+        ("LANTERN BOOKS 0412 0091234", "lantern books"),
+        ("LANTERN 06581 ONLINE", "lantern online"),
+        ("STREAMBOX GSZ9B79Z", "streambox"),
+        # Web endings.
+        ("WWW.STREAMBOX.COM", "streambox"),
+        ("STREAMBOX.NET", "streambox"),
+        ("STREAMBOX.ORG", "streambox"),
+        ("STREAMBOX.IO", "streambox"),
+        ("STREAMBOX.CO", "streambox"),
+        ("STREAMBOX.TV", "streambox"),
+        ("STREAMBOX.US 888-555-0199", "streambox"),
+        ("LANTERN&BOOKS.COM", "lantern books"),
+        ("STREAMBOX STREAMBOX.COM CA", "streambox"),
+        # Company suffixes and possessives.
+        ("MAPLE BAKERY INC", "maple bakery"),
+        ("MAPLE BAKERY, INC.", "maple bakery"),
+        ("MAPLE BAKERY CORP", "maple bakery"),
+        ("MAPLE BAKERY CO", "maple bakery"),
+        ("MAPLE BAKERY LTD", "maple bakery"),
+        ("MAPLE & DRAKE LLP", "maple drake"),
+        ("MAPLE BAKERY CO INC", "maple bakery"),
+        ("HARLOW'S BAKERY", "harlow bakery"),
+        ("HARLOW S BAKERY", "harlow bakery"),
+        ("HARLOW\u2019S BAKERY", "harlow bakery"),
+    ],
+)
+def test_tails_and_numbers(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # A number that is part of the name.
+        ("PHILLIPS 66", "phillips 66"),
+        ("FOREVER 21", "forever 21"),
+        ("STUDIO 54 DANCE", "studio 54 dance"),
+        ("24 HOUR FITNESS", "24 hour fitness"),
+        ("POS DEBIT 24 HOUR FITNESS", "24 hour fitness"),
+        ("WAY2SAVE GROCERY", "way2save grocery"),
+        ("LANTERN STUDIO54", "lantern studio54"),
+        ("1234 LANTERN", "1234 lantern"),
+        ("#1 NOODLE HOUSE", "1 noodle house"),
+        ("76 #1234 ALDERTON CA", "76"),
+        ("STORE 24 MARKET", "store 24 market"),
+        # A word is not an order number, whatever precedes it.
+        ("STREAMBOX *MONTHLY", "streambox monthly"),
+        ("STREAMBOX *MEMBERSHIP", "streambox membership"),
+        # Two letters at the end that are a word here, not a state.
+        ("DRIFTWOOD COFFEE CO", "driftwood coffee"),
+        # ... so a town in Colorado stays when no number says where it begins.
+        ("LANTERN BOOKS ALDERTON CO", "lantern books alderton"),
+        ("STARLITE DRIVE IN", "starlite drive in"),
+        ("TOYS R US", "toys r us"),
+        # The name is never emptied for a place: two words stay.
+        ("MASSAGE ENVY CA", "massage envy"),
+        ("QUIET BEAN OR", "quiet bean"),
+        ("OR", "or"),
+        # An ending that is not a web ending, and one with a path behind it.
+        ("LANTERN.COMICS", "lantern comics"),
+        ("STREAMBOX.COM/BILL", "streambox com bill"),
+        ("COM", "com"),
+        (".COM", "com"),
+        # A suffix word that is all there is, or not at the end.
+        ("CO", "co"),
+        ("INC MAGAZINE", "inc magazine"),
+        ("S", "s"),
+    ],
+)
+def test_tails_negatives(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+def test_the_five_examples_the_old_dialog_pinned() -> None:
+    examples = {
+        "Card Purchase 01/14 Corner Grocer #204 Springfield IL Card 7731": "corner grocer",
+        "OAKFIELD RENTALS DES:RENT ID:88123 INDN:JORDAN SAMPLE": "oakfield rentals",
+        "POS DEBIT 0042 QUIET BEAN COFFEE": "quiet bean coffee",
+        "Gusto Pay 123456 PPD ID: 9138864007": "gusto pay",
+        "STREAMBOX *MONTHLY": "streambox monthly",
+    }
+    for raw, core in examples.items():
+        cleaned = clean(raw)
+        assert cleaned.core == core, raw
+        folded = set(re.findall(r"[a-z0-9]+", raw.lower()))
+        assert set(cleaned.core.split()) <= folded, raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        ("ZELLE PAYMENT TO JORDAN SAMPLE", "zelle"),
+        ("Zelle payment from JORDAN SAMPLE Conf# a1b2c3d4e", "zelle"),
+        ('Zelle payment to JORDAN SAMPLE for "rent"; Conf# a1b2c3d4e', "zelle"),
+        ("VENMO PAYMENT 1029384756123 WEB ID: 5512098871 JORDAN SAMPLE", "venmo"),
+        ("CASH APP*JORDAN SAMPLE", "cash app"),
+        ("VENMO DES:PAYMENT ID:1029384756123 INDN:JORDAN SAMPLE CO ID:1020304050 WEB", "venmo"),
+    ],
+)
+def test_p2p_core_is_the_service(raw: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.kind, cleaned.via) == (core, "p2p", None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind"),
+    [
+        ("ONLINE TRANSFER TO SAV ...1234", "transfer"),
+        ("TRANSFER TO BROKERAGE ACCT 4410", "transfer"),
+        ("PAYMENT THANK YOU - WEB", "card_payment"),
+        (
+            "CHASE CREDIT CRD DES:AUTOPAY ID:5512098871 INDN:JORDAN SAMPLE CO ID:1020304050",
+            "card_payment",
+        ),
+        ("ATM WITHDRAWAL 004512 MAIN ST SPRINGFIELD IL", "cash"),
+        ("CHECK # 1042", "check"),
+        ("NSF RETURNED ITEM FEE FOR ACTIVITY OF 04/12", "fee"),
+        ("INTEREST CHARGE ON PURCHASES", "interest"),
+        ("ATM CHECK DEPOSIT 04/12 MAIN ST SPRINGFIELD IL", "deposit"),
+    ],
+)
+def test_non_purchases_have_no_core(raw: str, kind: str) -> None:
+    cleaned = clean(raw)
+    assert cleaned.kind == kind
+    assert (cleaned.core, cleaned.via) == ("", None)
+
+
+def test_a_number_alone_is_not_a_core() -> None:
+    assert clean("MORTGAGE PAYMENT 5512098871") == Cleaned(core="", kind="loan_payment")
+    assert clean("POS RETURN 390269") == Cleaned(core="", kind="refund")
+    assert clean("5512098871").core == ""
+    assert clean("#1234").core == "1234"
+
+
+def test_the_core_is_bounded() -> None:
+    long_name = "ALDER BIRCH CEDAR DOGWOOD ELM FIR GINKGO HAZEL"
+    assert clean(long_name).core == "alder birch cedar dogwood elm fir"
+    assert cleanup.CORE_TOKENS_MAX == 6
+    wide = clean(" ".join(["ALDERBIRCHCEDARDOGWOOD"] * 4))
+    assert wide.core == "alderbirchcedardogwood alderbirchcedardogwood"
+    assert len(clean("A" * 200).core) == 64
+
+
+def test_core_form() -> None:
+    for line in LABELLED:
+        core = clean(line.text).core
+        assert core == "" or KEY_FORM.match(core), line.text
+        assert len(core) <= 64, line.text
+        assert len(core.split()) <= cleanup.CORE_TOKENS_MAX, line.text
+
+
+def test_kinds_on_the_labelled_set() -> None:
+    other = [line for line in LABELLED if line.group == "non_purchase"]
+    assert len(other) == 150
+    right = sum(1 for line in other if clean(line.text).kind == line.kind)
+    assert right / len(other) >= 0.97
+    assert len(LABELLED) == 1200
+    for line in LABELLED:
+        named = {word for name in line.private for word in re.findall(r"[a-z0-9]+", name.lower())}
+        assert not named & set(clean(line.text).core.split()), line.text
+
+
+def test_processors_are_literal_and_longest_first() -> None:
+    prefixes = [prefix for prefix, _via in cleanup.PROCESSORS]
+    assert len(set(prefixes)) == len(prefixes)
+    for index, prefix in enumerate(prefixes):
+        assert prefix == prefix.upper()
+        # No later prefix is hidden behind an earlier, shorter one.
+        assert not any(prefix.startswith(earlier) for earlier in prefixes[:index]), prefix
