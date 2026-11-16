@@ -99,6 +99,27 @@
   font-size: var(--font-size-sm);
 }
 
+/* Holdings: the security's name gets room for one or two lines, the cost
+   per unit may wrap under the cost and the cells are a little narrower, so
+   the table fits a 1280 px window without scrolling. */
+.holdings-table th,
+.holdings-table td {
+  padding-inline: calc(var(--space-2) * 0.75);
+}
+
+.holdings-table thead th {
+  white-space: normal;
+}
+
+.holdings-table .holding-security {
+  min-width: 10rem;
+}
+
+.holdings-table .holding-security .cell-note,
+.holdings-table .holding-cost .cell-note {
+  white-space: normal;
+}
+
 .cell-figure {
   white-space: nowrap;
   font-variant-numeric: var(--num);

@@ -93,6 +93,23 @@ describe("investments page", () => {
     expect(within(lots).getByText("Long term")).toBeInTheDocument();
   });
 
+  it("names the account only while every investment account is shown", async () => {
+    mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json(holdings),
+    });
+    renderApp(`/accounts/investments?account=${BROKERAGE}`);
+    const one = await screen.findByRole("table", { name: "Holdings" });
+    expect(within(one).queryByRole("columnheader", { name: "Account" })).not.toBeInTheDocument();
+    // The name and symbol share one cell, the name on its own line.
+    expect(within(one).getByRole("rowheader", { name: /ACME/ })).toHaveClass("holding-security");
+    await userEvent.setup().selectOptions(screen.getByLabelText("Account"), "");
+    const all = await screen.findByRole("table", { name: "Holdings" });
+    expect(await within(all).findByRole("columnheader", { name: "Account" })).toBeInTheDocument();
+  });
+
   it("says what the figures are as of, where each price came from and how it moved", async () => {
     const [held] = holdings.holdings;
     const fed = {
