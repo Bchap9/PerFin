@@ -783,3 +783,276 @@ def test_parser_version_is_5() -> None:
     # The plan wrote "2 to 3"; the reader stood at 4 when import 1d began.
     assert template_module.PARSER_VERSION == "5"
     assert template_module.TEMPLATE_REF.version == "5"
+
+
+# ---------------------------------------------------------------------------
+# Review of import 1d: tables under the same headers, end texts, card sections
+# ---------------------------------------------------------------------------
+
+_SAME: Line = (200.0, [(60.0, "Posted"), (160.0, "Detail"), (400.0, "Change")])
+
+
+def _same(y: float) -> Line:
+    return (y, list(_SAME[1]))
+
+
+def _in_and_out(first_end: str | None, second_end: str | None) -> LayoutTemplate:
+    """Money in, then money out, under the same three headers."""
+    return LayoutTemplate(
+        tables=[
+            _change("money_in").tables[0].model_copy(update={"end": first_end}),
+            _change("money_out").tables[0].model_copy(update={"end": second_end}),
+        ]
+    )
+
+
+def _signed(taught: Any) -> list[tuple[Decimal, str | None, list[str]]]:
+    return [(t.amount, t.payee, t.low_confidence) for t in taught.statements[0].transactions]
+
+
+def _split_selections(view: DocumentView) -> list[tuple[float, float]]:
+    """Top and bottom of each table of the two-table sheet (header to above its total)."""
+    words = [w for line in view.lines for w in template_module.line_words(line)]
+    tops = [w.y0 - 2 for w in words if w.text == "Booked"]
+    bottoms = [next(w for w in words if w.text == first).y0 - 3 for first in ("Received", "Sent")]
+    return list(zip(tops, bottoms, strict=True))
+
+
+_SPLIT_SPANS = [(40.0, 140.0, "date"), (140.0, 390.0, "payee"), (390.0, 470.0, "amount")]
+
+
+def test_the_end_text_is_read_from_a_total_line_with_a_figure() -> None:
+    view = _pdf_view(synth.two_tables_statement())
+    ends = [
+        table_from_selection(view, 1, (40.0, top, 580.0, bottom), "transactions", _SPLIT_SPANS).end
+        for top, bottom in _split_selections(view)
+    ]
+    # "Received in all 1,962.75": the words before the figure end the table.
+    assert ends == ["Received in all", "Sent in all"]
+
+
+def test_the_end_text_is_not_taken_from_a_row_or_from_inside_the_table() -> None:
+    view = _pdf_view(synth.two_tables_statement())
+    (top, bottom), _ = _split_selections(view)
+    # A box that stops one row short: under it stands a row, which starts
+    # with its date. A row is never an end text.
+    short = table_from_selection(
+        view, 1, (40.0, top, 580.0, bottom - 16.0), "transactions", _SPLIT_SPANS
+    )
+    assert short.end is None
+
+    # The line under the box starts like a line inside it: ending there
+    # would cut the table on this very page.
+    hand = _hand_view(
+        [
+            THREE,
+            _three(220.0, "2026-03-02", "Shop", "12.00"),
+            (235.0, [(60.0, "Sum"), (90.0, "so"), (110.0, "far"), (400.0, "12.00")]),
+            _three(250.0, "2026-03-05", "Stall", "4.00"),
+            (265.0, [(60.0, "Sum"), (90.0, "so"), (110.0, "far"), (400.0, "16.00")]),
+        ]
+    )
+    spans = [(50.0, 150.0, "date"), (150.0, 390.0, "payee"), (390.0, 480.0, "amount")]
+    inside = table_from_selection(hand, 1, (50.0, 198.0, 600.0, 262.0), "transactions", spans)
+    assert inside.end is None
+
+    # A table that continues over pages: under its first page stands the
+    # page's foot, with its sheet number. It is not the table's end.
+    paged = _hand_view(
+        [
+            THREE,
+            _three(220.0, "2026-03-02", "Shop", "12.00"),
+            (700.0, [(60.0, "Leaf"), (90.0, "1"), (100.0, "of"), (118.0, "2")]),
+        ],
+        [_three(60.0, "2026-03-05", "Stall", "4.00")],
+    )
+    box = (50.0, 198.0, 600.0, 232.0)
+    assert table_from_selection(paged, 1, box, "transactions", spans).end == "Leaf"
+    continued = table_from_selection(paged, 1, box, "transactions", spans, continues=True)
+    assert continued.end is None
+    assert continued.continues is True
+    assert [t.payee for t in _read_rows(paged, continued)] == ["Shop", "Stall"]
+
+
+def _read_rows(view: DocumentView, table: TableTemplate) -> list[Any]:
+    taught = read_template(view, LayoutTemplate(tables=[table]), threshold=0.85)
+    return list(taught.statements[0].transactions)
+
+
+def test_an_end_text_ends_the_table_only_where_a_line_starts_with_it() -> None:
+    view = _hand_view(
+        [
+            THREE,
+            # The payee holds the end text: it is a row, not the end.
+            _three(220.0, "2026-03-02", "Sum Street Bakery", "-12.00"),
+            _three(235.0, "2026-03-05", "Wage", "50.00"),
+            (250.0, [(60.0, "Sum"), (400.0, "38.00")]),
+            # Under the end: no row.
+            _three(265.0, "2026-03-09", "Notice", "-1.00"),
+        ]
+    )
+    table = _change("as_printed").tables[0].model_copy(update={"end": "Sum"})
+    assert [(t.payee, t.amount) for t in _read_rows(view, table)] == [
+        ("Sum Street Bakery", Decimal("-12.00")),
+        ("Wage", Decimal("50.00")),
+    ]
+
+
+def test_a_second_table_on_the_next_page_is_not_read_as_the_first() -> None:
+    """Money in on page 1 with its total, money out from the top of page 2."""
+    view = _hand_view(
+        [
+            THREE,
+            _three(220.0, "2026-03-02", "Wage", "50.00"),
+            (235.0, [(60.0, "Sum"), (90.0, "in"), (400.0, "50.00")]),
+        ],
+        [_same(200.0), _three(220.0, "2026-03-05", "Shop", "12.00")],
+    )
+    # The first table's end text was found: the header of page 2 is the next table's.
+    taught = read_template(view, _in_and_out("Sum in", None), threshold=0.85)
+    assert _signed(taught) == [
+        (Decimal("50.00"), "Wage", ["reconciliation"]),
+        (Decimal("-12.00"), "Shop", ["reconciliation"]),
+    ]
+    assert taught.row_tables == [0, 1]
+    assert "table_order_guessed" not in taught.warnings
+
+    # Without an end text nothing says whether page 2 goes on with the first
+    # table or starts the second: the rows are read, and their amounts wait.
+    guessed = read_template(view, _in_and_out(None, None), threshold=0.85)
+    assert [low for _, _, low in _signed(guessed)] == [["amount", "reconciliation"]] * 2
+    assert guessed.warnings.count("table_order_guessed") == 1
+    assert [read.guessed for read in guessed.tables] == [True, True]
+
+
+def test_tables_printed_on_every_page_keep_their_directions() -> None:
+    pages = [
+        [
+            THREE,
+            _three(220.0, f"2026-0{month}-02", f"Wage{month}", "50.00"),
+            (235.0, [(60.0, "Sum"), (90.0, "in"), (400.0, "50.00")]),
+            _same(260.0),
+            _three(280.0, f"2026-0{month}-05", f"Shop{month}", "12.00"),
+            (295.0, [(60.0, "Sum"), (90.0, "out"), (400.0, "12.00")]),
+        ]
+        for month in (3, 4)
+    ]
+    view = _hand_view(*pages)
+    taught = read_template(view, _in_and_out("Sum in", "Sum out"), threshold=0.85)
+    assert _signed(taught) == [
+        (Decimal("50.00"), "Wage3", ["reconciliation"]),
+        (Decimal("-12.00"), "Shop3", ["reconciliation"]),
+        (Decimal("50.00"), "Wage4", ["reconciliation"]),
+        (Decimal("-12.00"), "Shop4", ["reconciliation"]),
+    ]
+    assert taught.warnings == []
+
+    # The second table has no end text: it is still open at the top of page
+    # 2, whose first header may be either table's. Every amount waits.
+    open_ended = read_template(view, _in_and_out("Sum in", None), threshold=0.85)
+    assert all("amount" in low for _, _, low in _signed(open_ended))
+    assert "table_order_guessed" in open_ended.warnings
+
+
+def test_a_section_the_statement_left_out_makes_the_order_a_guess() -> None:
+    """One header, two tables it could start: which section is printed is not said."""
+    anchors = [
+        FieldAnchor(field="opening_balance", direction="right", label="Brought in"),
+        FieldAnchor(field="closing_balance", direction="right", label="Taken out"),
+    ]
+
+    def page(opening: str, closing: str) -> DocumentView:
+        return _hand_view(
+            [
+                (100.0, [(60.0, "Brought"), (110.0, "in"), (140.0, opening)]),
+                (120.0, [(60.0, "Taken"), (100.0, "out"), (140.0, closing)]),
+                THREE,
+                _three(220.0, "2026-03-05", "Shop", "12.00"),
+                (235.0, [(60.0, "Sum"), (90.0, "out"), (400.0, "12.00")]),
+            ]
+        )
+
+    tables = _in_and_out("Sum in", "Sum out").tables
+    unchecked = read_template(
+        page("100.00", "88.00"), LayoutTemplate(tables=tables), threshold=0.85
+    )
+    assert _signed(unchecked) == [(Decimal("12.00"), "Shop", ["amount", "reconciliation"])]
+    assert "table_order_guessed" in unchecked.warnings
+
+    # Balances that the guess meets bear it out: nothing waits.
+    template = LayoutTemplate(fields=anchors, tables=tables)
+    met = read_template(page("100.00", "112.00"), template, threshold=0.85)
+    assert met.statements[0].reconciliation is not None
+    assert met.statements[0].reconciliation.status == "ok"
+    assert _signed(met) == [(Decimal("12.00"), "Shop", [])]
+    assert "table_order_guessed" not in met.warnings
+    # Balances it does not meet: held as a mismatch, the amounts in doubt.
+    unmet = read_template(page("100.00", "88.00"), template, threshold=0.85)
+    assert unmet.statements[0].reconciliation is not None
+    assert unmet.statements[0].reconciliation.status == "mismatch"
+    assert all("amount" in low for _, _, low in _signed(unmet))
+
+
+def test_tables_that_read_a_row_alike_are_never_a_guess() -> None:
+    """The same headers and the same direction: whichever table it is, the row is the same."""
+    view = _hand_view(
+        [THREE, _three(220.0, "2026-03-02", "Wage", "50.00")],
+        [_same(200.0), _three(220.0, "2026-03-05", "Gift", "12.00")],
+    )
+    alike = LayoutTemplate(tables=[_change("money_in").tables[0]] * 2)
+    taught = read_template(view, alike, threshold=0.85)
+    assert _signed(taught) == [
+        (Decimal("50.00"), "Wage", ["reconciliation"]),
+        (Decimal("12.00"), "Gift", ["reconciliation"]),
+    ]
+    assert taught.warnings == []
+
+
+def test_a_card_with_a_table_of_payments_reconciles() -> None:
+    """Payments and purchases in two tables, the balances amounts owed."""
+    view = _hand_view(
+        [
+            (100.0, [(60.0, "Owed"), (90.0, "before"), (140.0, "100.00")]),
+            (120.0, [(60.0, "Owed"), (90.0, "now"), (140.0, "120.00")]),
+            THREE,
+            _three(220.0, "2026-03-02", "Payment", "30.00"),
+            (235.0, [(60.0, "Sum"), (90.0, "paid"), (400.0, "30.00")]),
+            _same(260.0),
+            _three(280.0, "2026-03-05", "Shop", "50.00"),
+            (295.0, [(60.0, "Sum"), (90.0, "charged"), (400.0, "50.00")]),
+        ]
+    )
+    anchors = [
+        FieldAnchor(field="opening_balance", direction="right", label="Owed before"),
+        FieldAnchor(field="closing_balance", direction="right", label="Owed now"),
+    ]
+
+    def read(payments: str, purchases: str) -> Any:
+        tables = [
+            _change(payments).tables[0].model_copy(update={"end": "Sum paid"}),
+            _change(purchases).tables[0].model_copy(update={"end": "Sum charged"}),
+        ]
+        template = LayoutTemplate(fields=anchors, tables=tables)
+        return read_template(view, template, threshold=0.85).statements[0]
+
+    statement = read("money_in", "card")
+    assert [(t.amount, t.payee) for t in statement.transactions] == [
+        (Decimal("30.00"), "Payment"),
+        (Decimal("-50.00"), "Shop"),
+    ]
+    # One card table makes the balances amounts owed: -100 + 30 - 50 = -120.
+    assert statement.opening_balance is not None
+    assert statement.ledger_balance is not None
+    assert statement.opening_balance.amount == Decimal("-100.00")
+    assert statement.ledger_balance.amount == Decimal("-120.00")
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+    # Taught wrongly (the payments as charges): it does not add up and waits.
+    wrong = read("card", "card")
+    assert wrong.reconciliation is not None
+    assert wrong.reconciliation.status == "mismatch"
+    # No card table: the balances stay as printed, as before.
+    plain = read("money_in", "money_out")
+    assert plain.opening_balance is not None
+    assert plain.opening_balance.amount == Decimal("100.00")

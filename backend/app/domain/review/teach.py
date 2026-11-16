@@ -62,6 +62,18 @@ Each transactions table carries its ``direction`` (what an unsigned amount
 means) and whether it ``continues`` on pages that do not repeat its header
 (:class:`app.ingestion.parsers.template.TableTemplate`); a layout takes up
 to four transactions tables and one holdings table (``422 invalid-table``).
+The template holds the tables **in the order the document prints them**
+(page, then the top of the box), whatever order they were drawn in: tables
+under the same headers are told apart by that order alone, so a person who
+draws the lower table first must not get its direction on the upper one.
+What is answered (``tables``, a preview row's ``table``) keeps the order of
+the request.
+
+Balances labelled on their own, for a statement that is already stored, are
+taken **as printed**: when the document's account is a card or a loan
+(:data:`app.domain.accounts.models.LIABILITY_TYPES`) the figure on the page
+is an amount owed and is stored negated, the ledger's convention, which is
+also how a ``card`` table's rows and balances are stored.
 
 Callers: member or above who may change the document
 (``can_edit_document``); an ``item_id`` must be an open item of the
@@ -87,7 +99,7 @@ from app.auth.principal import Principal
 from app.core.audit import audit
 from app.core.errors import ProblemError
 from app.core.events import emit
-from app.domain.accounts.models import Institution
+from app.domain.accounts.models import LIABILITY_TYPES, Account, Institution
 from app.domain.accounts.service import find_or_create_institution
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents.manage import can_edit_document, may_download
@@ -194,6 +206,8 @@ class _Lesson:
         self.ignore: list[str] = []
         self.notes: list[str] = []
         self.tables: list[TableTemplate] = []
+        #: For each table of the template, its index in the request's ``tables``.
+        self.order: list[int] = []
         self.institution: str | None = None
         self.warnings: list[str] = []
 
@@ -269,22 +283,27 @@ def _read_labels(lesson: _Lesson, body: TeachRequest) -> None:
                 direction=anchor.direction if anchor is not None else None,
             )
         )
-    for table in body.tables:
+    # In the order the document prints them, not the order they were drawn
+    # in: tables under the same headers are told apart by it (module doc).
+    printed = sorted(
+        range(len(body.tables)), key=lambda i: (body.tables[i].page, body.tables[i].bbox[1], i)
+    )
+    for index in printed:
+        table = body.tables[index]
         page = lesson.page(table.page)
         for column in table.columns:
             if column.role == "other":
                 lesson.note(column.note)
         columns = [(c.x0, c.x1, "ignore" if c.role == "other" else c.role) for c in table.columns]
         try:
-            found_table = table_from_selection(view, page, table.bbox, table.kind, columns)
+            found_table = table_from_selection(
+                view, page, table.bbox, table.kind, columns, continues=table.continues
+            )
         except ValueError as exc:
             raise _invalid("invalid-table", "Table not understood", str(exc)[:300]) from None
-        # What the person said about the table: neither is read off the page.
-        lesson.tables.append(
-            found_table.model_copy(
-                update={"direction": table.direction, "continues": table.continues}
-            )
-        )
+        # What the person said about the table: it is not read off the page.
+        lesson.tables.append(found_table.model_copy(update={"direction": table.direction}))
+        lesson.order.append(index)
 
 
 def _institution(
@@ -455,9 +474,15 @@ def _institution_required() -> ProblemError:
     )
 
 
-def _tables_out(template: LayoutTemplate, taught: TemplateOutcome) -> list[TaughtTable]:
-    """Each taught table with the rows it read (a transactions table: its own rows)."""
-    return [
+def _tables_out(
+    template: LayoutTemplate, taught: TemplateOutcome, order: list[int]
+) -> list[TaughtTable]:
+    """Each taught table with the rows it read (a transactions table: its own rows).
+
+    In the order of the request (``order``: for each table of the template,
+    its place there).
+    """
+    out = [
         TaughtTable(
             kind=table.kind,
             rows=taught.row_tables.count(index)
@@ -467,6 +492,19 @@ def _tables_out(template: LayoutTemplate, taught: TemplateOutcome) -> list[Taugh
         )
         for index, table in enumerate(template.tables)
     ]
+    return [table for _, table in sorted(zip(order, out, strict=True), key=lambda pair: pair[0])]
+
+
+def _owed(db: Session, document: Document) -> bool:
+    """Whether the document's account prints its balances as amounts owed."""
+    if document.account_id is None:
+        return False
+    account = db.execute(
+        select(Account).where(
+            Account.household_id == document.household_id, Account.id == document.account_id
+        )
+    ).scalar_one_or_none()
+    return account is not None and account.type in LIABILITY_TYPES
 
 
 def _named_institution(
@@ -566,8 +604,8 @@ def _preview(
             posted_date=row.posted,
             amount=f"{row.amount:f}",
             payee=row.payee if content else None,
-            table=table,
-            page=row.page or body.tables[table].page,
+            table=lesson.order[table],
+            page=row.page or body.tables[lesson.order[table]].page,
         )
         for row, table in zip(
             transactions[:TEACH_PREVIEW_ROWS_MAX], taught.row_tables, strict=False
@@ -579,7 +617,7 @@ def _preview(
     return TeachOut(
         document_id=document.id,
         fields=lesson.fields,
-        tables=_tables_out(template, taught),
+        tables=_tables_out(template, taught, lesson.order),
         ignored=len(template.ignore),
         notes=lesson.notes,
         applied=[],
@@ -665,6 +703,10 @@ def teach(
         if stored is None or not stored.statements:
             lesson.warnings.append("no_statement_for_balances")
         else:
+            if _owed(db, document):
+                # Selected as printed: a balance owed is negative in the ledger.
+                opening = -opening if opening is not None else None
+                closing = -closing if closing is not None else None
             balanced = actions.correct_balances(
                 db, document, item, opening=opening, closing=closing
             )
@@ -727,7 +769,7 @@ def teach(
             )
             rerun, job_id = "import", accepted.job_id
 
-    tables_out = _tables_out(template, taught)
+    tables_out = _tables_out(template, taught, lesson.order)
     out_item = None
     if item is not None:
         settled = (

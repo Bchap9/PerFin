@@ -45,16 +45,32 @@ a dated line without an amount is skipped and its box recorded for the
 review highlight.
 
 **Several tables** are read in one pass (:func:`read_tables`): one table is
-open at a time, and it is closed by its ``end`` text, by the end of its
+open at a time, and it is closed by its ``end`` text (a line that *starts*
+with it: a row that merely mentions the words is a row), by the end of its
 page, or by the header of another table. A header line that several
 templates fit (``Money received`` and ``Money sent`` printed under the same
 headers) belongs to the one with the most headers on it; between equals,
 the first header of a new page is the table still open from the page
 before, otherwise the next table of the template that has not started yet
-(tables are taught in the order they are printed). The rows of all
-transaction tables make **one** statement, in page order;
-``TemplateOutcome.row_tables`` says which table each row came from. Printed
-running balances are checked row by row only when one table gave the rows.
+(tables are taught in the order they are printed;
+``app.domain.review.teach`` puts them in that order whatever order they
+were drawn in). The rows of all transaction tables make **one** statement,
+in page order; ``TemplateOutcome.row_tables`` says which table each row
+came from. Printed running balances are checked row by row only when one
+table gave the rows.
+
+**A guessed table.** Between tables that share their headers and read an
+amount differently (another direction, other column roles) nothing on the
+page says which one a header starts; the order is all there is. Two things
+make that order a guess (``TableRead.guessed``): a header on a new page
+given to the table still open from the page before when that table has no
+``end`` text (it may as well have ended at the foot of the page, and the
+header be the next table's); and such tables started an unequal number of
+times (a section the statement left out this month: which one is not
+printed). The rows of a guessed table are read, but unless the statement
+reconciles their ``amount`` is scored :data:`~app.ingestion.parsers.
+confidence.GUESSED` and the outcome warns ``table_order_guessed``: a sign
+that rests on a guess waits for a person, it is never a clean read.
 
 **Continued tables.** A table with ``continues`` stays open over a page
 break: on the next page its rows are read with the column spans of the last
@@ -71,10 +87,12 @@ printed minus or bracket takes it back). ``money_out``: an unsigned figure
 is spending; a printed minus or bracket flips it back, so a refund in a
 withdrawals table is money in. ``card``: the printed sign negated (charges
 printed positive are spending). A printed ``CR`` or ``DR`` decides in every
-direction but ``as_printed``. When every transaction table is a ``card``
-table the statement's balances are amounts owed and are negated too
+direction but ``as_printed``. When a transaction table is a ``card`` table
+the statement's balances are amounts owed and are negated too
 (:func:`owed_balances`), the ledger convention the card parser follows:
-only so can the printed figures reconcile with the negated rows.
+only so can the printed figures reconcile with the negated rows. A card
+that prints its payments in a table of their own is taught with that table
+as ``money_in`` and its purchases as ``card``.
 
 **Dates** are read as numbers in the order the rows settle, ISO, or with a
 month name, with or without a year. A date without its year takes it from
@@ -481,6 +499,27 @@ def _has(line: ViewLine, label: str) -> bool:
     return _find(line_words(line), label) is not None
 
 
+def _starts(line: ViewLine, label: str) -> bool:
+    """``line`` begins with the words of ``label`` (how a table's ``end`` text is found)."""
+    want = _tokens(label)
+    have = [token for word in line_words(line) for token in _tokens(word.text)]
+    return bool(want) and tuple(have[: len(want)]) == want
+
+
+def _end_text(line: ViewLine) -> str | None:
+    """The words ``line`` starts with, up to its first figure, as a label (None: none).
+
+    ``Received in all 1,962.75`` gives ``Received in all``; a line that
+    starts with a figure or a date (a row) gives nothing.
+    """
+    lead: list[str] = []
+    for word in line_words(line):
+        if _DIGIT.search(word.text):
+            break
+        lead.append(word.text)
+    return label_text(" ".join(lead)) if lead else None
+
+
 # ---------------------------------------------------------------------------
 # Values
 # ---------------------------------------------------------------------------
@@ -752,13 +791,21 @@ def table_from_selection(
     box: Sequence[float],
     kind: TableKind,
     columns: Sequence[tuple[float, float, str]],
+    *,
+    continues: bool = False,
 ) -> TableTemplate:
     """A table template from a selected box and its columns ``(x0, x1, role)``.
 
     The header text of each column is the selection's first line inside the
     column's span (digits dropped: a column headed only by a date has no
-    header); the table ends at the first line under the box whose text is a
-    label. Raises ``ValueError`` when the columns do not make a table.
+    header). The ``end`` text is what the first line under the box starts
+    with, up to its first figure (:func:`_end_text`: a total line ``Sent in
+    all 132.61`` ends the table at ``Sent in all``). It is left out when a
+    line inside the selection starts with the same words (it would end the
+    table on this very page), and, for a table that ``continues`` over
+    pages, when the line holds a figure: under the first page of such a
+    table stands the page's foot (``Sheet 1 of 2``), not the table's end.
+    Raises ``ValueError`` when the columns do not make a table.
     """
     chosen = selected(view, page, box)
     if not chosen:
@@ -775,9 +822,12 @@ def table_from_selection(
     last = chosen[-1][0]
     after = [line for line in lines if line.bbox[1] > max(box[3], last.bbox[3])]
     if after:
-        end = label_text(after[0].text)
+        figures = any(_DIGIT.search(w.text) for w in line_words(after[0]))
+        end = None if continues and figures else _end_text(after[0])
+        if end is not None and any(_starts(line, end) for line, _ in chosen):
+            end = None
     try:
-        return TableTemplate(kind=kind, columns=built, end=end)
+        return TableTemplate(kind=kind, columns=built, end=end, continues=continues)
     except ValidationError as exc:
         raise ValueError(_first_error(exc)) from None
 
@@ -889,6 +939,9 @@ class TableRead:
     skipped: list[tuple[int, BBox]] = field(default_factory=list)
     skipped_count: int = 0
     found: bool = False
+    #: Which of several tables under the same headers this is was a guess
+    #: (module doc, "A guessed table").
+    guessed: bool = False
 
 
 def _dateish(text: str) -> bool:
@@ -930,13 +983,30 @@ def _headed(table: TableTemplate) -> int:
     return sum(1 for column in table.columns if column.header)
 
 
+def _meaning(table: TableTemplate) -> tuple[Any, ...]:
+    """What tells two tables under the same headers apart when a row is read."""
+    roles = tuple(column.role for column in table.columns)
+    return (table.kind, roles, table.direction if "amount" in roles else None)
+
+
+@dataclass(frozen=True)
+class _Hit:
+    table: int
+    spans: list[_Span]
+    #: The tables the header fits as well and that read a row differently
+    #: (with ``table`` itself); empty when the header says which table it is.
+    rivals: tuple[int, ...] = ()
+    #: Chosen because it was still open from the page before.
+    carried: bool = False
+
+
 def _header_hit(
     line: ViewLine,
     tables: Sequence[TableTemplate],
     reads: Sequence[TableRead],
     carried: int | None,
     recent: int | None,
-) -> tuple[int, list[_Span]] | None:
+) -> _Hit | None:
     """The table ``line`` is the header of, with its column spans (module doc).
 
     ``carried``: the table still open from the page before, while no header
@@ -951,15 +1021,17 @@ def _header_hit(
         return None
     most = max(_headed(tables[index]) for index in hits)
     equal = [index for index in hits if _headed(tables[index]) == most]
+    by_carry = False
     if carried is not None and carried in equal:
-        chosen = carried
+        chosen, by_carry = carried, True
     elif len(equal) == 1:
         chosen = equal[0]
     else:
         fresh = [index for index in equal if not reads[index].found]
         later = [index for index in equal if recent is not None and index > recent]
         chosen = fresh[0] if fresh else (later[0] if later else equal[0])
-    return chosen, hits[chosen]
+    rivals = tuple(equal) if len({_meaning(tables[index]) for index in equal}) > 1 else ()
+    return _Hit(chosen, hits[chosen], rivals, by_carry)
 
 
 def read_tables(
@@ -974,6 +1046,11 @@ def read_tables(
     waiting = False
     carried: int | None = None
     recent: int | None = None
+    #: Tables that share their headers and read a row differently, the times
+    #: each was started by its place in the order, and those that were guessed.
+    groups: set[tuple[int, ...]] = set()
+    started = [0 for _ in tables]
+    guessed: set[int] = set()
     page = 0
     for number, line in enumerate(view.lines):
         if line.page != page:
@@ -984,14 +1061,21 @@ def read_tables(
                 current, spans = None, None
         hit = _header_hit(line, tables, reads, carried, recent)
         if hit is not None:
-            current, spans = hit
+            current, spans = hit.table, hit.spans
             last, waiting, carried, recent = None, False, None, current
             reads[current].found = True
+            if hit.rivals:
+                groups.add(hit.rivals)
+                if not hit.carried:
+                    started[current] += 1
+                elif tables[current].end is None:
+                    # Nothing says the open table did not end with its page.
+                    guessed.update(hit.rivals)
             continue
         if current is None or spans is None:
             continue
         table, out = tables[current], reads[current]
-        if table.end is not None and _has(line, table.end):
+        if table.end is not None and _starts(line, table.end):
             current, spans, last, waiting = None, None, None, False
             continue
         if _ignored(line, ignore):
@@ -1030,6 +1114,12 @@ def read_tables(
                 if len(out.skipped) < MAX_SKIPPED_REGIONS:
                     out.skipped.append((line.page, line.bbox))
             last = None
+    for group in groups:
+        # A section the statement did not print: which one is not said.
+        if len({started[index] for index in group}) > 1:
+            guessed.update(group)
+    for index in guessed:
+        reads[index].guessed = True
     return reads
 
 
@@ -1107,13 +1197,14 @@ def _directed(words: Sequence[Word] | None, direction: AmountDirection) -> Decim
 
 
 def owed_balances(template: LayoutTemplate) -> bool:
-    """Whether the layout's balances are amounts owed (every transaction table is a card's).
+    """Whether the layout's balances are amounts owed (a transaction table is a card's).
 
     Such balances are negated when the statement is built, like the rows
-    (module doc); :func:`fill_statement` is told with ``owed``.
+    (module doc); :func:`fill_statement` is told with ``owed``. One ``card``
+    table is enough: a card that prints its payments apart has them taught
+    as ``money_in`` beside the ``card`` table of its purchases.
     """
-    directions = [t.direction for t in template.tables if t.kind == "transactions"]
-    return bool(directions) and all(d == "card" for d in directions)
+    return any(t.kind == "transactions" and t.direction == "card" for t in template.tables)
 
 
 #: Month-name styles without a year, as the generic reader has them.
@@ -1257,6 +1348,15 @@ def _transactions(
     if cap is not None:
         for score in scores:
             score["reconciliation"] = cap
+    guessed = {index for index, table in enumerate(outcome.tables) if table.guessed}
+    if check.status != "ok" and guessed.intersection(sources):
+        # Which table these rows stand in, and so their sign, was a guess
+        # that no balance bears out (module doc, "A guessed table").
+        for score, source in zip(scores, sources, strict=True):
+            if source in guessed:
+                score["amount"] = min(score["amount"], conf.GUESSED)
+        if "table_order_guessed" not in outcome.warnings:
+            outcome.warnings.append("table_order_guessed")
     if period is None:
         period = (min(r.posted for r in rows), max(r.posted for r in rows))
         statement_conf["period"] = conf.INFERRED

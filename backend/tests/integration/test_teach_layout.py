@@ -953,3 +953,135 @@ def test_teach_takes_the_account_from_the_request(env: Env) -> None:
     assert _rows(env, account, document_id) == sorted(
         (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
     )
+
+
+# ---------------------------------------------------------------------------
+# Review of import 1d: the order tables are drawn in, a card's balances, remember
+# ---------------------------------------------------------------------------
+
+
+def test_tables_drawn_in_reverse_order_read_the_same_rows(env: Env) -> None:
+    spec = synth.split_statement()
+    account = env.ledger.account(env.household_id, number_last4="7706", currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    received, sent = _split_labels(env.document(document_id), spec)["tables"]
+    # The person draws the lower table (money sent) first and labels no
+    # balance: nothing but the order tells the two tables apart.
+    body = {"tables": [sent, received], "account_id": str(account.id)}
+
+    out = env.teach(document_id, {**body, "preview": True})
+    preview = out.preview
+    assert preview is not None
+    assert preview.reconciliation == "unavailable"
+    # The rows as the page prints them; ``table`` is the request's index.
+    assert [(r.posted_date, Decimal(r.amount), r.payee, r.table) for r in preview.rows] == [
+        (r.day, r.amount, r.narrative, 1 if r in spec.received else 0) for r in spec.rows
+    ]
+    assert [t.rows for t in out.tables] == [len(spec.sent), len(spec.received)]
+
+    applied = env.teach(document_id, body)
+    assert applied.rerun == "import"
+    assert [t.rows for t in applied.tables] == [len(spec.sent), len(spec.received)]
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
+    )
+
+
+def _card_labels(document: Document, spec: synth.CardStatement) -> dict[str, Any]:
+    words = _words(document)
+    header = next(w for w in words if w.text == "Booked")
+    end = next(w for w in words if w.text == "End")
+    return {
+        "labels": [
+            {
+                "field": "opening_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.owed_before)),
+            },
+            {
+                "field": "closing_balance",
+                "page": 1,
+                "bbox": _word(words, synth.money(spec.owed_now)),
+            },
+        ],
+        "tables": [
+            {
+                "kind": "transactions",
+                "page": 1,
+                "bbox": [40.0, header.bbox[1] - 2, 580.0, end.bbox[1] - 3],
+                "columns": _SPLIT_COLUMNS,
+                "direction": "card",
+            }
+        ],
+    }
+
+
+def test_balances_labelled_later_for_a_card_are_amounts_owed(env: Env) -> None:
+    spec = synth.card_statement()
+    account = env.ledger.account(
+        env.household_id, number_last4=spec.last4, currency="USD", type="credit_card"
+    )
+    document_id = env.ingest(synth.card_positive_charges_statement(), name="card-sheet.pdf")
+    labels = _card_labels(env.document(document_id), spec)
+
+    # First the table alone: the charges are spending, nothing to check them against.
+    first = env.teach(document_id, {"tables": labels["tables"], "account_id": str(account.id)})
+    assert first.rerun == "import"
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _rows(env, account, document_id) == sorted(
+        (r.day, r.amount.quantize(Decimal("0.000001")), r.narrative) for r in spec.rows
+    )
+
+    # Then the balances, selected as the sheet prints them (owed: positive).
+    second = env.teach(document_id, {"labels": labels["labels"]})
+    assert second.applied == ["opening_balance", "closing_balance"]
+    assert "does_not_reconcile" not in second.warnings
+    stored = ExtractResult.model_validate(env.document(document_id).extraction).statements[-1]
+    assert stored.opening_balance is not None
+    assert stored.ledger_balance is not None
+    assert stored.opening_balance.amount == -spec.owed_before
+    assert stored.ledger_balance.amount == -spec.owed_now
+    assert stored.reconciliation is not None
+    assert stored.reconciliation.status == "ok"
+
+
+def test_preview_then_remembered_apply_reads_the_same_rows(env: Env) -> None:
+    spec = synth.split_statement()
+    account = env.ledger.account(env.household_id, number_last4=spec.last4, currency="USD")
+    document_id = env.ingest(synth.two_tables_statement(), name="received-and-sent.pdf")
+    body = {
+        **_split_labels(env.document(document_id), spec),
+        "institution_name": synth.INSTITUTION,
+        "remember": True,
+    }
+
+    preview = env.teach(document_id, {**body, "preview": True}).preview
+    assert preview is not None
+    assert preview.reconciliation == "ok"
+    seen = [(r.posted_date, Decimal(r.amount), r.payee) for r in preview.rows]
+    assert len(seen) == preview.row_count == len(spec.rows)
+
+    applied = env.teach(document_id, body)
+    assert applied.rerun == "pipeline"
+    env.run(INGEST_JOB_TYPE)
+    # Read again through the pipeline with the stored template: the same
+    # rows, checked against the same balances, as the preview said.
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    taught = [
+        s for s in stored.statements if s.parser is not None and s.parser.name == "layout_template"
+    ]
+    assert len(taught) == 1
+    assert [(t.posted, t.amount, t.payee) for t in taught[0].transactions] == seen
+    assert taught[0].reconciliation is not None
+    assert taught[0].reconciliation.status == "ok"
+    assert _rows(env, account, document_id) == sorted(
+        (d, a.quantize(Decimal("0.000001")), p or "") for d, a, p in seen
+    )
+    assert env.open_items(document_id) == []
+    template = parse_template(env.query(select(ParserFingerprint))[0].template)
+    assert template is not None
+    assert [(t.direction, t.end) for t in template.tables] == [
+        ("money_in", "Received in all"),
+        ("money_out", "Sent in all"),
+    ]
