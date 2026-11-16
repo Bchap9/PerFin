@@ -405,7 +405,8 @@ def test_a_format_1_archive_still_imports(
     assert {row[6] for row in after["transactions"]} == {"legacy", ""}
     for row in after["transactions"]:
         assert row[6] == ("legacy" if row[4] or row[8] else ""), row
-        assert row[3] == "", row
+        # No archive of that time names a merchant: the descriptor does.
+        assert bool(row[3]) == bool(row[2]), row
     assert after["series"]["Rent"]["status"] == "confirmed"
     assert after["series"]["Rent"]["status_source"] == "person"
     assert after["memory"] == []

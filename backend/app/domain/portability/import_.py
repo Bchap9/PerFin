@@ -45,17 +45,27 @@ keys are checked before it decides):
   transaction with a category or a split (a guess never touches it), and for
   a series ``confirmed`` by a person when it was entered by hand and on,
   ``paused`` by a person when it was off, the detector's ``active``
-  otherwise, with the kind ``income`` for money in. It holds nothing learned;
+  otherwise, with the kind ``income`` for money in. It holds nothing
+  learned: in a household whose memory was already seeded from its own
+  earlier categories, the archive's categorised rows are counted as
+  decisions here, once per row and only for a merchant (and direction) the
+  household has no entry for; a household not seeded yet counts them with
+  its own in its first refresh;
 * from format version 3 on those facts are the archive's: a person's choice
   arrives as a person's choice, a suggestion as a suggestion, a dismissed
   series as dismissed. Merchant keys must have the key's form. What the
   household already learned about a merchant and category wins over the
   archive's count (so importing an archive twice counts nothing twice), and
   the memory stays within its bound (the most recently decided are kept);
+* a transaction the archive gives no merchant key (every row of an older
+  archive) gets the key its descriptor names here, so that a row somebody
+  decided is found by its merchant whatever the refresh then looks at; a key
+  the archive gives is kept;
 * the links of a transaction to the rule that set its category and to its
   recurring series are not in any archive. After every import
-  ``categorise.refresh`` is queued for the household with ``force``: merchant
-  keys, series links and what changed about a series are derived there;
+  ``categorise.refresh`` is queued for the household with ``force``: guesses
+  for undecided rows, series links and what changed about a series are
+  derived there;
 * ``import_hash`` (of transactions and investment transactions) embeds the
   account id (and the security), so it is recomputed for the new
   account (its running index is recovered by trying the indexes until the
@@ -85,14 +95,17 @@ from decimal import Decimal
 from typing import Any, Final, cast
 
 from pydantic import ValidationError
-from sqlalchemy import insert, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.crypto import Keyring
 from app.core.ids import uuid7
 from app.domain.accounts.models import Account, Institution
+from app.domain.categorisation import engine as categorisation
+from app.domain.categorisation import service as categorisation_service
 from app.domain.categorisation.memory import MAX_ROWS as MEMORY_MAX_ROWS
+from app.domain.categorisation.memory import direction_of
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
 from app.domain.documents.models import (
@@ -403,6 +416,14 @@ class _Importer:
         self.existing_tax_years: set[uuid.UUID] = set()
         #: Whether the archive says how categories were decided (module doc).
         self.has_provenance = parsed.manifest.format_version >= PROVENANCE_VERSION
+        #: Whether this import counts an older archive's categories as decisions:
+        #: only where the first refresh, which does that, has already been.
+        self.seeds_memory = (
+            not self.has_provenance
+            and categorisation_service.read_state(session, household_id).memory_seeded
+        )
+        #: (merchant key, direction, category) to [rows, latest change], for that.
+        self.legacy_decisions: dict[tuple[str, str, uuid.UUID], list[Any]] = {}
 
     # ---- helpers ---------------------------------------------------------
     def rows(self, entity: str) -> list[dict[str, Any]]:
@@ -699,6 +720,11 @@ class _Importer:
                 row.update(dict.fromkeys(TRANSACTION_PROVENANCE))
                 if row["category_id"] is not None or old in split:
                     row["category_source"] = "legacy"
+            if row["merchant_key"] is None:
+                # Only a missing key: what the archive says about a row stands.
+                row["merchant_key"] = categorisation.identify(row["raw_payee"]).key
+            if self.seeds_memory:
+                self.count_legacy(row)
             group = row["transfer_group_id"]
             if group is not None:
                 row["transfer_group_id"] = groups.setdefault(group, uuid7())
@@ -711,6 +737,67 @@ class _Importer:
             return row
 
         self.insert("transactions", transform=transform)
+        self.seed_memory()
+
+    def count_legacy(self, row: dict[str, Any]) -> None:
+        """One decision for a ``legacy`` row with a merchant and a category."""
+        key, category = row["merchant_key"], row["category_id"]
+        if row["category_source"] != "legacy" or key is None or category is None:
+            return
+        entry = self.legacy_decisions.setdefault(
+            (key, direction_of(row["amount"]), category), [0, row["updated_at"]]
+        )
+        entry[0] += 1
+        entry[1] = max(entry[1], row["updated_at"])
+
+    def seed_memory(self) -> None:
+        """Count an older archive's categories as decisions (module doc).
+
+        As ``memory.seed_from_legacy`` does for a household's own rows, but
+        over the imported rows only: a merchant and direction the household
+        has an entry for is left to the household, and the memory stays
+        within its bound (the most decided first).
+        """
+        if not self.legacy_decisions:
+            return
+        known = {
+            (key, direction)
+            for key, direction in self.session.execute(
+                select(MerchantMemory.merchant_key, MerchantMemory.direction).where(
+                    MerchantMemory.household_id == self.household_id
+                )
+            )
+        }
+        held = self.session.execute(
+            select(func.count())
+            .select_from(MerchantMemory)
+            .where(MerchantMemory.household_id == self.household_id)
+        ).scalar_one()
+        counted = sorted(
+            (
+                (found, entry)
+                for found, entry in self.legacy_decisions.items()
+                if found[:2] not in known
+            ),
+            key=lambda item: (-item[1][0], item[0][0], item[0][1], str(item[0][2])),
+        )
+        now = clock.utcnow()
+        rows = [
+            {
+                "id": uuid7(),
+                "household_id": self.household_id,
+                "merchant_key": key,
+                "direction": direction,
+                "category_id": category,
+                "decisions": decisions,
+                "last_decided_at": decided_at,
+                "created_at": now,
+                "updated_at": now,
+            }
+            for (key, direction, category), (decisions, decided_at) in counted
+        ][: max(MEMORY_MAX_ROWS - int(held), 0)]
+        self.write(MerchantMemory, rows)
+        self.created["merchant_memory"] += len(rows)
 
     def scheduled_transactions(self) -> None:
         def transform(row: dict[str, Any], _: uuid.UUID) -> dict[str, Any]:
@@ -1208,8 +1295,8 @@ def apply_archive(
         written_keys=written_keys,
     )
     importer.run()
-    # Merchant keys, the links to rules' and series' rows and what changed
-    # about a series are not in an archive: the engine derives them here.
+    # Guesses for undecided rows, the links to rules' and series' rows and
+    # what changed about a series are not in an archive: derived there.
     queue_refresh(session, household_id)
     return {
         "created": dict(sorted(importer.created.items())),

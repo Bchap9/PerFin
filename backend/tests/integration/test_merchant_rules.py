@@ -8,8 +8,10 @@ already decides the row refuses the save, and a revert returns exactly the
 rows the rule categorised to undecided without moving their ``updated_at``.
 
 Merchants and descriptors are invented (``corner grocer``, ``harbour
-bakery``); ``merchant_key`` and the provenance columns are set by hand, as
-the engine's lane writes them.
+bakery``); ``merchant_key`` and the provenance columns of the rows a test
+starts from are set by hand. The row a rule is made from is decided by the
+real engine (``person_decided``), so what it writes and what the household
+learns from it are asserted here too.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from app.auth.models import GrantLevel
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
-from app.domain.categorisation import engine as categorisation
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.rules import service
 from app.domain.rules.schemas import RULES_MAX, RUN_RULES_JOB_TYPE, RunRulesJob
 from app.domain.transactions.models import Rule, Transaction, TransactionSplit
@@ -58,32 +60,6 @@ REFRESH_JOB_TYPE = "categorise.refresh"
 def actors(settings: Settings, factories: Factories) -> Iterator[Actors]:
     with Actors.open(settings, factories) as built:
         yield built
-
-
-@pytest.fixture(autouse=True)
-def decided(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
-    """Stands in for the engine's ``person_decided`` (another lane's), doing the
-    part these tests read: the row is marked as a person's. The ids it was
-    called for are returned."""
-    calls: list[uuid.UUID] = []
-
-    def person_decided(
-        db: Session,
-        row: Transaction,
-        *,
-        before_category_id: uuid.UUID | None,
-        before_source: str | None,
-        at: datetime,
-    ) -> None:
-        del db, before_category_id, before_source, at
-        row.category_source = "person"
-        row.category_confidence = Decimal(1)
-        row.category_rule_id = None
-        row.suggested_category_id = None
-        calls.append(row.id)
-
-    monkeypatch.setattr(categorisation, "person_decided", person_decided)
-    return calls
 
 
 def _hid(client: AuthedClient) -> uuid.UUID:
@@ -131,6 +107,18 @@ def _rules(factories: Factories, household_id: uuid.UUID) -> list[Rule]:
         for row in rows:
             db.expunge(row)
         return rows
+
+
+def _memory(factories: Factories, household_id: uuid.UUID) -> list[tuple[Any, ...]]:
+    """What the household learned: key, direction, category, decisions."""
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        return sorted(
+            (entry.merchant_key, entry.direction, entry.category_id, entry.decisions)
+            for entry in db.execute(
+                select(MerchantMemory).where(MerchantMemory.household_id == household_id)
+            ).scalars()
+        )
 
 
 def _jobs(factories: Factories, household_id: uuid.UUID, job_type: str) -> list[Job]:
@@ -322,7 +310,7 @@ def test_preview_says_why_a_transfer_or_a_p2p_row_cannot_teach(
 
 
 def test_create_appends_a_merchant_rule_a_member_may_make(
-    actors: Actors, factories: Factories, ledger: LedgerFactories, decided: list[uuid.UUID]
+    actors: Actors, factories: Factories, ledger: LedgerFactories
 ) -> None:
     owner = actors.new(role="owner")
     hh = _hid(owner)
@@ -349,7 +337,8 @@ def test_create_appends_a_merchant_rule_a_member_may_make(
     after = _row(factories, hh, row.id)
     assert _provenance(after) == (target.id, "person", None, Decimal("1.0000"))
     assert after.updated_at > row.updated_at
-    assert decided == [row.id]
+    # ... and it taught the household, once.
+    assert _memory(factories, hh) == [(KEY, "out", target.id, 1)]
 
     [created] = household_audit(factories, hh, "rule.create")
     assert created.target_id == rule["id"]
@@ -360,6 +349,52 @@ def test_create_appends_a_merchant_rule_a_member_may_make(
     assert "name" not in created.after
     assert "grocer" not in str(created.after).lower()
     assert household_events(factories, hh, "rule.created")[-1].payload == {"id": rule["id"]}
+
+
+def test_the_row_a_rule_is_made_from_is_decided_once_whatever_it_carried(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    target = ledger.category(hh, name="Groceries")
+    other = ledger.category(hh, name="Eating out")
+    suggested = _grocer(
+        ledger,
+        account,
+        suggested_category_id=other.id,
+        category_source="dictionary",
+        category_confidence=Decimal("0.60"),
+    )
+    # Already in the category, but as a guess: the same category, now a person's.
+    agreed = _grocer(
+        ledger,
+        account,
+        category=target,
+        category_source="dictionary",
+        category_confidence=Decimal("0.90"),
+    )
+
+    _ok(owner.post(MERCHANT, json=_body(suggested, target)), 201)
+    after = _row(factories, hh, suggested.id)
+    assert _provenance(after) == (target.id, "person", None, Decimal("1.0000"))
+    # No suggestion is left beside the category.
+    assert after.suggested_category_id is None
+    assert _memory(factories, hh) == [(KEY, "out", target.id, 1)]
+
+    _ok(owner.post(MERCHANT, json=_body(agreed, target)), 201)
+    after = _row(factories, hh, agreed.id)
+    assert _provenance(after) == (target.id, "person", None, Decimal("1.0000"))
+    assert after.updated_at > agreed.updated_at
+    assert _memory(factories, hh) == [(KEY, "out", target.id, 2)]
+
+    # Negative: saying it again about a row that is already the person's counts nothing.
+    _ok(owner.post(MERCHANT, json=_body(agreed, target)), 201)
+    assert _memory(factories, hh) == [(KEY, "out", target.id, 2)]
+    # Changing the rule from that row moves its decision instead of adding one.
+    changed = _ok(owner.post(MERCHANT, json=_body(agreed, other)), 201)
+    assert changed["replaced"] is True
+    assert _memory(factories, hh) == sorted([(KEY, "out", target.id, 1), (KEY, "out", other.id, 1)])
 
 
 def test_create_without_apply_changes_no_other_row(
@@ -777,7 +812,7 @@ def test_viewer_is_refused_and_a_foreign_rule_is_404(
 
 
 def test_a_member_who_may_only_read_the_row_makes_the_rule_and_leaves_the_row(
-    actors: Actors, factories: Factories, ledger: LedgerFactories, decided: list[uuid.UUID]
+    actors: Actors, factories: Factories, ledger: LedgerFactories
 ) -> None:
     owner = actors.new(role="owner")
     hh = _hid(owner)
@@ -792,7 +827,7 @@ def test_a_member_who_may_only_read_the_row_makes_the_rule_and_leaves_the_row(
     # Nothing they may edit has this merchant: no job, and the row is not theirs to change.
     assert made["job_id"] is None
     assert _state(factories, hh, row.id) == before
-    assert decided == []
+    assert _memory(factories, hh) == []
     assert len(_rules(factories, hh)) == 1
 
 

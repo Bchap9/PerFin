@@ -32,6 +32,7 @@ from app.db.models import Job
 from app.db.rls import set_context
 from app.domain.accounts.balances import balances_as_of
 from app.domain.accounts.models import Account
+from app.domain.categorisation import service as categorisation_service
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import Blob, Document, DocumentLink
@@ -68,6 +69,7 @@ from tests.fixtures.households import (
 from tests.fixtures.ledger import (
     LedgerFactories,
     household_context,
+    make_category,
     make_scheduled_transaction,
     make_transaction,
 )
@@ -801,10 +803,15 @@ def decisions_of(factories: Factories, household_id: uuid.UUID) -> dict[str, Any
 
 
 def refresh_jobs(factories: Factories, household_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The queued refreshes, by what they ask for (``force``).
+
+    Who asked is left out: the payload has that field only where the
+    worker's handler is loaded, which depends on the tests run before.
+    """
     with factories.transaction() as db:
         set_context(db, household_id)
         return [
-            dict(payload)
+            {"force": payload["force"]}
             for payload in db.execute(
                 select(Job.payload).where(Job.type == REFRESH_JOB, Job.household_id == household_id)
             ).scalars()
@@ -835,7 +842,13 @@ def test_format_3_round_trips_provenance_memory_and_series_states(
     assert told["CORNER GROCER 0417"] == ("corner grocer", "Groceries", "", "person", "1.0000")
     assert told["SQ *LANTERN BOOKS"] == ("lantern books", "", "Restaurants", "keyword", "0.6000")
     assert told["STREAMWELL 8004"] == ("streamwell", "Restaurants", "", "rule", "1.0000")
-    assert after["transactions"] == before["transactions"]
+    # Equal, but for the merchant key the import worked out where the archive had none.
+    assert [row[:3] + row[4:] for row in after["transactions"]] == [
+        row[:3] + row[4:] for row in before["transactions"]
+    ]
+    for arrived, sent in zip(after["transactions"], before["transactions"], strict=True):
+        assert arrived[3] == (sent[3] or arrived[3]), sent
+    assert not [row for row in after["transactions"] if row[2] and not row[3]]
     # A series a person dismissed arrives dismissed, with its price history.
     assert after["series"]["Streamwell"] == {
         "kind": "subscription",
@@ -920,8 +933,13 @@ def test_a_format_2_archive_imports_with_legacy_sources(
         _, _, _, merchant_key, category, suggested, source, confidence, split = row
         # As migration 0014 did for rows that were there before it.
         assert source == ("legacy" if category or split else ""), row
-        assert (merchant_key, suggested, confidence) == ("", "", "None"), row
+        assert (suggested, confidence) == ("", "None"), row
+        # The archive names no merchant: the key is worked out from the descriptor.
+        assert bool(merchant_key) == bool(row[2]), row
         sources[source] += 1
+    keys = {row[2]: row[3] for row in after["transactions"]}
+    assert keys["CORNER GROCER 0417"] == "corner grocer"
+    assert keys["STREAMWELL 8004"] == "streamwell"
     assert sources["legacy"] >= 10
     assert sources[""] >= 3
     assert any(row[8] and not row[4] for row in after["transactions"])  # a split row
@@ -942,6 +960,134 @@ def test_a_format_2_archive_imports_with_legacy_sources(
         assert facts["last_amount"] is None
     assert after["memory"] == []
     assert refresh_jobs(factories, household(owner_b)) == [{"force": True}]
+
+
+def run_refresh(factories: Factories, household_id: uuid.UUID, *, force: bool) -> bool:
+    """``categorise.refresh`` as the worker runs it; whether it did anything."""
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        return categorisation_service.refresh(db, household_id, force=force).ran
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("up_to_date", [True, False])
+def test_decided_rows_have_their_merchant_key_after_the_queued_refresh(
+    actors: Actors,
+    factories: Factories,
+    jobs: Jobs,
+    rich: tuple[AuthedClient, RichLedger],
+    version: int,
+    up_to_date: bool,
+) -> None:
+    """Whatever the household's categorisation state was before the import.
+
+    ``up_to_date``: the hourly dispatcher has been to the (empty) household,
+    so the queued refresh computes no key again and seeds no memory.
+    """
+    owner_a, book = rich
+    plant_decisions(factories, book)
+    _, data = export_archive(owner_a, jobs)
+    if version == 2:
+        data = as_format(data, 2)
+    owner_b = actors.new(role="owner")
+    hb = household(owner_b)
+    if up_to_date:
+        assert run_refresh(factories, hb, force=False)
+        assert not run_refresh(factories, hb, force=False)
+
+    assert import_archive(owner_b, jobs, data)["state"] == "imported"
+    assert refresh_jobs(factories, hb) == [{"force": True}]
+    assert run_refresh(factories, hb, force=True)
+
+    after = decisions_of(factories, hb)
+    keys = {row[2]: row[3] for row in after["transactions"]}
+    assert keys["CORNER GROCER 0417"] == "corner grocer"
+    assert keys["STREAMWELL 8004"] == "streamwell"
+    # Every row somebody decided can be found by its merchant (a merchant
+    # rule matches it, the preview counts it).
+    assert not [
+        row
+        for row in after["transactions"]
+        if row[2] and not row[3] and row[6] in ("legacy", "person", "file", "rule", "payee")
+    ]
+    if version == 3:
+        # What was learned is the archive's, and nothing is counted on top of it.
+        assert after["memory"] == [
+            ("corner grocer", "out", "Groceries", 3, datetime(2026, 4, 6, 12, 30, tzinfo=UTC))
+        ]
+        return
+    # An older archive holds nothing learned: its categories count as
+    # decisions, each row once, as the first refresh after the upgrade did.
+    counted = [row for row in after["transactions"] if row[6] == "legacy" and row[3] and row[4]]
+    assert len(counted) >= 5
+    assert sum(entry[3] for entry in after["memory"]) == len(counted)
+    assert ("corner grocer", "out", "Groceries", 1) in [entry[:4] for entry in after["memory"]]
+    assert ("streamwell", "out", "Restaurants", 1) in [entry[:4] for entry in after["memory"]]
+
+    # Negative: a second refresh, forced or not, counts nothing twice.
+    run_refresh(factories, hb, force=True)
+    assert decisions_of(factories, hb)["memory"] == after["memory"]
+
+
+def test_an_older_archive_does_not_teach_over_what_the_household_learned(
+    actors: Actors,
+    factories: Factories,
+    jobs: Jobs,
+    rich: tuple[AuthedClient, RichLedger],
+) -> None:
+    owner_a, book = rich
+    plant_decisions(factories, book)
+    _, data = export_archive(owner_a, jobs)
+    owner_b = actors.new(role="owner")
+    hb = household(owner_b)
+    assert run_refresh(factories, hb, force=False)
+    decided_at = datetime(2026, 5, 2, 9, 0, tzinfo=UTC)
+    with factories.transaction() as db, household_context(db, hb):
+        elsewhere = make_category(db, hb, name="Household supplies")
+        db.add(
+            MerchantMemory(
+                household_id=hb,
+                merchant_key="corner grocer",
+                direction="out",
+                category_id=elsewhere.id,
+                decisions=2,
+                last_decided_at=decided_at,
+            )
+        )
+        db.flush()
+
+    assert import_archive(owner_b, jobs, as_format(data, 2))["state"] == "imported"
+    memory = decisions_of(factories, hb)["memory"]
+    # The household's own answer for the merchant stands alone; others are seeded.
+    assert [entry for entry in memory if entry[0] == "corner grocer"] == [
+        ("corner grocer", "out", "Household supplies", 2, decided_at)
+    ]
+    assert ("streamwell", "out", "Restaurants", 1) in [entry[:4] for entry in memory]
+
+
+def test_a_merchant_key_the_archive_gives_is_kept(
+    actors: Actors,
+    factories: Factories,
+    jobs: Jobs,
+    rich: tuple[AuthedClient, RichLedger],
+) -> None:
+    owner_a, book = rich
+    plant_decisions(factories, book)
+    _, data = export_archive(owner_a, jobs)
+
+    def change(members: dict[str, bytes]) -> None:
+        rows = rows_of(members, "transactions")
+        for row in rows:
+            if row["raw_payee"] == "STREAMWELL 8004":
+                row["merchant_key"] = "streamwell plus"
+        set_rows(members, "transactions", rows)
+
+    owner_b = actors.new(role="owner")
+    assert import_archive(owner_b, jobs, rezip(data, change))["state"] == "imported"
+    keys = {row[2]: row[3] for row in decisions_of(factories, household(owner_b))["transactions"]}
+    # Only a missing key is worked out; one the archive names is the archive's.
+    assert keys["STREAMWELL 8004"] == "streamwell plus"
+    assert keys["CORNER GROCER 0417"] == "corner grocer"
 
 
 def test_a_format_2_archive_without_account_subtype(

@@ -422,6 +422,68 @@ def test_dry_run_reports_matches_and_writes_nothing(
     assert _row(factories, hh, Rule, uuid.UUID(saved["id"])).hit_count == 0
 
 
+def test_dry_run_leaves_a_category_a_person_chose_as_the_job_will(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    coffee = ledger.category(hh, name="Coffee")
+    chosen = ledger.category(hh, name="Work lunches")
+    tag = ledger.tag(hh)
+    by_hand = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 12", category=chosen, category_source="person"
+    )
+    cleared = ledger.transaction(account, raw_payee="CORNER COFFEE 13", category_source="person")
+    legacy = ledger.transaction(
+        account, raw_payee="CORNER COFFEE 14", category=chosen, category_source="legacy"
+    )
+    saved = _created(owner.post(RULES, json=_coffee_rule(coffee.id)))
+    wanted = {"before": str(chosen.id), "after": str(coffee.id)}
+
+    def dry(**body: Any) -> dict[str, Any]:
+        response = owner.post(f"{RULES}/test", json=body)
+        assert response.status_code == 200, response.text
+        return {item["transaction"]["id"]: item for item in response.json()["items"]}
+
+    draft = {key: value for key, value in _coffee_rule(coffee.id).items() if key != "name"}
+    for body in ({}, {"rule_id": saved["id"]}, {"rule": draft}):
+        items = dry(**body)
+        assert set(items) == {str(by_hand.id), str(cleared.id), str(legacy.id)}
+        # The person's rows match, and the answer says the category stays.
+        for row in (by_hand, cleared):
+            item = items[str(row.id)]
+            assert item["changes"]["category_id"] is None
+            [skipped] = item["skipped"]
+            assert (skipped["action"], skipped["reason"]) == (
+                "set_category",
+                "categorization was set by hand",
+            )
+        # Negative: an earlier release's category is still the rule's to change.
+        assert items[str(legacy.id)]["changes"]["category_id"] == wanted
+        assert items[str(legacy.id)]["skipped"] == []
+    assert set(dry(only_changes=True)) == {str(legacy.id)}
+
+    # Only the category is protected: the rule's tag would still be added.
+    tagging = {
+        **draft,
+        "actions": [
+            {"type": "set_category", "category_id": str(coffee.id)},
+            {"type": "add_tags", "tag_ids": [str(tag.id)]},
+        ],
+    }
+    tagged = dry(rule=tagging, only_changes=True)
+    assert set(tagged) == {str(by_hand.id), str(cleared.id), str(legacy.id)}
+    assert tagged[str(by_hand.id)]["changes"]["added_tag_ids"] == [str(tag.id)]
+    assert tagged[str(by_hand.id)]["changes"]["category_id"] is None
+
+    # The dry run and the job agree.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        summary = service.run_rules(db, hh, RunRulesJob())
+    assert summary.changed_ids == [legacy.id]
+
+
 def test_dry_run_transaction_is_read_only(
     db: Session, factories: Factories, ledger: LedgerFactories
 ) -> None:

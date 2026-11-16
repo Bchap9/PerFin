@@ -848,7 +848,9 @@ def test_rules(db: Session, principal: Principal, data: RuleTest) -> RuleTestRes
 
     Scans at most :data:`TEST_SCAN_MAX` transactions per call and returns up
     to ``data.limit`` matches; ``next_cursor`` continues after the last
-    transaction examined (``None`` once history is exhausted).
+    transaction examined (``None`` once history is exhausted). It answers
+    what ``POST /rules/apply`` would do: the category a person chose is not
+    the rules' to change, so that action is listed under ``skipped``.
     """
     household_id = _household(principal, HouseholdRole.VIEWER)
     make_read_only(db)
@@ -864,6 +866,8 @@ def test_rules(db: Session, principal: Principal, data: RuleTest) -> RuleTestRes
     )
     after = decode_cursor(data.cursor) if data.cursor else None
     targets = rules_repo.payee_names(db, household_id, _payee_targets(rules))
+    ordered = engine.order_rules(rules)
+    by_hand = frozenset({RuleField.CATEGORIZATION})
     kept: list[tuple[Transaction, Outcome]] = []
     scanned = 0
     exhausted = False
@@ -872,7 +876,18 @@ def test_rules(db: Session, principal: Principal, data: RuleTest) -> RuleTestRes
         batch = rules_repo.transactions_after(db, clauses, after=after, limit=want)
         short = len(batch) < want  # nothing after this batch
         facts = transaction_facts(db, household_id, batch)
-        outcomes = engine.evaluate_many(rules, facts, payee_names=targets)
+        # As the job does (``_apply_batch`` with ``respect_people``): the
+        # category of a row a person decided is reported as skipped.
+        outcomes = [
+            engine.evaluate(
+                ordered,
+                fact,
+                payee_names=targets,
+                protect=by_hand if row.category_source == PERSON_SOURCE else (),
+                ordered=True,
+            )
+            for row, fact in zip(batch, facts, strict=True)
+        ]
         page_full = False
         for index, (row, outcome) in enumerate(zip(batch, outcomes, strict=True)):
             scanned += 1
