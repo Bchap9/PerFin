@@ -48,6 +48,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports import proposals
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import (
@@ -408,6 +409,45 @@ def test_statement_without_digits_lands_on_the_sole_account_of_its_institution(e
     assert _ledger(env, account) == _six(trust.expected())
     assert env.open_reviews(document_id) == []
     assert document.status is DocumentStatus.PROCESSED
+    # The Accounts dialog names the account the importer chose, not none.
+    assert _dialog(env, document_id) == [("matched", account.id, [])]
+
+
+def _dialog(env: Env, document_id: uuid.UUID) -> list[tuple[str, uuid.UUID | None, list[Any]]]:
+    """What the Accounts dialog says of each account the document names."""
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        found = proposals.detect_accounts(db, env.principal(), document_id).accounts
+    return [(one.status, one.account_id, list(one.candidates)) for one in found]
+
+
+def test_the_accounts_dialog_does_not_put_a_card_statement_on_the_checking_account(
+    env: Env,
+) -> None:
+    """The dialog follows the importer's side rule: digits missing, a card named, no match."""
+    institution = env.ledger.institution(env.household_id, name=trust.INSTITUTION)
+    checking = env.ledger.account(
+        env.household_id,
+        number_last4="6058",
+        type="checking",
+        currency=trust.CURRENCY,
+        institution_id=institution.id,
+    )
+    document_id = env.ingest(trust.no_balances_without_digits())
+    assert _dialog(env, document_id) == [("matched", checking.id, [])]
+    # The same stored statement, had it named a card: no account of the bank fits.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        extraction = copy.deepcopy(document.extraction)
+        assert extraction is not None
+        extraction["statements"][0]["account"]["account_type"] = "creditcard"
+        document.extraction = extraction
+
+    assert [(status, account) for status, account, _ in _dialog(env, document_id)] == [
+        ("done", None)
+    ]
 
 
 @pytest.mark.parametrize("accounts", [("credit_card",), ("checking", "savings")])
