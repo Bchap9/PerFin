@@ -33,16 +33,14 @@ export function InvestmentsPage() {
   // An account that is not an investment account (or no longer visible) filters nothing.
   const account = accounts.data === undefined || choices.some((entry) => entry.id === chosen) ? chosen : "";
   return (
-    <PlanningPage
-      title="Investments"
-      actions={
-        <Field label="Account">
-          <Select value={account} placeholder="All investment accounts" onChange={(event) => { setAccount(event.target.value); }} options={options} />
-        </Field>
-      }
-    >
+    <PlanningPage title="Investments" titleHidden>
       <Tabs
         label="Investments"
+        aside={
+          <Field label="Account">
+            <Select value={account} placeholder="All investment accounts" onChange={(event) => { setAccount(event.target.value); }} options={options} />
+          </Field>
+        }
         selectedId={tab}
         onSelect={(id) => {
           if (isInvestmentTab(id)) {

@@ -202,7 +202,7 @@ describe("one subscription up close", () => {
     const detail = await screen.findByRole("dialog", { name: "Harbor Water" });
     await user.click(within(detail).getByRole("button", { name: "Close" }));
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions?kind=bills"); });
-    expect(screen.getByRole("tab", { name: "Bills", selected: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bills", pressed: true })).toBeInTheDocument();
   });
 
   it("edits the name, the amount range and the cadence through the schedule form", async () => {

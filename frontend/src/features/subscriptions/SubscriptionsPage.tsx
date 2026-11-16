@@ -21,9 +21,9 @@ import { useId, useMemo, useState } from "react";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
+import { Chip } from "../../components/Chip";
 import { MoneyText } from "../../components/MoneyText";
 import { Stat, StatGroup } from "../../components/Stat";
-import { Tabs } from "../../components/Tabs";
 import { addDays, compareIsoDates, formatDate, todayIsoDate } from "../../lib/dates";
 import { compareAmounts, isDecimalString } from "../../lib/money";
 import { TABLE_CARDS_MAX, useMediaQuery } from "../../lib/useMediaQuery";
@@ -546,22 +546,22 @@ export function SubscriptionsList() {
   };
 
   return (
-    <PlanningPage title="Subscriptions">
+    <PlanningPage title="Subscriptions" titleHidden>
       <QueryState loading={list.isPending} error={list.error} label="subscriptions">
         {data === undefined ? null : (
           <>
+            <div role="group" aria-label="Subscriptions or bills" className="subs-toggle">
+              <Chip pressed={tab === "subscription"} onClick={() => { setKindParam("subscriptions"); }}>
+                Subscriptions
+              </Chip>
+              <Chip pressed={tab === "bill"} onClick={() => { setKindParam("bills"); }}>
+                Bills
+              </Chip>
+            </div>
             <CostHeader kind={tab} totals={tab === "bill" ? data.bills : data.subscriptions} asOf={data.as_of} nameOf={nameOf} />
             <ErrorLine message={decision.error ?? seen.error ?? kindChange.error} />
             <ErrorLine message={openEvents.isError ? "Could not load what changed." : null} />
-            <Tabs
-              label="Subscriptions and bills"
-              selectedId={tab}
-              onSelect={(id) => { setKindParam(id === "bill" ? "bills" : "subscriptions"); }}
-              tabs={[
-                { id: "subscription", label: "Subscriptions", content: panel("subscription") },
-                { id: "bill", label: "Bills", content: panel("bill") },
-              ]}
-            />
+            {panel(tab)}
           </>
         )}
       </QueryState>

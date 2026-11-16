@@ -761,6 +761,25 @@ a.btn--danger:hover {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Tabs with controls on their row (`aside`): the controls wrap under the tabs when narrow. */
+.tabs__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tabs__bar > .tabs__list {
+  flex: 1 1 auto;
+  border-bottom: 0;
+}
+
+.tabs__aside {
+  margin-left: auto;
+  padding-bottom: var(--space-1);
+}
+
 .tabs__tab {
   min-height: 2.25rem;
   margin-bottom: -1px;

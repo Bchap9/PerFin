@@ -19,8 +19,11 @@ export function PlanningPage({
   children,
   description,
   breadcrumbs,
+  titleHidden,
 }: {
   title: string;
+  /** See `PageHeader`: the title for screen readers only. */
+  titleHidden?: boolean;
   actions?: ReactNode;
   children: ReactNode;
   description?: string;
@@ -33,6 +36,7 @@ export function PlanningPage({
         {...(description === undefined ? {} : { description })}
         {...(breadcrumbs === undefined ? {} : { breadcrumbs })}
         {...(actions === undefined ? {} : { actions })}
+        {...(titleHidden === undefined ? {} : { titleHidden })}
       />
       {children}
     </section>

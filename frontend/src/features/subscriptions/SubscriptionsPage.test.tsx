@@ -158,7 +158,7 @@ describe("subscriptions view", () => {
 
   it("bills have their own figures", async () => {
     const { user } = setup([STREAMLY, CLOUD, GYM, WATER]);
-    await user.click(await screen.findByRole("tab", { name: "Bills" }));
+    await user.click(await screen.findByRole("button", { name: "Bills" }));
     const cost = await screen.findByRole("group", { name: "Cost of bills" });
     expect(within(cost).getByText("$61.20")).toBeInTheDocument();
     expect(within(cost).getByText("$734.40")).toBeInTheDocument();
@@ -411,20 +411,32 @@ describe("subscriptions view", () => {
     expect(within(cost).getAllByRole("definition").map((value) => value.textContent)).toEqual(["$58.98", "$707.76"]);
   });
 
-  it("the tab between subscriptions and bills is in the address", async () => {
+  it("the toggle between subscriptions and bills is in the address", async () => {
     const { router, user } = setup([STREAMLY, WATER]);
-    expect(await screen.findByRole("tab", { name: "Subscriptions", selected: true })).toBeInTheDocument();
+    // A compact two-way toggle, not a second strip of tabs under Plan's.
+    const toggle = await screen.findByRole("group", { name: "Subscriptions or bills" });
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(within(toggle).getByRole("button", { name: "Subscriptions" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(toggle).getByRole("button", { name: "Bills" })).toHaveAttribute("aria-pressed", "false");
     expect(currentHref(router)).toBe("/plan/subscriptions");
-    await user.click(screen.getByRole("tab", { name: "Bills" }));
+    await user.click(within(toggle).getByRole("button", { name: "Bills" }));
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions?kind=bills"); });
     expect(await screen.findByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Subscriptions" }));
+    expect(within(toggle).getByRole("button", { name: "Bills" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(toggle).getByRole("button", { name: "Subscriptions" }));
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions"); });
+  });
+
+  it("does not repeat the section tab's name as a visible heading", async () => {
+    setup([STREAMLY]);
+    await screen.findByRole("table", { name: "Active" });
+    // The page keeps its h2 for screen readers; the Plan tab already shows it.
+    expect(screen.getByRole("heading", { level: 2, name: "Subscriptions" })).toHaveClass("visually-hidden");
   });
 
   it("opens on the bills when the address asks for them", async () => {
     setup([STREAMLY, WATER], { path: "/plan/subscriptions?kind=bills" });
-    expect(await screen.findByRole("tab", { name: "Bills", selected: true })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Bills", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: "Active" })).getByRole("row", { name: /Harbor Water/ })).toBeInTheDocument();
   });

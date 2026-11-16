@@ -3,6 +3,13 @@
    with the name, the amount and the next date first, and a series opens as a
    page instead of a dialog (`TABLE_CARDS_MAX` in lib/useMediaQuery.ts). */
 
+/* Subscriptions or bills: two pressed chips, not a second strip of tabs. */
+.subs-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .subs-cost {
   display: flex;
   flex-direction: column;

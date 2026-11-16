@@ -23,9 +23,11 @@ export interface TabsProps {
   defaultSelectedId?: string;
   onSelect?: (id: string) => void;
   className?: string;
+  /** Controls on the row of tabs, after them (a filter that applies to every tab). */
+  aside?: ReactNode;
 }
 
-export function Tabs({ label, tabs, selectedId, defaultSelectedId, onSelect, className }: TabsProps) {
+export function Tabs({ label, tabs, selectedId, defaultSelectedId, onSelect, className, aside }: TabsProps) {
   const baseId = useId();
   const firstEnabled = tabs.find((tab) => tab.disabled !== true)?.id;
   const [internal, setInternal] = useState(defaultSelectedId ?? firstEnabled);
@@ -69,38 +71,49 @@ export function Tabs({ label, tabs, selectedId, defaultSelectedId, onSelect, cla
   const tabId = (id: string): string => `${baseId}-tab-${id}`;
   const panelId = (id: string): string => `${baseId}-panel-${id}`;
 
+  const list = (
+    <div role="tablist" aria-label={label} className="tabs__list" onKeyDown={onKeyDown}>
+      {tabs.map((tab) => {
+        const selected = tab.id === current;
+        return (
+          <button
+            key={tab.id}
+            ref={(node) => {
+              if (node === null) {
+                tabRefs.current.delete(tab.id);
+              } else {
+                tabRefs.current.set(tab.id, node);
+              }
+            }}
+            type="button"
+            role="tab"
+            id={tabId(tab.id)}
+            aria-selected={selected}
+            aria-controls={panelId(tab.id)}
+            tabIndex={selected ? 0 : -1}
+            disabled={tab.disabled}
+            className={cx("tabs__tab", selected && "tabs__tab--selected")}
+            onClick={() => {
+              select(tab.id);
+            }}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className={cx("tabs", className)}>
-      <div role="tablist" aria-label={label} className="tabs__list" onKeyDown={onKeyDown}>
-        {tabs.map((tab) => {
-          const selected = tab.id === current;
-          return (
-            <button
-              key={tab.id}
-              ref={(node) => {
-                if (node === null) {
-                  tabRefs.current.delete(tab.id);
-                } else {
-                  tabRefs.current.set(tab.id, node);
-                }
-              }}
-              type="button"
-              role="tab"
-              id={tabId(tab.id)}
-              aria-selected={selected}
-              aria-controls={panelId(tab.id)}
-              tabIndex={selected ? 0 : -1}
-              disabled={tab.disabled}
-              className={cx("tabs__tab", selected && "tabs__tab--selected")}
-              onClick={() => {
-                select(tab.id);
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      {aside === undefined ? (
+        list
+      ) : (
+        <div className="tabs__bar">
+          {list}
+          <div className="tabs__aside">{aside}</div>
+        </div>
+      )}
       {tabs.map((tab) => (
         <div
           key={tab.id}

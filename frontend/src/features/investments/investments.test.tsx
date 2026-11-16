@@ -245,6 +245,15 @@ describe("investments in the address", () => {
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/accounts/investments?tab=prices"); });
   });
 
+  it("puts the account choice on the row of views, without repeating the section's name", async () => {
+    mockApi(handlers());
+    renderApp("/accounts/investments");
+    const views = await screen.findByRole("tablist", { name: "Investments" });
+    expect(within(views.parentElement ?? document.body).getByLabelText("Account")).toBeInTheDocument();
+    // The Accounts tab already says Investments; the h2 stays for screen readers.
+    expect(screen.getByRole("heading", { level: 2, name: "Investments" })).toHaveClass("visually-hidden");
+  });
+
   it("has no axe violations", async () => {
     mockApi(handlers());
     const { container } = renderApp("/accounts/investments");

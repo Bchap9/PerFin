@@ -25,11 +25,24 @@ export interface PageHeaderProps {
   description?: string;
   actions?: ReactNode;
   breadcrumbs?: readonly Crumb[];
+  /**
+   * Keep the title for screen readers only: a page under a section tab of
+   * the same name does not show it twice. Description, actions and
+   * breadcrumbs are then left to the page.
+   */
+  titleHidden?: boolean;
 }
 
-export function PageHeader({ title, description, actions, breadcrumbs }: PageHeaderProps) {
+export function PageHeader({ title, description, actions, breadcrumbs, titleHidden = false }: PageHeaderProps) {
   const inSection = useContext(SectionHeadingContext);
   const Heading = inSection ? "h2" : "h1";
+  if (titleHidden) {
+    return (
+      <Heading id={inSection ? undefined : PAGE_TITLE_ID} className="visually-hidden">
+        {title}
+      </Heading>
+    );
+  }
   return (
     <div className="page-header page-header--stacked">
       {breadcrumbs === undefined || breadcrumbs.length === 0 ? null : <Breadcrumbs items={breadcrumbs} />}

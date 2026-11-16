@@ -200,7 +200,8 @@ is in the page's header.
 - **Subscriptions** (`/plan/subscriptions`): what you pay regularly, what
   it costs per month and per year, what needs a look and what ended. A
   series opens at `/plan/subscriptions/<id>`. The series under "Needs a
-  look" also appear as Inbox cards.
+  look" also appear as Inbox cards. A Subscriptions or Bills toggle at the
+  top switches between the two (`?kind=bills`).
 - **Budgets** (`/plan/budgets`; one budget at `/plan/budgets/<id>`).
 - **Goals** (`/plan/goals`).
 - **Upcoming** (`/plan/upcoming`): the cash-flow calendar and the recurring
