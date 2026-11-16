@@ -6,14 +6,15 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.9`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.10`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0013`. On 2026-11-16: SPDX;
-backend ruff, ruff format, mypy --strict (765 source files), bandit, OpenAPI
-drift and 10702 pytest tests with `-n 4` before the last four fixes of the
-release, then the unit and integration suites (7592 tests) after them (the
-Helm chart tests aside, which need `helm`; all of it runs in CI); frontend
-eslint, tsc, 852 vitest tests in 77 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0014`. On 2026-11-16: SPDX;
+backend ruff, ruff format, mypy --strict (801 source files), bandit, OpenAPI
+drift and 11898 pytest tests with `-n 4` (two failed only under load from
+other jobs in the same container and passed alone; the last fix of the
+release ran its targeted files, 475 tests); the whole suite then passed in
+CI on the merged branch; frontend eslint, tsc, 941 vitest tests in 81 files
+and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -37,7 +38,11 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Categorisation and subscriptions, the second of four stages on the way to
+Nothing yet.
+
+## [1.0.0-rc.10] - 2026-11-16
+
+Tenth release candidate of 1.0.0: categorisation and subscriptions, the second of four stages on the way to
 1.0.0. A first import is mostly categorised from a merchant list that
 ships with PerFin and runs on the host; every category says how it was
 decided, an unsure guess is only a suggestion, and what a person chose is
@@ -46,6 +51,11 @@ bills have their own view, with decisions that stick and alerts when
 something changes. No hosted model, no lookup, nothing leaves the host.
 Migration `0014`; archives are format 3 (docs/CATEGORISATION.md,
 docs/UPGRADING.md "1.0.0-rc.10").
+
+Open for the owner before 1.0.0: series kind with nothing filed is 82.5%
+against a 90% target; a correction filed under a shop's first word alone
+is stated as a fact for a longer line that starts with that word; a
+merchant rule follows when two old merchant keys merge into one.
 
 ### Added
 
