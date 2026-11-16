@@ -6,9 +6,13 @@
  * string. Each chart is one labelled image; the table next to it holds the
  * same figures for people who cannot see or hover the chart.
  *
- * Colours come from reports.css (`--report-*`, light and dark): series
- * colours are told apart by more than hue (bars against a line, a legend
- * with the names), and text never takes a series colour.
+ * Colours come from classes, never from colours in code (CSP style-src
+ * 'self'): the series through `chart-series-N` (app/styles/charts.css, one
+ * palette for both themes), grid and axes through `chart-grid` and
+ * `chart-axis`, and the muted months and the net line through reports.css.
+ * Every mark gets `currentColor` or `inherit` as its attribute so the class
+ * decides. Series are told apart by more than hue (bars against a line, a
+ * legend with the names), and text never takes a series colour.
  */
 import "./reports.css";
 
@@ -31,11 +35,11 @@ import {
 import { formatMoney } from "../../lib/money";
 import { monthTick, valueAxis, type BarDatum, type CashflowDatum, type MonthDatum, type ValueAxis } from "./chartData";
 
-const SERIES_1 = "var(--report-series-1)";
-const SERIES_2 = "var(--report-series-2)";
-const MUTED = "var(--report-muted)";
-const INK = "var(--color-text)";
-const SURFACE = "var(--color-surface)";
+/** Marks take their colour from their class; the attribute only defers to it. */
+const FROM_CLASS = "currentColor";
+const AXIS = { className: "chart-axis", stroke: FROM_CLASS, tick: { fill: FROM_CLASS } } as const;
+const GRID = { className: "chart-grid", stroke: FROM_CLASS } as const;
+const ZERO_LINE = { className: "report-zero-line", stroke: FROM_CLASS } as const;
 
 const COLUMN_SIZE = { width: 640, height: 288 };
 const ROW_HEIGHT = 32;
@@ -110,21 +114,22 @@ export function RankedBarChart({ bars, currency, label, valueLabel }: { bars: re
         <BarChart data={[...bars]} layout="vertical" margin={{ top: 4, right: 24, bottom: 4, left: 4 }}>
           {/* A line at every round value, also where a narrow screen has no room for the label. */}
           <CartesianGrid
+            {...GRID}
             horizontal={false}
             verticalCoordinatesGenerator={({ offset }) => {
               const [low, high] = axisDomain(axis);
               return axis.ticks.map((tick) => offset.left + ((tick - low) / (high - low)) * offset.width);
             }}
           />
-          <XAxis type="number" domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} interval="equidistantPreserveStart" />
-          <YAxis type="category" dataKey="label" width="auto" tickFormatter={clip} tickLine={false} interval={0} />
+          <XAxis {...AXIS} type="number" domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} interval="equidistantPreserveStart" />
+          <YAxis {...AXIS} type="category" dataKey="label" width="auto" tickFormatter={clip} tickLine={false} interval={0} />
           <Tooltip
             content={({ active, payload }) => {
               const datum = payload[0]?.payload as BarDatum | undefined;
               return active && datum !== undefined ? <Tip title={datum.label} lines={[{ label: valueLabel, value: money.exact(datum.amount) }]} /> : null;
             }}
           />
-          <Bar dataKey="plot" fill={SERIES_1} radius={[0, 4, 4, 0]} maxBarSize={20} isAnimationActive={false} />
+          <Bar className="chart-series-1" dataKey="plot" fill={FROM_CLASS} radius={[0, 4, 4, 0]} maxBarSize={20} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </Frame>
@@ -161,10 +166,10 @@ export function MonthColumnChart({
     <Frame label={`${label}, ${String(bars.length)} ${bars.length === 1 ? "month" : "months"}`} size="columns">
       <ResponsiveContainer width="100%" height="100%" initialDimension={COLUMN_SIZE}>
         <BarChart data={[...bars]} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-          <CartesianGrid vertical={false} horizontalValues={axis.ticks} />
-          <XAxis dataKey="month" tickFormatter={(month: string) => monthTick(month, first)} tickLine={false} minTickGap={12} interval="equidistantPreserveStart" />
-          <YAxis width={MONEY_WIDTH} domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} />
-          <ReferenceLine y={0} />
+          <CartesianGrid {...GRID} vertical={false} horizontalValues={axis.ticks} />
+          <XAxis {...AXIS} dataKey="month" tickFormatter={(month: string) => monthTick(month, first)} tickLine={false} minTickGap={12} interval="equidistantPreserveStart" />
+          <YAxis {...AXIS} width={MONEY_WIDTH} domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} />
+          <ReferenceLine {...ZERO_LINE} y={0} />
           <Tooltip
             content={({ active, payload }) => {
               const datum = payload[0]?.payload as MonthDatum | undefined;
@@ -176,8 +181,9 @@ export function MonthColumnChart({
             }}
           />
           <Bar
+            className="chart-series-1"
             dataKey="plot"
-            fill={SERIES_1}
+            fill={FROM_CLASS}
             radius={[4, 4, 0, 0]}
             maxBarSize={24}
             isAnimationActive={false}
@@ -185,7 +191,8 @@ export function MonthColumnChart({
               ? {
                   shape: (props: BarShapeProps) => {
                     const datum = props.payload as MonthDatum;
-                    return <Rectangle {...props} fill={datum.role === "other" ? MUTED : SERIES_1} />;
+                    // The datum's fields arrive among the props; its `role` ("current", "other") is not an ARIA role.
+                    return <Rectangle {...props} role={undefined} fill={FROM_CLASS} className={datum.role === "other" ? "report-bar--muted" : "chart-series-1"} />;
                   },
                 }
               : {})}
@@ -205,10 +212,10 @@ export function CashflowChart({ bars, currency, label }: { bars: readonly Cashfl
     <Frame label={`${label}, ${String(bars.length)} ${bars.length === 1 ? "month" : "months"}`} size="columns">
       <ResponsiveContainer width="100%" height="100%" initialDimension={COLUMN_SIZE}>
         <ComposedChart data={[...bars]} margin={{ top: 8, right: 16, bottom: 4, left: 4 }} barGap={2} barCategoryGap="24%">
-          <CartesianGrid vertical={false} horizontalValues={axis.ticks} />
-          <XAxis dataKey="month" tickFormatter={(month: string) => monthTick(month, first)} tickLine={false} minTickGap={12} interval="equidistantPreserveStart" />
-          <YAxis width={MONEY_WIDTH} domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} />
-          <ReferenceLine y={0} />
+          <CartesianGrid {...GRID} vertical={false} horizontalValues={axis.ticks} />
+          <XAxis {...AXIS} dataKey="month" tickFormatter={(month: string) => monthTick(month, first)} tickLine={false} minTickGap={12} interval="equidistantPreserveStart" />
+          <YAxis {...AXIS} width={MONEY_WIDTH} domain={axisDomain(axis)} ticks={axis.ticks} tickFormatter={money.axis} axisLine={false} tickLine={false} />
+          <ReferenceLine {...ZERO_LINE} y={0} />
           <Tooltip
             content={({ active, payload }) => {
               const datum = payload[0]?.payload as CashflowDatum | undefined;
@@ -224,15 +231,16 @@ export function CashflowChart({ bars, currency, label }: { bars: readonly Cashfl
               ) : null;
             }}
           />
-          <Bar dataKey="plotIn" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={20} isAnimationActive={false} />
-          <Bar dataKey="plotOut" fill={SERIES_2} radius={[4, 4, 0, 0]} maxBarSize={20} isAnimationActive={false} />
+          <Bar className="chart-series-1" dataKey="plotIn" fill={FROM_CLASS} radius={[4, 4, 0, 0]} maxBarSize={20} isAnimationActive={false} />
+          <Bar className="chart-series-2" dataKey="plotOut" fill={FROM_CLASS} radius={[4, 4, 0, 0]} maxBarSize={20} isAnimationActive={false} />
           <Line
+            className="report-net-line"
             type="linear"
             dataKey="plotNet"
-            stroke={INK}
+            stroke={FROM_CLASS}
             strokeWidth={2}
-            dot={{ r: 5, fill: INK, stroke: SURFACE, strokeWidth: 2 }}
-            activeDot={{ r: 6, fill: INK, stroke: SURFACE, strokeWidth: 2 }}
+            dot={{ className: "report-net-dot", r: 5, fill: FROM_CLASS, stroke: FROM_CLASS, strokeWidth: 2 }}
+            activeDot={{ className: "report-net-dot", r: 6, fill: FROM_CLASS, stroke: FROM_CLASS, strokeWidth: 2 }}
             isAnimationActive={false}
           />
         </ComposedChart>

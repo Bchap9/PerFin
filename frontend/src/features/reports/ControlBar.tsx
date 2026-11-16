@@ -2,8 +2,8 @@
 /**
  * The filters every report shares: the period (presets first, then custom
  * dates), one account or all of them, and whether transactions still waiting
- * in Review count. They sit in one row above the tabs and scope everything
- * below them, so the figures of the four views always agree.
+ * in Review count. They sit in one row under the section's tab bar and scope
+ * everything below them, so the figures of the four views always agree.
  */
 import "./reports.css";
 

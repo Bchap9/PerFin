@@ -2,9 +2,11 @@
 /**
  * Reports: spending, income, cash flow and trends over a chosen period.
  *
- * The page state (tab, period, account, grouping) lives in the address
- * (searchState.ts). One control bar scopes all four tabs; each tab loads its
- * report only while it is open. The server decides what counts (backend
+ * The page state (view, period, account, grouping) lives in the address
+ * (searchState.ts). The view comes from `?tab=`, which the section's tab bar
+ * (app/routeMap.ts) sets while keeping the period, account and review choice;
+ * the page has no tab list of its own. One control bar scopes all four views;
+ * each view loads its report only while it is open. The server decides what counts (backend
  * `app.domain.reports`): transfers and ignored categories are left out,
  * pending review rows only count when asked, and amounts without an
  * exchange rate come back separately as `unconverted`; the views show all of
@@ -17,9 +19,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
-import { Tabs } from "../../components/Tabs";
 import { todayIsoDate } from "../../lib/dates";
-import { PlanningPage } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
 import {
   getCashflowReport,
@@ -36,7 +36,7 @@ import { CashflowView } from "./CashflowView";
 import { accountLabel, ControlBar } from "./ControlBar";
 import { FlowView } from "./FlowView";
 import { describeRange, monthOf, rangeProblemText, resolvePeriod } from "./periods";
-import { parseReportSearch, reportSearch, TAB_IDS, type ReportState } from "./searchState";
+import { parseReportSearch, reportSearch, type ReportState, type TabId } from "./searchState";
 import { TrendsView } from "./TrendsView";
 
 function HowItWorks({ currency }: { currency: string | undefined }) {
@@ -65,6 +65,13 @@ function HowItWorks({ currency }: { currency: string | undefined }) {
     </details>
   );
 }
+
+const VIEW_NAMES: ReadonlyMap<TabId, string> = new Map([
+  ["spending", "Spending"],
+  ["income", "Income"],
+  ["cashflow", "Cash flow"],
+  ["trends", "Trends"],
+]);
 
 export function ReportsPage() {
   const search: Record<string, unknown> = useSearch({ strict: false });
@@ -122,52 +129,37 @@ export function ReportsPage() {
   const account = state.account === "" ? undefined : accounts.data?.find((entry) => entry.id === state.account);
   const needsDates = resolved.problem === null ? null : <EmptyState title="Choose the dates" description={rangeProblemText(resolved.problem)} />;
 
+  const view =
+    needsDates ??
+    (state.tab === "spending" ? (
+      <FlowView query={spending} group={state.group} depth={state.depth} account={state.account} onChange={update} />
+    ) : state.tab === "income" ? (
+      <FlowView query={income} group={state.group} depth={state.depth} account={state.account} onChange={update} />
+    ) : state.tab === "cashflow" ? (
+      <CashflowView query={cashflow} />
+    ) : (
+      <TrendsView query={trends} flow={state.flow} depth={state.depth} months={state.months} currentMonth={monthOf(today)} onChange={update} />
+    ));
+
+  // The section layout renders the h1 "Reports" and the tab bar that names the view; the cards below are the h2s.
   return (
-    <PlanningPage title="Reports">
-      <div className="report-page planning-stack">
-        <ControlBar
-          values={{ period: state.period, from: state.from, to: state.to, account: state.account }}
-          resolved={resolved}
-          presetDates={range}
-          accounts={accounts.data}
-          pendingChecked={pending}
-          onChange={update}
-        />
-        {range === null ? null : (
-          <p className="report-summary">
-            Showing {describeRange(range)} for {state.account === "" ? "all accounts" : account === undefined ? "one account" : accountLabel(account)}. Transactions
-            awaiting review are {pending ? "included" : "left out"}.
-          </p>
-        )}
-        <Tabs
-          label="Reports"
-          selectedId={state.tab}
-          onSelect={(id) => {
-            update({ tab: TAB_IDS.find((tab) => tab === id) ?? "spending" });
-          }}
-          tabs={[
-            {
-              id: "spending",
-              label: "Spending",
-              content: needsDates ?? <FlowView query={spending} group={state.group} depth={state.depth} account={state.account} onChange={update} />,
-            },
-            {
-              id: "income",
-              label: "Income",
-              content: needsDates ?? <FlowView query={income} group={state.group} depth={state.depth} account={state.account} onChange={update} />,
-            },
-            { id: "cashflow", label: "Cash flow", content: needsDates ?? <CashflowView query={cashflow} /> },
-            {
-              id: "trends",
-              label: "Trends",
-              content: needsDates ?? (
-                <TrendsView query={trends} flow={state.flow} depth={state.depth} months={state.months} currentMonth={monthOf(today)} onChange={update} />
-              ),
-            },
-          ]}
-        />
-        <HowItWorks currency={active?.currency} />
-      </div>
-    </PlanningPage>
+    <section className="report-page planning-stack" aria-label={VIEW_NAMES.get(state.tab) ?? "Reports"}>
+      <ControlBar
+        values={{ period: state.period, from: state.from, to: state.to, account: state.account }}
+        resolved={resolved}
+        presetDates={range}
+        accounts={accounts.data}
+        pendingChecked={pending}
+        onChange={update}
+      />
+      {range === null ? null : (
+        <p className="report-summary">
+          Showing {describeRange(range)} for {state.account === "" ? "all accounts" : account === undefined ? "one account" : accountLabel(account)}. Transactions
+          awaiting review are {pending ? "included" : "left out"}.
+        </p>
+      )}
+      {view}
+      <HowItWorks currency={active?.currency} />
+    </section>
   );
 }

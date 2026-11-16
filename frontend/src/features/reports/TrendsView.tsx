@@ -11,6 +11,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { Field } from "../../components/Field";
 import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
+import { Stat, StatGroup } from "../../components/Stat";
 import { Table, type TableColumn } from "../../components/Table";
 import { sumAmounts } from "../../lib/money";
 import type { Flow, TrendReport, TrendRow } from "./api";
@@ -76,28 +77,18 @@ function TrendReportView({ report, currentMonth }: { report: TrendReport; curren
         {month} against the month before and the same month a year earlier. Trends always use whole months
         {report.month === currentMonth ? `, and ${month} is not over yet, so its figures can still grow.` : "."}
       </p>
-      <dl className="report-figures">
-        <div>
-          <dt>
-            {name} in {month}
-          </dt>
-          <dd>
-            <MoneyText amount={total.amount.amount} currency={total.amount.currency} tone="none" />
-          </dd>
-        </div>
-        <div>
-          <dt>Change from {previous}</dt>
-          <dd>
-            <ChangeText change={total.mom_change} percent={total.mom_percent} zeroBase={`Nothing in ${previous} to compare with`} />
-          </dd>
-        </div>
-        <div>
-          <dt>Change from {yearAgo}</dt>
-          <dd>
-            <ChangeText change={total.yoy_change} percent={total.yoy_percent} zeroBase={`Nothing in ${yearAgo} to compare with`} />
-          </dd>
-        </div>
-      </dl>
+      {/* The changes are not coloured: more spending and more income are not the same kind of news. */}
+      <StatGroup>
+        <Stat label={`${name} in ${month}`} size="display" value={<MoneyText amount={total.amount.amount} currency={total.amount.currency} tone="none" />} />
+        <Stat
+          label={`Change from ${previous}`}
+          value={<ChangeText change={total.mom_change} percent={total.mom_percent} zeroBase={`Nothing in ${previous} to compare with`} />}
+        />
+        <Stat
+          label={`Change from ${yearAgo}`}
+          value={<ChangeText change={total.yoy_change} percent={total.yoy_percent} zeroBase={`Nothing in ${yearAgo} to compare with`} />}
+        />
+      </StatGroup>
       <Card
         title={`${name} month by month`}
         actions={

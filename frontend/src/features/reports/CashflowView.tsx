@@ -5,6 +5,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
 import { MoneyText } from "../../components/MoneyText";
+import { Stat, StatGroup } from "../../components/Stat";
 import { Table, type TableColumn } from "../../components/Table";
 import type { CashflowMonth, CashflowReport } from "./api";
 import { allZero, cashflowBars, monthLabel } from "./chartData";
@@ -40,26 +41,11 @@ function CashflowReportView({ report }: { report: CashflowReport }) {
   return (
     <>
       <UnconvertedNote amounts={report.unconverted} currency={report.currency} what="of net cash flow (a minus sign means money out)" />
-      <dl className="report-figures">
-        <div>
-          <dt>Money in</dt>
-          <dd>
-            <MoneyText amount={report.inflow.amount} currency={report.inflow.currency} tone="none" />
-          </dd>
-        </div>
-        <div>
-          <dt>Money out</dt>
-          <dd>
-            <MoneyText amount={report.outflow.amount} currency={report.outflow.currency} tone="none" />
-          </dd>
-        </div>
-        <div>
-          <dt>Net</dt>
-          <dd>
-            <MoneyText amount={report.net.amount} currency={report.net.currency} tone="signed" signDisplay="exceptZero" />
-          </dd>
-        </div>
-      </dl>
+      <StatGroup>
+        <Stat label="Money in" value={<MoneyText amount={report.inflow.amount} currency={report.inflow.currency} tone="none" />} />
+        <Stat label="Money out" value={<MoneyText amount={report.outflow.amount} currency={report.outflow.currency} tone="none" />} />
+        <Stat label="Net" value={<MoneyText amount={report.net.amount} currency={report.net.currency} tone="signed" signDisplay="exceptZero" />} />
+      </StatGroup>
       <Card
         title="Cash flow by month"
         actions={<DownloadCsvButton table={() => cashflowCsv(report)} filename={csvFilename(["cash flow", report.date_from, "to", report.date_to])} />}
