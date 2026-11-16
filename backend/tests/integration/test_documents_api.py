@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +35,11 @@ from app.domain.documents.models import (
     ReviewItemState,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.documents.search import update_search_index
+from app.domain.imports.models import StatementRecord
 from app.domain.investments.models import InvestmentTxn
 from app.domain.loans.models import LoanPayment
-from app.domain.transactions.models import Transaction
+from app.domain.transactions.models import ReviewState, Transaction
 from tests.fixtures.documents import SAMPLE_CSV, make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, household_audit, household_events, problem_type
@@ -707,3 +710,332 @@ def test_delete_with_data_is_all_or_nothing(
     assert refused.status_code == 403, refused.text
     assert load(factories, hh, Document, document.id) is not None
     assert all(load(factories, hh, Transaction, i) is not None for i in ids)
+
+
+# ---------------------------------------------------------------------------
+# What a document produced (statements, accounts, how they were checked)
+# ---------------------------------------------------------------------------
+
+JANUARY = (date(2026, 1, 1), date(2026, 1, 31))
+FEBRUARY = (date(2026, 2, 1), date(2026, 2, 28))
+
+
+def record(
+    factories: Factories,
+    hh: uuid.UUID,
+    document_id: uuid.UUID,
+    account_id: uuid.UUID,
+    *,
+    period: tuple[date, date] = JANUARY,
+    kind: str = "bank",
+    outcome: str = "imported",
+    verification: str = "unverified",
+    source_format: str = "pdf",
+) -> None:
+    """A ``statement_record`` inserted by hand, as the importer would leave it."""
+    with factories.transaction() as db:
+        set_context(db, hh)
+        db.add(
+            StatementRecord(
+                household_id=hh,
+                account_id=account_id,
+                document_id=document_id,
+                kind=kind,
+                outcome=outcome,
+                period_start=period[0],
+                period_end=period[1],
+                period_stated=True,
+                source_format=source_format,
+                currency="USD",
+                verification=verification,
+            )
+        )
+
+
+def named_account(factories: Factories, hh: uuid.UUID, name: str, **kwargs: Any) -> uuid.UUID:
+    with factories.transaction() as db:
+        return make_account(db, hh, name=name, **kwargs).id
+
+
+def rows_on(
+    factories: Factories,
+    hh: uuid.UUID,
+    account_id: uuid.UUID,
+    document_id: uuid.UUID | None,
+    *days: date,
+    review_state: ReviewState = ReviewState.NONE,
+) -> None:
+    with factories.transaction() as db:
+        set_context(db, hh)
+        account = db.get_one(Account, account_id)
+        for day in days:
+            make_transaction(
+                db,
+                account,
+                posted_date=day,
+                review_state=review_state,
+                source_document_id=document_id,
+            )
+
+
+def test_imported_lists_the_statements_with_their_verification(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    harbor = named_account(factories, hh, "Harbor Everyday")
+    alder = named_account(factories, hh, "Alder Card", type=AccountType.CREDIT_CARD)
+    document = stored(
+        factories,
+        store,
+        hh,
+        data=b"%PDF-1.4 synthetic test document",
+        mime="application/pdf",
+        filename="synthetic.pdf",
+        extraction={"kind": "pdf", "ok": True, "parse": {"skipped_lines": 3}},
+    )
+    other = stored(factories, store, hh, data=b"another,1\n")
+    # One record on Alder: every row of the document there counts, whatever its date.
+    record(factories, hh, document.id, alder)
+    rows_on(factories, hh, alder, document.id, date(2026, 1, 9), date(2026, 3, 2))
+    # Two records on Harbor: each counts the rows dated inside its period.
+    record(factories, hh, document.id, harbor, period=FEBRUARY)
+    record(factories, hh, document.id, harbor, period=JANUARY)
+    rows_on(factories, hh, harbor, document.id, date(2026, 1, 1), date(2026, 1, 31))
+    rows_on(factories, hh, harbor, document.id, date(2026, 1, 20), review_state=ReviewState.PENDING)
+    rows_on(factories, hh, harbor, document.id, date(2026, 2, 14))
+    # Never counted: a row typed by hand and a row of another file on the account.
+    rows_on(factories, hh, harbor, None, date(2026, 1, 12))
+    rows_on(factories, hh, harbor, other.id, date(2026, 1, 13))
+    record(factories, hh, other.id, harbor, period=(date(2026, 1, 2), date(2026, 1, 30)))
+
+    response = owner.get(f"{DOCS}/{document.id}/imported")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["transactions"] == 6
+    assert body["skipped_lines"] == 3
+    common = {
+        "kind": "bank",
+        "outcome": "imported",
+        "verification": "unverified",
+        "source_format": "pdf",
+        "unchecked": True,
+    }
+    assert body["statements"] == [
+        {
+            **common,
+            "account_id": str(alder),
+            "account_name": "Alder Card",
+            "period_start": "2026-01-01",
+            "period_end": "2026-01-31",
+            "transactions": 2,
+            "pending": 0,
+        },
+        {
+            **common,
+            "account_id": str(harbor),
+            "account_name": "Harbor Everyday",
+            "period_start": "2026-01-01",
+            "period_end": "2026-01-31",
+            "transactions": 3,
+            "pending": 1,
+        },
+        {
+            **common,
+            "account_id": str(harbor),
+            "account_name": "Harbor Everyday",
+            "period_start": "2026-02-01",
+            "period_end": "2026-02-28",
+            "transactions": 1,
+            "pending": 0,
+        },
+    ]
+
+
+def test_reconciled_and_csv_records_are_not_unchecked(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    cases: dict[str, dict[str, Any]] = {
+        "A reconciled": {"verification": "reconciled"},
+        "B accepted": {"verification": "accepted"},
+        "C spreadsheet": {"source_format": "csv"},
+        "D skipped": {"outcome": "skipped"},
+        "E scanned": {"source_format": "image"},
+        "F brokerage": {"kind": "investment"},
+    }
+    document = stored(factories, store, hh)
+    accounts: dict[str, uuid.UUID] = {}
+    for name, fields in cases.items():
+        investment = fields.get("kind") == "investment"
+        account = named_account(
+            factories, hh, name, type=AccountType.BROKERAGE if investment else AccountType.CHECKING
+        )
+        accounts[name] = account
+        record(factories, hh, document.id, account, **fields)
+        if investment:
+            with factories.transaction() as db:
+                set_context(db, hh)
+                make_investment_txn(
+                    db,
+                    db.get_one(Account, account),
+                    security=make_security(db, hh),
+                    source_document_id=document.id,
+                )
+    body = owner.get(f"{DOCS}/{document.id}/imported").json()
+    assert body["skipped_lines"] == 0  # the stored reading carries no count
+    assert [(s["account_name"], s["unchecked"]) for s in body["statements"]] == [
+        ("A reconciled", False),
+        ("B accepted", False),
+        ("C spreadsheet", False),
+        ("D skipped", False),
+        ("E scanned", True),
+        ("F brokerage", True),
+    ]
+    assert [s["verification"] for s in body["statements"]][:2] == ["reconciled", "accepted"]
+    brokerage = body["statements"][-1]
+    assert (brokerage["kind"], brokerage["transactions"], brokerage["pending"]) == (
+        "investment",
+        1,
+        0,
+    )
+    # A document whose only records are checked, skipped or of a file format has no marker.
+    plain = stored(factories, store, hh, data=b"plain,1\n")
+    for name in ("A reconciled", "C spreadsheet", "D skipped"):
+        record(factories, hh, plain.id, accounts[name], **cases[name])
+    listed = {i["id"]: i["unchecked"] for i in owner.get(DOCS).json()["items"]}
+    assert listed == {str(document.id): True, str(plain.id): False}
+
+
+def test_statements_on_invisible_accounts_are_left_out(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = household(owner)
+    with factories.transaction() as db:
+        seen = make_account(db, hh, name="Seen Savings").id
+        hidden = make_account(db, hh, name="Hidden Savings").id
+    factories.grant(hh, member.user.id, seen, GrantLevel.VIEW)
+    document = stored(factories, store, hh, account_id=seen)
+    record(factories, hh, document.id, seen, verification="reconciled", source_format="csv")
+    record(factories, hh, document.id, hidden)
+    rows_on(factories, hh, seen, document.id, date(2026, 1, 5))
+    rows_on(factories, hh, hidden, document.id, date(2026, 1, 6), date(2026, 1, 7))
+
+    body = member.get(f"{DOCS}/{document.id}/imported").json()
+    assert [s["account_name"] for s in body["statements"]] == ["Seen Savings"]
+    assert body["statements"][0]["transactions"] == 1
+    assert "Hidden Savings" not in str(body)
+    assert str(hidden) not in str(body)
+    # The marker of the list follows the same rule: the unchecked record is on a hidden account.
+    listed = {i["id"]: i["unchecked"] for i in member.get(DOCS).json()["items"]}
+    assert listed == {str(document.id): False}
+    everything = owner.get(f"{DOCS}/{document.id}/imported").json()
+    assert [s["account_name"] for s in everything["statements"]] == [
+        "Hidden Savings",
+        "Seen Savings",
+    ]
+    assert owner.get(DOCS).json()["items"][0]["unchecked"] is True
+
+
+def test_list_marks_an_unchecked_document(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    account = account_for(factories, hh)
+    marked = stored(
+        factories,
+        store,
+        hh,
+        data=b"marked ledger text",
+        filename="marked.txt",
+        extraction={"kind": "pdf", "ok": True, "text": "marked ledger text"},
+    )
+    checked = stored(factories, store, hh, data=b"checked,1\n")
+    bare = stored(factories, store, hh, data=b"bare,1\n")
+    # Two unchecked statements and one balanced: the document is listed once, marked.
+    record(factories, hh, marked.id, account, period=JANUARY)
+    record(factories, hh, marked.id, account, period=FEBRUARY)
+    record(
+        factories,
+        hh,
+        marked.id,
+        account,
+        period=(date(2026, 3, 1), date(2026, 3, 31)),
+        verification="reconciled",
+    )
+    record(factories, hh, checked.id, account, verification="reconciled")
+
+    items = owner.get(DOCS).json()["items"]
+    assert [(i["id"], i["unchecked"]) for i in items] == [
+        (str(bare.id), False),
+        (str(checked.id), False),
+        (str(marked.id), True),
+    ]
+    paged = owner.get(DOCS, params={"limit": 2}).json()
+    rest = owner.get(DOCS, params={"limit": 2, "cursor": paged["next_cursor"]}).json()
+    assert [(i["id"], i["unchecked"]) for i in rest["items"]] == [(str(marked.id), True)]
+    # The search listing carries the marker too.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        update_search_index(db, db.get_one(Document, marked.id))
+    found = owner.get(DOCS, params={"q": "marked"}).json()["items"]
+    assert [(i["id"], i["unchecked"]) for i in found] == [(str(marked.id), True)]
+
+
+def test_detail_says_whether_pages_can_be_previewed(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member, viewer = home["owner"], home["member"], home["viewer"]
+    hh = household(owner)
+    account = account_for(
+        factories, hh, {member.user.id: GrantLevel.VIEW, viewer.user.id: GrantLevel.VIEW}
+    )
+    pdf = {"data": b"%PDF-1.4 synthetic test document", "mime": "application/pdf"}
+    sheet = stored(factories, store, hh, account_id=account)
+    pages = stored(factories, store, hh, account_id=account, filename="pages.pdf", **pdf)
+    scan = stored(
+        factories,
+        store,
+        hh,
+        account_id=account,
+        data=b"synthetic scan",
+        mime="image/png",
+        filename="scan.png",
+    )
+    waiting = stored(
+        factories,
+        store,
+        hh,
+        account_id=account,
+        data=b"%PDF-1.4 synthetic test document two",
+        mime="application/pdf",
+        filename="waiting.pdf",
+        area=BlobArea.QUARANTINE,
+        status=DocumentStatus.FAILED,
+    )
+
+    def previewable(user: AuthedClient, document: Document) -> bool:
+        response = user.get(f"{DOCS}/{document.id}")
+        assert response.status_code == 200, response.text
+        return bool(response.json()["previewable"])
+
+    assert previewable(member, sheet) is False  # a CSV has no pages
+    assert previewable(member, pages) is True
+    assert previewable(member, scan) is True
+    assert previewable(owner, pages) is True
+    assert previewable(member, waiting) is False  # never a quarantined file
+    assert previewable(viewer, pages) is False  # I1: a viewer may not download
+    with factories.transaction() as db:
+        set_context(db, hh)
+        db.add(
+            Setting(
+                scope=SettingScope.HOUSEHOLD,
+                scope_id=hh,
+                key=VIEWER_DOWNLOAD_SETTING,
+                value=True,
+            )
+        )
+    assert previewable(viewer, pages) is True
