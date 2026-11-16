@@ -200,7 +200,7 @@ export function AssetValuations({ assetId }: { assetId: string }) {
         {asset === undefined ? null : (
           <>
             <Card
-              title={asset.name}
+              title="Asset details"
               actions={
                 editable ? (
                   <>

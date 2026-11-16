@@ -2,6 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 import { money, ownerSession, referenceHandlers } from "../planning/testing";
 import { account, page } from "../transactions/fixtures";
@@ -424,5 +425,79 @@ describe("the loan on its account", () => {
     expect(await screen.findByText("This account has no loan terms yet.")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Add loan terms" }));
     expect(await screen.findByRole("dialog", { name: "Loan terms for Home mortgage" })).toBeInTheDocument();
+  });
+
+  it("does not say a mortgage has no terms when the loans could not be loaded", async () => {
+    const state = { fail: true };
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      ...mortgageHandlers(),
+      "GET /api/v1/loans": () => (state.fail ? problem(500, "server-error") : json({ items: [loan], next_cursor: null })),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans/:id/schedule": () => json(schedule),
+    });
+    renderApp(`${HUB}?tab=schedule`);
+    const panel = await screen.findByRole("tabpanel");
+    expect(await within(panel).findByText("The loan terms could not be loaded.")).toBeInTheDocument();
+    expect(screen.queryByText("This account has no loan terms yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add loan terms" })).not.toBeInTheDocument();
+    state.fail = false;
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => { expect(api.callsTo("GET", "/api/v1/loans").length).toBeGreaterThan(1); });
+    expect(await screen.findByText("Balance owed")).toBeInTheDocument();
+  });
+
+  it("shows a viewer the payments and rate changes without the forms to change them", async () => {
+    const paid = {
+      id: "p-1",
+      loan_id: LOAN,
+      paid_on: "2026-11-01",
+      principal: money("245.43"),
+      interest: money("969.79"),
+      escrow: money("0.00"),
+      fees: money("0.00"),
+      total: money("1215.22"),
+      balance_after: money("189754.57"),
+      transaction_id: null,
+      source_document_id: null,
+      schedule_check: { status: "ok", expected_interest: money("969.79"), difference: money("0.00") },
+      created_at: STAMP,
+    };
+    const change = { id: "r-1", loan_id: LOAN, effective_date: "2026-01-15", new_rate: "0.055", created_at: STAMP };
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      ...mortgageHandlers({ can_edit: false }),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
+      "GET /api/v1/loans/:id/payments": () => json({ items: [paid] }),
+      "GET /api/v1/loans/:id/rate-changes": () => json({ items: [change] }),
+    });
+    renderApp(`${HUB}?tab=payments`);
+    const payments = await screen.findByRole("table", { name: "Payments" });
+    expect(await within(payments).findByText("Nov 1, 2026")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Record a payment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record payment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete the payment/ })).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Rate changes" }));
+    const rates = await screen.findByRole("table", { name: "Rate changes" });
+    expect(await within(rates).findByText("Jan 15, 2026")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Add a rate change" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete the rate change/ })).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      ...mortgageHandlers(),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
+      "GET /api/v1/loans/:id/payments": () => json({ items: [] }),
+    });
+    const { container } = renderApp(`${HUB}?tab=payments`);
+    expect(await screen.findByRole("table", { name: "Payments" })).toBeInTheDocument();
+    await expectNoAxeViolations(container);
   });
 });

@@ -217,18 +217,20 @@ export function LoanSchedule({ loanId }: { loanId: string }) {
   );
 }
 
-export function LoanPayments({ loanId }: { loanId: string }) {
+/** Payments: the history, and to those who may edit the account, the form to record one and Delete. */
+export function LoanPayments({ loanId, editable }: { loanId: string; editable: boolean }) {
   return (
     <LoanPanel loanId={loanId} title="Payments">
-      {(loan) => <PaymentsTab loan={loan} />}
+      {(loan) => <PaymentsTab loan={loan} editable={editable} />}
     </LoanPanel>
   );
 }
 
-export function LoanRates({ loanId }: { loanId: string }) {
+/** Rate changes: the history, and to those who may edit the account, the form to add one and Delete. */
+export function LoanRates({ loanId, editable }: { loanId: string; editable: boolean }) {
   return (
     <LoanPanel loanId={loanId} title="Rate changes">
-      {(loan) => <RateChangesTab loan={loan} />}
+      {(loan) => <RateChangesTab loan={loan} editable={editable} />}
     </LoanPanel>
   );
 }

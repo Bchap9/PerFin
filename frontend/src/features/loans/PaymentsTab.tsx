@@ -42,7 +42,8 @@ const MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: "split", label: "Principal and interest" },
 ];
 
-export function PaymentsTab({ loan }: { loan: Loan }) {
+/** The loan's payments; `editable` (the hub's: may write and may edit the account) adds the form and Delete. */
+export function PaymentsTab({ loan, editable }: { loan: Loan; editable: boolean }) {
   const currency = loan.principal_original.currency;
   const query = useQuery({ queryKey: loanKeys.payments(loan.id), queryFn: () => listPayments(loan.id) });
   const [mode, setMode] = useState<Mode>("amount");
@@ -92,7 +93,9 @@ export function PaymentsTab({ loan }: { loan: Loan }) {
     { id: "total", header: "Total", align: "end", cell: (p) => money(p.total) },
     { id: "balance", header: "Balance after", align: "end", cell: (p) => (p.balance_after === null ? "" : money(p.balance_after)) },
     { id: "check", header: "Check", cell: (p) => <CheckBadge payment={p} /> },
-    {
+  ];
+  if (editable) {
+    columns.push({
       id: "remove",
       header: <span className="visually-hidden">Delete</span>,
       align: "end",
@@ -101,78 +104,80 @@ export function PaymentsTab({ loan }: { loan: Loan }) {
           Delete
         </Button>
       ),
-    },
-  ];
+    });
+  }
 
   return (
     <div className="planning-stack">
-      <Card title="Record a payment" headingLevel={3}>
-        <form
-          className="planning-row"
-          aria-label="Record a payment"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const body = build();
-            if (typeof body === "string") {
-              setProblem(body);
-              return;
-            }
-            setProblem(null);
-            void add.run(body).then((done) => {
-              if (done !== undefined) {
-                setAmount("");
-                setPrincipal("");
-                setInterest("");
-                setEscrow("");
-                setFees("");
+      {editable ? (
+        <Card title="Record a payment" headingLevel={3}>
+          <form
+            className="planning-row"
+            aria-label="Record a payment"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const body = build();
+              if (typeof body === "string") {
+                setProblem(body);
+                return;
               }
-            });
-          }}
-        >
-          <Field label="Enter">
-            <Select
-              value={mode}
-              onChange={(event) => {
-                setMode(event.target.value === "split" ? "split" : "amount");
-                setProblem(null);
-              }}
-              options={MODE_OPTIONS}
-            />
-          </Field>
-          <Field label="Paid on">
-            <Input type="date" value={paidOn} onChange={(event) => { setPaidOn(event.target.value); }} />
-          </Field>
-          {mode === "amount" ? (
-            <Field label={`Amount paid (${currency})`}>
-              <Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); }} />
+              setProblem(null);
+              void add.run(body).then((done) => {
+                if (done !== undefined) {
+                  setAmount("");
+                  setPrincipal("");
+                  setInterest("");
+                  setEscrow("");
+                  setFees("");
+                }
+              });
+            }}
+          >
+            <Field label="Enter">
+              <Select
+                value={mode}
+                onChange={(event) => {
+                  setMode(event.target.value === "split" ? "split" : "amount");
+                  setProblem(null);
+                }}
+                options={MODE_OPTIONS}
+              />
             </Field>
-          ) : (
-            <>
-              <Field label={`Principal (${currency})`}>
-                <Input inputMode="decimal" value={principal} onChange={(event) => { setPrincipal(event.target.value); }} />
+            <Field label="Paid on">
+              <Input type="date" value={paidOn} onChange={(event) => { setPaidOn(event.target.value); }} />
+            </Field>
+            {mode === "amount" ? (
+              <Field label={`Amount paid (${currency})`}>
+                <Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); }} />
               </Field>
-              <Field label="Interest">
-                <Input inputMode="decimal" value={interest} onChange={(event) => { setInterest(event.target.value); }} />
-              </Field>
-              <Field label="Escrow">
-                <Input inputMode="decimal" value={escrow} onChange={(event) => { setEscrow(event.target.value); }} />
-              </Field>
-              <Field label="Fees">
-                <Input inputMode="decimal" value={fees} onChange={(event) => { setFees(event.target.value); }} />
-              </Field>
-            </>
-          )}
-          <Button type="submit" variant="primary" loading={add.busy}>
-            Record payment
-          </Button>
-        </form>
-        <p className="muted">
-          {mode === "amount"
-            ? "The whole payment in one figure. It is split the way a lender applies it: the interest due for the month first, then escrow if the loan has it, and the rest comes off the balance. Record payments oldest first."
-            : "The split as your statement shows it."}
-        </p>
-        <ErrorLine message={problem ?? add.error ?? remove.error} />
-      </Card>
+            ) : (
+              <>
+                <Field label={`Principal (${currency})`}>
+                  <Input inputMode="decimal" value={principal} onChange={(event) => { setPrincipal(event.target.value); }} />
+                </Field>
+                <Field label="Interest">
+                  <Input inputMode="decimal" value={interest} onChange={(event) => { setInterest(event.target.value); }} />
+                </Field>
+                <Field label="Escrow">
+                  <Input inputMode="decimal" value={escrow} onChange={(event) => { setEscrow(event.target.value); }} />
+                </Field>
+                <Field label="Fees">
+                  <Input inputMode="decimal" value={fees} onChange={(event) => { setFees(event.target.value); }} />
+                </Field>
+              </>
+            )}
+            <Button type="submit" variant="primary" loading={add.busy}>
+              Record payment
+            </Button>
+          </form>
+          <p className="muted">
+            {mode === "amount"
+              ? "The whole payment in one figure. It is split the way a lender applies it: the interest due for the month first, then escrow if the loan has it, and the rest comes off the balance. Record payments oldest first."
+              : "The split as your statement shows it."}
+          </p>
+          <ErrorLine message={problem ?? add.error ?? remove.error} />
+        </Card>
+      ) : null}
       <QueryState loading={query.isPending} error={query.error} label="payments">
         <Table caption="Payments" columns={columns} rows={query.data ?? []} rowKey={(p) => p.id} maxHeight="md" empty="No payments recorded." />
       </QueryState>

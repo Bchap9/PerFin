@@ -314,6 +314,22 @@ export function AccountsHomePage() {
           </Button>
         </p>
       ) : null}
+      {loans.isError ? (
+        <p role="alert" className="ledger-error">
+          The loan terms could not be loaded: {errorMessage(loans.error)}{" "}
+          <Button size="sm" onClick={() => void loans.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : null}
+      {assets.isError ? (
+        <p role="alert" className="ledger-error">
+          The asset details could not be loaded: {errorMessage(assets.error)}{" "}
+          <Button size="sm" onClick={() => void assets.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : null}
       {query.isSuccess && all.length === 0 ? (
         <Card>
           <EmptyState

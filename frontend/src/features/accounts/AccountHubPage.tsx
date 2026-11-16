@@ -81,6 +81,15 @@ function Missing({ title, text, action }: { title: string; text: string; action?
   );
 }
 
+/**
+ * A panel in place of a tab whose list could not be loaded: it says the
+ * object is unknown rather than missing, and offers nothing to add, since
+ * the object may well exist. Retry is in the alert above the tabs.
+ */
+function Unknown({ title }: { title: string }) {
+  return <EmptyState title={title} description="Until it loads, this tab cannot show whether this account has them. Use Retry above." />;
+}
+
 function Hub({ account }: { account: Account }) {
   const canWrite = useCanWrite();
   const canDelete = useCanDeleteAccount(account);
@@ -148,6 +157,9 @@ function Hub({ account }: { account: Account }) {
       case "performance":
         return <PerformanceTab account={account.id} />;
       case "schedule":
+        if (loan === undefined && loans.isError) {
+          return <Unknown title="The loan terms could not be loaded." />;
+        }
         return loan === undefined ? (
           <Missing
             title="This account has no loan terms yet."
@@ -158,12 +170,15 @@ function Hub({ account }: { account: Account }) {
           <LoanSchedule loanId={loan.id} />
         );
       case "payments":
-        return loan === undefined ? null : <LoanPayments loanId={loan.id} />;
+        return loan === undefined ? null : <LoanPayments loanId={loan.id} editable={writable} />;
       case "rates":
-        return loan === undefined ? null : <LoanRates loanId={loan.id} />;
+        return loan === undefined ? null : <LoanRates loanId={loan.id} editable={writable} />;
       case "payoff":
         return loan === undefined ? null : <LoanPayoff loanId={loan.id} />;
       case "valuations":
+        if (asset === undefined && assets.isError) {
+          return <Unknown title="The asset details could not be loaded." />;
+        }
         return asset === undefined ? (
           <Missing
             title="This account has no asset details yet."

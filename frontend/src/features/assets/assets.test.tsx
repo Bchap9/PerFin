@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { currentHref, json, mockApi, noContent, renderApp, type Handler } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
 import { account, page } from "../transactions/fixtures";
 
@@ -82,7 +83,7 @@ describe("assets", () => {
     });
     renderApp(`${HUB}?tab=valuations`);
     expect(await screen.findByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { level: 2, name: "Family home" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Asset details" })).toBeInTheDocument();
     expect(await screen.findByText("Appraisal")).toBeInTheDocument();
     expect(await screen.findByText(/Since the first value/)).toHaveTextContent("+$30,000.00 (+10.00%)");
     const user = userEvent.setup();
@@ -118,5 +119,56 @@ describe("assets", () => {
     await vi.waitFor(() => { expect(api.callsTo("DELETE", `/api/v1/assets/${ASSET}`)).toHaveLength(1); });
     await vi.waitFor(() => { expect(currentHref(router)).toBe(HUB); });
     expect(api.callsTo("DELETE", "/api/v1/accounts/:id")).toHaveLength(0);
+  });
+
+  it("shows a viewer the values without the controls to change them", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/accounts": page([{ ...HOME, can_edit: false }]),
+      "GET /api/v1/accounts/:id": () => json({ ...HOME, can_edit: false }),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    renderApp(`${HUB}?tab=valuations`);
+    const history = await screen.findByRole("table", { name: "Valuation history" });
+    expect(await within(history).findByText("Jun 1, 2026")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Add a value" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete the value/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete asset" })).not.toBeInTheDocument();
+  });
+
+  it("does not say an asset account has no details when the assets could not be loaded", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/assets": () => problem(500, "server-error"),
+    });
+    renderApp(`${HUB}?tab=valuations`);
+    const panel = await screen.findByRole("tabpanel");
+    expect(await within(panel).findByText("The asset details could not be loaded.")).toBeInTheDocument();
+    expect(screen.queryByText("This account has no asset details yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add asset details" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    const { container } = renderApp(`${HUB}?tab=valuations`);
+    await screen.findByRole("table", { name: "Valuation history" });
+    await screen.findByText("Appraisal");
+    await expectNoAxeViolations(container);
   });
 });

@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
-import { authedSession, json, mockApi, renderApp, type Handler } from "../auth/testing";
+import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../auth/testing";
 import { account, page } from "../transactions/fixtures";
 import { groupAccounts } from "./api";
 
@@ -413,6 +413,59 @@ describe("accounts page", () => {
       type: "retirement",
       subtype: "simple_ira",
     });
+  });
+
+  it("says so when the loans or assets could not be loaded, and retries", async () => {
+    const state = { fail: true };
+    const api = mockApi(
+      handlers("owner", {
+        "GET /api/v1/loans": () =>
+          state.fail ? problem(500, "server-error") : json({ items: [], next_cursor: null }),
+        "GET /api/v1/assets": () => problem(500, "server-error"),
+      }),
+    );
+    renderApp("/accounts");
+    const loansAlert = await screen.findByText(/^The loan terms could not be loaded/);
+    expect(loansAlert.closest("[role=alert]")).not.toBeNull();
+    expect(
+      await screen.findByText(/^The asset details could not be loaded/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Add loan terms/ }),
+    ).not.toBeInTheDocument();
+    state.fail = false;
+    await userEvent
+      .setup()
+      .click(within(loansAlert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/^The loan terms could not be loaded/),
+      ).not.toBeInTheDocument();
+    });
+    expect(api.callsTo("GET", "/api/v1/loans").length).toBeGreaterThan(1);
+  });
+
+  it("a member gets no Add loan terms or asset details on an account they cannot edit", async () => {
+    mockApi(
+      handlers("member", {
+        "GET /api/v1/accounts": page([
+          account("a-8", "Car loan", { type: "loan", is_asset: false, can_edit: false }),
+          account("a-9", "Shared cabin", { type: "manual_asset", can_edit: false }),
+          account("a-10", "Own car loan", { type: "loan", is_asset: false }),
+        ]),
+      }),
+    );
+    renderApp("/accounts");
+    const loans = await screen.findByRole("region", { name: "Loans" });
+    expect(
+      await within(loans).findByRole("button", { name: "Add loan terms for Own car loan" }),
+    ).toBeInTheDocument();
+    expect(
+      within(loans).queryByRole("button", { name: "Add loan terms for Car loan" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add asset details for Shared cabin" }),
+    ).not.toBeInTheDocument();
   });
 
   it("a viewer sees no Add account", async () => {
