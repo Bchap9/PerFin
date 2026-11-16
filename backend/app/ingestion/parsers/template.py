@@ -19,6 +19,10 @@ next to the rules that recognise the layout:
   (again without digits) and its role (date, payee, amount, debit, credit,
   balance; or symbol, security, quantity, price, market value, cost basis
   for a holdings table), with the text of the line that ends the table.
+  Up to :data:`MAX_TRANSACTION_TABLES` transaction tables and one holdings
+  table. A transaction table also says what its single ``amount`` column
+  means (``direction``, below) and whether it runs on over pages that do
+  not repeat its header (``continues``).
 * **Ignored lines** and **notes**: label text the person said to ignore
   (never read as a row or a value), and free-text notes ("Other — describe
   it") kept for the household to read, without any word that holds a digit
@@ -38,7 +42,47 @@ whose span (between the midpoints of neighbouring headers) holds their
 centre; a row needs a date and an amount (a holdings row a quantity and a
 symbol or name); a line of description text only continues the row above;
 a dated line without an amount is skipped and its box recorded for the
-review highlight. The rows are reconciled like any parser's
+review highlight.
+
+**Several tables** are read in one pass (:func:`read_tables`): one table is
+open at a time, and it is closed by its ``end`` text, by the end of its
+page, or by the header of another table. A header line that several
+templates fit (``Money received`` and ``Money sent`` printed under the same
+headers) belongs to the one with the most headers on it; between equals,
+the first header of a new page is the table still open from the page
+before, otherwise the next table of the template that has not started yet
+(tables are taught in the order they are printed). The rows of all
+transaction tables make **one** statement, in page order;
+``TemplateOutcome.row_tables`` says which table each row came from. Printed
+running balances are checked row by row only when one table gave the rows.
+
+**Continued tables.** A table with ``continues`` stays open over a page
+break: on the next page its rows are read with the column spans of the last
+header found, from the first line whose date column holds a date (a
+holdings table: the first line that is a row), until its ``end`` text or
+the header of another table. Teach an ``end`` text with it: without one it
+runs to the end of the document, and a dated line further down is a row or
+is counted as skipped.
+
+**Direction** applies to an ``amount`` column only (``debit`` and
+``credit`` columns say it themselves). ``as_printed``: the figure with its
+printed sign. ``money_in``: the same (an unsigned figure is money in, a
+printed minus or bracket takes it back). ``money_out``: an unsigned figure
+is spending; a printed minus or bracket flips it back, so a refund in a
+withdrawals table is money in. ``card``: the printed sign negated (charges
+printed positive are spending). A printed ``CR`` or ``DR`` decides in every
+direction but ``as_printed``. When every transaction table is a ``card``
+table the statement's balances are amounts owed and are negated too
+(:func:`owed_balances`), the ledger convention the card parser follows:
+only so can the printed figures reconcile with the negated rows.
+
+**Dates** are read as numbers in the order the rows settle, ISO, or with a
+month name, with or without a year. A date without its year takes it from
+the statement period the anchors (or the person) gave; without a period
+such rows are counted as skipped, no statement is read from them, and the
+outcome warns ``dates_without_year``.
+
+The rows are reconciled like any parser's
 (:mod:`app.ingestion.reconcile`, ``reconcile_investment``) and scored with
 the generic confidences (:mod:`app.ingestion.parsers.confidence`), so a
 template that misreads a statement is held back exactly as a parser's
@@ -71,6 +115,7 @@ from app.ingestion.parsers.table_statement import page_heads
 from app.ingestion.parsers.text import (
     DateStyle,
     guess_numeric_style,
+    month_day,
     numeric_parts,
     read_amount,
     read_date,
@@ -90,14 +135,17 @@ from app.ingestion.sandbox.protocol import (
 
 SCHEMA_VERSION: Final = 1
 PARSER_NAME: Final = "layout_template"
-PARSER_VERSION: Final = "4"
+PARSER_VERSION: Final = "5"
 TEMPLATE_REF: Final = ParserRef(name=PARSER_NAME, version=PARSER_VERSION, kind="statement")
 
 MAX_LABEL: Final = 120
 MAX_HEADER: Final = 64
 MAX_NOTE: Final = 500
 MAX_FIELDS: Final = 12
-MAX_TABLES: Final = 2
+#: Transaction tables one layout may hold (deposits, withdrawals, cheques, fees).
+MAX_TRANSACTION_TABLES: Final = 4
+#: The transaction tables and one holdings table.
+MAX_TABLES: Final = MAX_TRANSACTION_TABLES + 1
 MAX_COLUMNS: Final = 20
 MAX_IGNORED: Final = 20
 MAX_NOTES: Final = 20
@@ -126,6 +174,8 @@ ANCHOR_FIELDS: Final[tuple[AnchorField, ...]] = (
 )
 Direction = Literal["right", "below", "band"]
 TableKind = Literal["transactions", "holdings"]
+#: What a single ``amount`` column of a transaction table means (module doc).
+AmountDirection = Literal["as_printed", "money_in", "money_out", "card"]
 TransactionRole = Literal["date", "payee", "memo", "amount", "debit", "credit", "balance"]
 HoldingRole = Literal["symbol", "security", "quantity", "price", "market_value", "cost_basis"]
 ColumnRole = Literal[
@@ -242,6 +292,11 @@ class TableTemplate(_Strict):
     columns: list[TableColumn] = Field(min_length=2, max_length=MAX_COLUMNS)
     #: Text of the line that ends the table (``Total``, ``Ending balance``).
     end: Label | None = None
+    #: What the ``amount`` column means. Defaulted, like ``continues``: a
+    #: template stored before the field existed reads as it did.
+    direction: AmountDirection = "as_printed"
+    #: The table runs on over later pages that do not repeat its header.
+    continues: bool = False
 
     @field_validator("end")
     @classmethod
@@ -289,8 +344,10 @@ class LayoutTemplate(_Strict):
     @model_validator(mode="after")
     def _check(self) -> LayoutTemplate:
         kinds = [t.kind for t in self.tables]
-        if len(kinds) != len(set(kinds)):
-            raise ValueError("one table of each kind")
+        if kinds.count("transactions") > MAX_TRANSACTION_TABLES:
+            raise ValueError(f"at most {MAX_TRANSACTION_TABLES} transaction tables")
+        if kinds.count("holdings") > 1:
+            raise ValueError("one holdings table")
         return self
 
     @property
@@ -313,7 +370,8 @@ def merge_templates(
 ) -> tuple[LayoutTemplate, list[str]]:
     """``later`` taught on top of ``earlier`` (the same layout taught again).
 
-    What was taught again wins (an anchor per field, a table per kind); the
+    What was taught again wins (an anchor per field, the tables of a kind:
+    transaction tables taught again replace all the earlier ones); the
     rest of ``earlier`` is kept, ignored lines and notes are added to. The
     second value names what was kept from ``earlier`` (field names and
     ``table:<kind>``), so the person can be told.
@@ -819,6 +877,10 @@ class _Row:
     bbox: BBox
     cells: dict[str, list[Word]]
     extra: list[str] = field(default_factory=list)
+    #: Index of the row's table in the template.
+    table: int = 0
+    #: Index of the row's line in the view (page order across tables).
+    line: int = 0
 
 
 @dataclass
@@ -864,33 +926,92 @@ def _close_below(row: _Row, line: ViewLine) -> bool:
     return line.page == row.page and line.bbox[1] - row.bbox[3] <= height * 1.5
 
 
-def read_table(view: DocumentView, table: TableTemplate, ignore: Sequence[str] = ()) -> TableRead:
-    """The rows of ``table`` in ``view`` (module doc)."""
-    out = TableRead()
+def _headed(table: TableTemplate) -> int:
+    return sum(1 for column in table.columns if column.header)
+
+
+def _header_hit(
+    line: ViewLine,
+    tables: Sequence[TableTemplate],
+    reads: Sequence[TableRead],
+    carried: int | None,
+    recent: int | None,
+) -> tuple[int, list[_Span]] | None:
+    """The table ``line`` is the header of, with its column spans (module doc).
+
+    ``carried``: the table still open from the page before, while no header
+    was seen on this page; ``recent``: the table whose header was seen last.
+    """
+    hits: dict[int, list[_Span]] = {}
+    for index, table in enumerate(tables):
+        spans = _header_spans(line, table)
+        if spans is not None:
+            hits[index] = spans
+    if not hits:
+        return None
+    most = max(_headed(tables[index]) for index in hits)
+    equal = [index for index in hits if _headed(tables[index]) == most]
+    if carried is not None and carried in equal:
+        chosen = carried
+    elif len(equal) == 1:
+        chosen = equal[0]
+    else:
+        fresh = [index for index in equal if not reads[index].found]
+        later = [index for index in equal if recent is not None and index > recent]
+        chosen = fresh[0] if fresh else (later[0] if later else equal[0])
+    return chosen, hits[chosen]
+
+
+def read_tables(
+    view: DocumentView, tables: Sequence[TableTemplate], ignore: Sequence[str] = ()
+) -> list[TableRead]:
+    """The rows of every one of ``tables`` in ``view``, read in one pass (module doc)."""
+    reads = [TableRead() for _ in tables]
+    current: int | None = None
     spans: list[_Span] | None = None
-    page = 0
     last: _Row | None = None
-    for line in view.lines:
+    #: The open table came over a page break without a header; no row of it yet.
+    waiting = False
+    carried: int | None = None
+    recent: int | None = None
+    page = 0
+    for number, line in enumerate(view.lines):
         if line.page != page:
-            page, spans, last = line.page, None, None
-        header = _header_spans(line, table)
-        if header is not None:
-            spans, last = header, None
-            out.found = True
+            page, last, carried = line.page, None, current
+            if current is not None and tables[current].continues:
+                waiting = True
+            else:
+                current, spans = None, None
+        hit = _header_hit(line, tables, reads, carried, recent)
+        if hit is not None:
+            current, spans = hit
+            last, waiting, carried, recent = None, False, None, current
+            reads[current].found = True
             continue
-        if spans is None:
+        if current is None or spans is None:
             continue
+        table, out = tables[current], reads[current]
         if table.end is not None and _has(line, table.end):
-            spans, last = None, None
+            current, spans, last, waiting = None, None, None, False
             continue
         if _ignored(line, ignore):
             continue
         cells = _assign(line, spans)
         kind = _row_kind(cells, table.kind)
+        if waiting:
+            # The page's own heading stands above the continued rows.
+            starts = (
+                _dateish(_text(cells.get("date")))
+                if table.kind == "transactions"
+                else kind == "row"
+            )
+            if not starts:
+                continue
+            waiting = False
         if kind == "row":
             if len(out.rows) >= MAX_ROWS:
                 break
-            last = _Row(line.page, line.bbox, cells)
+            last = _Row(line.page, line.bbox, cells, table=current, line=number)
             out.rows.append(last)
         elif kind == "more" and last is not None and _close_below(last, line):
             last.extra.append(
@@ -909,7 +1030,12 @@ def read_table(view: DocumentView, table: TableTemplate, ignore: Sequence[str] =
                 if len(out.skipped) < MAX_SKIPPED_REGIONS:
                     out.skipped.append((line.page, line.bbox))
             last = None
-    return out
+    return reads
+
+
+def read_table(view: DocumentView, table: TableTemplate, ignore: Sequence[str] = ()) -> TableRead:
+    """The rows of one ``table`` in ``view`` (module doc)."""
+    return read_tables(view, [table], ignore)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +1053,10 @@ class TemplateOutcome:
     warnings: list[str] = field(default_factory=list)
     #: Tables whose header was found (even without rows).
     tables_found: list[str] = field(default_factory=list)
+    #: What each table of the template read, in the template's order.
+    tables: list[TableRead] = field(default_factory=list)
+    #: For each transaction of the taught statement, the index of its table.
+    row_tables: list[int] = field(default_factory=list)
 
     @property
     def read(self) -> bool:
@@ -963,6 +1093,41 @@ def _amount(words: Sequence[Word] | None) -> Decimal | None:
     return found.value
 
 
+def _directed(words: Sequence[Word] | None, direction: AmountDirection) -> Decimal | None:
+    """An ``amount`` cell under its table's ``direction`` (module doc)."""
+    if direction == "as_printed":
+        return _amount(words)
+    text = _text(words).replace(" ", "")
+    found = read_amount(text) if text else None
+    if found is None:
+        return None
+    if found.credit is not None:
+        return abs(found.value) if found.credit else -abs(found.value)
+    return found.value if direction == "money_in" else -found.value
+
+
+def owed_balances(template: LayoutTemplate) -> bool:
+    """Whether the layout's balances are amounts owed (every transaction table is a card's).
+
+    Such balances are negated when the statement is built, like the rows
+    (module doc); :func:`fill_statement` is told with ``owed``.
+    """
+    directions = [t.direction for t in template.tables if t.kind == "transactions"]
+    return bool(directions) and all(d == "card" for d in directions)
+
+
+#: Month-name styles without a year, as the generic reader has them.
+NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
+
+
+def _yearless(text: str) -> bool:
+    """A date cell printed without its year (``03/14``, ``Mar 14``, ``14 Mar``)."""
+    parts = numeric_parts(text)
+    if parts is not None:
+        return parts[2] is None
+    return any(month_day(text, style) is not None for style in NAMED_YEARLESS)
+
+
 def _styles(texts: Iterable[str]) -> tuple[list[DateStyle], bool]:
     texts = [t for t in texts if t]
     numeric = [t for t in texts if numeric_parts(t) is not None]
@@ -974,6 +1139,8 @@ def _styles(texts: Iterable[str]) -> tuple[list[DateStyle], bool]:
         if yearless:
             styles.append("md" if style == "mdy" else "dm")
     styles.extend(s for s in ("ymd", "d_mon_y", "mon_d_y") if s not in styles)
+    # Last: a cell with its year is read with it before a window is asked.
+    styles.extend(NAMED_YEARLESS)
     return styles, certain or not numeric
 
 
@@ -1001,24 +1168,34 @@ def _account(fields: dict[str, FieldRead]) -> StatementAccount:
 
 def _transactions(
     view: DocumentView,
-    read: TableRead,
+    template: LayoutTemplate,
+    read: Sequence[_Row],
     fields: dict[str, FieldRead],
     threshold: float,
     outcome: TemplateOutcome,
 ) -> Statement | None:
+    """One statement from the rows of the transaction tables, in page order."""
     period = _period(fields)
-    styles, certain = _styles(_text(r.cells.get("date")) for r in read.rows)
+    styles, certain = _styles(_text(r.cells.get("date")) for r in read)
     rows: list[ExtractedTransaction] = []
+    sources: list[int] = []
     scores: list[dict[str, float]] = []
     ledger: list[Row] = []
-    for row in read.rows:
+    # Balances owed (a card's) are negative in the ledger, like its rows.
+    owed = owed_balances(template)
+    # A running balance is checked row by row inside one table only.
+    several = len({row.table for row in read}) > 1
+    undated = False
+    for row in read:
         text = _text(row.cells.get("date"))
         posted: date | None = None
         for style in styles:
             posted = read_date(text, style, window=period)
             if posted is not None:
                 break
-        amount = _amount(row.cells.get("amount"))
+        if posted is None and period is None and _yearless(text):
+            undated = True
+        amount = _directed(row.cells.get("amount"), template.tables[row.table].direction)
         if amount is None:
             debit, credit = _amount(row.cells.get("debit")), _amount(row.cells.get("credit"))
             if debit is not None or credit is not None:
@@ -1040,7 +1217,9 @@ def _transactions(
         if period is not None and not period[0] <= posted <= period[1]:
             score["posted_date"] = min(score["posted_date"], conf.INFERRED)
         scores.append(score)
-        ledger.append(Row(amount, _amount(row.cells.get("balance"))))
+        kept = None if several else _amount(row.cells.get("balance"))
+        ledger.append(Row(amount, -kept if owed and kept is not None else kept))
+        sources.append(row.table)
         rows.append(
             ExtractedTransaction(
                 posted=posted,
@@ -1051,10 +1230,16 @@ def _transactions(
                 bbox=row.bbox,
             )
         )
+    if undated and "dates_without_year" not in outcome.warnings:
+        outcome.warnings.append("dates_without_year")
     if not rows:
         return None
+    outcome.row_tables = sources
     opening = _decimal(fields["opening_balance"].value) if "opening_balance" in fields else None
     closing = _decimal(fields["closing_balance"].value) if "closing_balance" in fields else None
+    if owed:
+        opening = -opening if opening is not None else None
+        closing = -closing if closing is not None else None
     statement_conf: dict[str, float] = {
         "opening_balance": conf.GENERIC if opening is not None else conf.MISSING,
         "closing_balance": conf.GENERIC if closing is not None else conf.MISSING,
@@ -1181,23 +1366,28 @@ def read_template(
     """Read ``view`` with ``template``: its anchors, then its labelled tables (module doc).
 
     ``given`` are values a person selected or typed on this very document;
-    they win over what the anchors read.
+    they win over what the anchors read. The rows of all transaction tables
+    make one statement, in page order (``row_tables``: each row's table).
     """
     outcome = TemplateOutcome(fields={**read_fields(view, template), **(given or {})})
-    for table in template.tables:
-        read = read_table(view, table, template.ignore)
+    outcome.tables = read_tables(view, template.tables, template.ignore)
+    ledger: list[_Row] = []
+    for table, read in zip(template.tables, outcome.tables, strict=True):
         if read.found:
             outcome.tables_found.append(table.kind)
         outcome.skipped_lines += read.skipped_count
         outcome.skipped.extend(read.skipped[: MAX_SKIPPED_REGIONS - len(outcome.skipped)])
         if table.kind == "transactions":
-            statement = _transactions(view, read, outcome.fields, threshold, outcome)
-            if statement is not None:
-                outcome.statements.append(statement)
+            ledger.extend(read.rows)
         else:
             holdings = _holdings(view, read, outcome.fields, threshold)
             if holdings is not None:
                 outcome.investments.append(holdings)
+    if ledger:
+        ledger.sort(key=lambda row: row.line)
+        statement = _transactions(view, template, ledger, outcome.fields, threshold, outcome)
+        if statement is not None:
+            outcome.statements.append(statement)
     for name in (
         "period_start",
         "period_end",
@@ -1211,12 +1401,15 @@ def read_template(
 
 
 def fill_statement(
-    statement: Statement, fields: dict[str, FieldRead], *, single: bool
+    statement: Statement, fields: dict[str, FieldRead], *, single: bool, owed: bool = False
 ) -> Statement:
     """A parser's ``statement`` with the anchors' values.
 
     The period always; the account and balances only for a document's
-    ``single`` statement (they belong to one account).
+    ``single`` statement (they belong to one account). ``owed``: the
+    balances are amounts owed and are negated (:func:`owed_balances`; pass
+    it when ``statement`` was read by a card layout's own tables, whose
+    rows and balances are already in the ledger convention).
     """
     update: dict[str, Any] = {}
     confidence = dict(statement.confidence)
@@ -1236,6 +1429,9 @@ def fill_statement(
         end = period[1] if period else statement.period_end
         opening = _decimal(fields["opening_balance"].value) if "opening_balance" in fields else None
         closing = _decimal(fields["closing_balance"].value) if "closing_balance" in fields else None
+        if owed:
+            opening = -opening if opening is not None else None
+            closing = -closing if closing is not None else None
         if opening is not None:
             update["opening_balance"] = Balance(amount=opening, as_of=start)
             confidence["opening_balance"] = conf.GENERIC

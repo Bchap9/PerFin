@@ -16,6 +16,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers import template as template_module
 from app.ingestion.parsers.base import DocumentView
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.template import (
@@ -31,9 +33,11 @@ from app.ingestion.parsers.template import (
     read_anchor,
     read_template,
     read_value,
+    rebalance,
     table_from_selection,
 )
-from app.ingestion.sandbox.protocol import ExtractResult
+from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from tests.fixtures import synth_taught_layout as synth
 
 Line = tuple[float, list[tuple[float, str]]]
 
@@ -357,3 +361,425 @@ def test_the_registry_applies_a_learned_layout_and_a_parser_statement_is_filled(
     assert plain.statements == []
     assert plain.parse is not None
     assert "no_parser" in plain.parse.warnings
+
+
+# ---------------------------------------------------------------------------
+# Import 1d: a direction per table, several tables, continued pages, month names
+# ---------------------------------------------------------------------------
+
+
+def _pdf_view(data: bytes) -> DocumentView:
+    result = extract_pdf(data, ExtractOptions(previews=False, ocr=False), "pdf")
+    assert result.ok, result.error
+    return DocumentView.from_result(result)
+
+
+def _hand_view(*pages: list[Line]) -> DocumentView:
+    built = [_page(number, lines) for number, lines in enumerate(pages, start=1)]
+    return DocumentView.from_result(
+        ExtractResult.model_validate({"kind": "pdf", "ok": True, "pages": built})
+    )
+
+
+def _anchors(opening: str = "Carried in", closing: str = "Carried out") -> list[FieldAnchor]:
+    return [
+        FieldAnchor(field="account_number", direction="right", label="Member key"),
+        FieldAnchor(field="period_start", direction="below", label="Window"),
+        FieldAnchor(field="period_end", direction="below", label="Window"),
+        FieldAnchor(field="opening_balance", direction="right", label=opening),
+        FieldAnchor(field="closing_balance", direction="right", label=closing),
+    ]
+
+
+def _ledger(**more: Any) -> TableTemplate:
+    return TableTemplate(
+        kind="transactions",
+        columns=[
+            TableColumn(header="Booked", role="date"),
+            TableColumn(header="Narrative", role="payee"),
+            TableColumn(header="Movement", role="amount"),
+            TableColumn(header="Kept", role="balance"),
+        ],
+        **more,
+    )
+
+
+def _movements(end: str, direction: str) -> TableTemplate:
+    return TableTemplate.model_validate(
+        {
+            "kind": "transactions",
+            "columns": [
+                {"header": "Booked", "role": "date"},
+                {"header": "Narrative", "role": "payee"},
+                {"header": "Movement", "role": "amount"},
+            ],
+            "end": end,
+            "direction": direction,
+        }
+    )
+
+
+def _read(view: DocumentView, template: LayoutTemplate) -> list[tuple[date, Decimal, str | None]]:
+    taught = read_template(view, template, threshold=0.85)
+    assert len(taught.statements) == 1, taught.warnings
+    return [(t.posted, t.amount, t.payee) for t in taught.statements[0].transactions]
+
+
+#: A template as ``parser_fingerprint.template`` holds it since the first release.
+STORED_V1: dict[str, Any] = {
+    "version": 1,
+    "fields": [
+        {"field": "account_number", "direction": "right", "label": "Holder ref"},
+        {"field": "period_start", "direction": "below", "label": "Span"},
+        {"field": "period_end", "direction": "below", "label": "Span"},
+        {"field": "opening_balance", "direction": "right", "label": "Brought in"},
+    ],
+    "tables": [
+        {
+            "kind": "transactions",
+            "columns": [
+                {"header": "Posted", "role": "date"},
+                {"header": "Detail", "role": "payee"},
+                {"header": "Change", "role": "amount"},
+                {"header": "Kept", "role": "balance"},
+            ],
+            "end": "Close of ledger",
+        }
+    ],
+    "ignore": [],
+    "notes": [],
+}
+
+
+def test_stored_templates_without_the_new_fields_still_parse() -> None:
+    stored = parse_template(STORED_V1)
+    assert stored is not None
+    assert stored.version == 1
+    assert stored.tables[0].direction == "as_printed"
+    assert stored.tables[0].continues is False
+    # It reads what it read before: signed amounts as printed, a table per page header.
+    assert _read(DocumentView.from_result(_result(ROWS)), stored) == [
+        (date(2026, 3, 2), Decimal("-10.00"), "Corner Shop"),
+        (date(2026, 3, 5), Decimal("50.00"), "Wage Payment"),
+        (date(2026, 3, 9), Decimal("-5.50"), "Book Stall"),
+        (date(2026, 3, 20), Decimal("-4.50"), "Rail Pass"),
+    ]
+
+
+def test_two_transaction_tables_with_directions_reconcile() -> None:
+    spec = synth.split_statement()
+    view = _pdf_view(synth.two_tables_statement())
+    template = LayoutTemplate(
+        fields=_anchors(),
+        tables=[
+            _movements("Received in all", "money_in"),
+            _movements("Sent in all", "money_out"),
+        ],
+    )
+    taught = read_template(view, template, threshold=0.85)
+    assert len(taught.statements) == 1
+    statement = taught.statements[0]
+    # One statement, the rows of both tables in page order; the second table is money out.
+    assert [(t.posted, t.amount, t.payee) for t in statement.transactions] == [
+        (r.day, r.amount, r.narrative) for r in spec.rows
+    ]
+    assert all(t.amount < 0 for t in statement.transactions[len(spec.received) :])
+    assert taught.row_tables == [0] * len(spec.received) + [1] * len(spec.sent)
+    assert [len(read.rows) for read in taught.tables] == [len(spec.received), len(spec.sent)]
+    assert taught.skipped_lines == 0
+    assert statement.account.last4 == spec.last4
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    checked = rebalance(statement).reconciliation
+    assert checked is not None
+    assert checked.status == "ok"
+
+    # Both tables as printed: every row is money in, and the statement does not add up.
+    printed = LayoutTemplate(
+        fields=_anchors(),
+        tables=[
+            _movements("Received in all", "as_printed"),
+            _movements("Sent in all", "as_printed"),
+        ],
+    )
+    wrong = read_template(view, printed, threshold=0.85).statements[0]
+    assert all(t.amount > 0 for t in wrong.transactions)
+    assert wrong.reconciliation is not None
+    assert wrong.reconciliation.status == "mismatch"
+
+
+def _three(y: float, day: str, payee: str, *amount: str) -> Line:
+    return (
+        y,
+        [(60.0, day), (160.0, payee), *((400.0 + 50.0 * i, a) for i, a in enumerate(amount))],
+    )
+
+
+THREE: Line = (200.0, [(60.0, "Posted"), (160.0, "Detail"), (400.0, "Change")])
+
+
+def _change(direction: str) -> LayoutTemplate:
+    return LayoutTemplate(
+        tables=[
+            TableTemplate.model_validate(
+                {
+                    "kind": "transactions",
+                    "columns": [
+                        {"header": "Posted", "role": "date"},
+                        {"header": "Detail", "role": "payee"},
+                        {"header": "Change", "role": "amount"},
+                    ],
+                    "direction": direction,
+                }
+            )
+        ]
+    )
+
+
+def test_a_printed_minus_in_a_money_out_table_is_money_in() -> None:
+    view = _hand_view(
+        [
+            THREE,
+            _three(220.0, "2026-03-02", "Shop", "12.00"),
+            _three(235.0, "2026-03-05", "Refund", "-3.00"),
+            _three(250.0, "2026-03-09", "Reversal", "(4.00)"),
+            _three(265.0, "2026-03-11", "Marked", "6.00", "CR"),
+            _three(280.0, "2026-03-12", "Owing", "7.00", "DR"),
+        ]
+    )
+    amounts = {
+        direction: [amount for _, amount, _ in _read(view, _change(direction))]
+        for direction in ("as_printed", "money_in", "money_out", "card")
+    }
+    printed = [Decimal(v) for v in ("12.00", "-3.00", "-4.00", "6.00", "-7.00")]
+    assert amounts["as_printed"] == printed
+    # Money in is what an unsigned figure already means; a printed minus takes it back.
+    assert amounts["money_in"] == printed
+    # Money out: an unsigned figure is spending, a printed minus or bracket is
+    # money in (a refund); a printed CR or DR says which way on its own.
+    out = [Decimal(v) for v in ("-12.00", "3.00", "4.00", "6.00", "-7.00")]
+    assert amounts["money_out"] == out
+    assert amounts["card"] == out
+
+
+def test_a_direction_leaves_debit_and_credit_columns_alone() -> None:
+    header: Line = (200.0, [(60.0, "Posted"), (160.0, "Detail"), (400.0, "Paid"), (490.0, "Got")])
+    view = _hand_view(
+        [
+            header,
+            (220.0, [(60.0, "2026-03-02"), (160.0, "Shop"), (400.0, "5.00")]),
+            (235.0, [(60.0, "2026-03-05"), (160.0, "Wage"), (490.0, "7.00")]),
+        ]
+    )
+    columns = [
+        {"header": "Posted", "role": "date"},
+        {"header": "Detail", "role": "payee"},
+        {"header": "Paid", "role": "debit"},
+        {"header": "Got", "role": "credit"},
+    ]
+    for direction in ("as_printed", "money_in", "money_out", "card"):
+        table = TableTemplate.model_validate(
+            {"kind": "transactions", "columns": columns, "direction": direction}
+        )
+        read = _read(view, LayoutTemplate(tables=[table]))
+        assert [amount for _, amount, _ in read] == [Decimal("-5.00"), Decimal("7.00")], direction
+
+
+def test_card_direction_negates() -> None:
+    spec = synth.card_statement()
+    view = _pdf_view(synth.card_positive_charges_statement())
+
+    def taught(direction: str) -> LayoutTemplate:
+        return LayoutTemplate(
+            fields=_anchors("Owed before", "Owed now"),
+            tables=[
+                TableTemplate.model_validate(
+                    {
+                        "kind": "transactions",
+                        "columns": [
+                            {"header": "Booked", "role": "date"},
+                            {"header": "Narrative", "role": "payee"},
+                            {"header": "Charged", "role": "amount"},
+                        ],
+                        "end": "End of charges",
+                        "direction": direction,
+                    }
+                )
+            ],
+        )
+
+    statement = read_template(view, taught("card"), threshold=0.85).statements[0]
+    # Charges printed positive are spending; the payment and the refund are money in.
+    assert [(t.posted, t.amount, t.payee) for t in statement.transactions] == [
+        (r.day, r.amount, r.narrative) for r in spec.rows
+    ]
+    # The balances of a card are amounts owed: negative in the ledger, like the rows.
+    assert statement.opening_balance is not None
+    assert statement.ledger_balance is not None
+    assert statement.opening_balance.amount == -spec.owed_before
+    assert statement.ledger_balance.amount == -spec.owed_now
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    # Any other direction keeps the balances as they are printed.
+    plain = read_template(view, taught("as_printed"), threshold=0.85).statements[0]
+    assert plain.opening_balance is not None
+    assert plain.opening_balance.amount == spec.owed_before
+
+
+def test_table_continues_on_a_page_without_its_header() -> None:
+    spec = synth.continued_statement()
+    view = _pdf_view(synth.continued_table_statement())
+    assert len(spec.rows) == 30
+
+    continued = LayoutTemplate(
+        fields=_anchors(), tables=[_ledger(end="End of ledger", continues=True)]
+    )
+    taught = read_template(view, continued, threshold=0.85)
+    statement = taught.statements[0]
+    assert [(t.posted, t.amount, t.payee) for t in statement.transactions] == synth.expected(spec)
+    assert [t.page for t in statement.transactions].count(2) == 30 - synth.CONTINUED_FIRST_SHEET
+    assert taught.skipped_lines == 0
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+    # Not told that it continues: the rows of the sheet with the header, as before.
+    single = LayoutTemplate(fields=_anchors(), tables=[_ledger(end="End of ledger")])
+    assert _read(view, single) == synth.expected(spec)[: synth.CONTINUED_FIRST_SHEET]
+
+
+def test_a_continued_table_stops_at_its_end_text() -> None:
+    spec = synth.continued_statement()
+    view = _pdf_view(synth.continued_table_statement())
+    ended = LayoutTemplate(fields=_anchors(), tables=[_ledger(end="End of ledger", continues=True)])
+    payees = [payee for _, _, payee in _read(view, ended)]
+    assert len(payees) == len(spec.rows)
+    assert synth.CONTINUED_NOTICE not in payees
+    # The end text is what stops it: without one, the dated notice under the
+    # ledger is read as a row (and the statement no longer adds up).
+    endless = LayoutTemplate(fields=_anchors(), tables=[_ledger(continues=True)])
+    statement = read_template(view, endless, threshold=0.85).statements[0]
+    assert statement.transactions[-1].payee == synth.CONTINUED_NOTICE
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "mismatch"
+
+
+def test_a_continued_table_stops_at_the_header_of_another_table() -> None:
+    other: Line = (300.0, [(60.0, "Dated"), (160.0, "Reason"), (400.0, "Fee")])
+    view = _hand_view(
+        [THREE, _three(220.0, "2026-03-02", "Shop", "-12.00")],
+        [
+            (40.0, [(60.0, "Invented"), (120.0, "Ledger"), (180.0, "Society")]),
+            # No date in the date column: not yet the table.
+            (60.0, [(60.0, "Sheet"), (100.0, "two"), (400.0, "9.99")]),
+            _three(220.0, "2026-03-05", "Wage", "50.00"),
+            other,
+            _three(320.0, "2026-03-09", "Upkeep", "2.50"),
+        ],
+    )
+    first = _change("as_printed").tables[0].model_copy(update={"continues": True})
+    second = TableTemplate.model_validate(
+        {
+            "kind": "transactions",
+            "columns": [
+                {"header": "Dated", "role": "date"},
+                {"header": "Reason", "role": "payee"},
+                {"header": "Fee", "role": "amount"},
+            ],
+            "direction": "money_out",
+        }
+    )
+    taught = read_template(view, LayoutTemplate(tables=[first, second]), threshold=0.85)
+    assert [(t.amount, t.payee) for t in taught.statements[0].transactions] == [
+        (Decimal("-12.00"), "Shop"),
+        (Decimal("50.00"), "Wage"),
+        (Decimal("-2.50"), "Upkeep"),
+    ]
+    assert taught.row_tables == [0, 0, 1]
+    assert taught.skipped_lines == 0
+
+
+def test_a_repeated_header_on_the_next_page_continues_the_open_table() -> None:
+    """Two tables under the same headers: the header on a new page is the open table's."""
+    view = _hand_view(
+        [
+            THREE,
+            _three(220.0, "2026-03-02", "Wage", "50.00"),
+            (235.0, [(60.0, "Sum"), (90.0, "in")]),
+            (260.0, [(60.0, "Posted"), (160.0, "Detail"), (400.0, "Change")]),
+            _three(280.0, "2026-03-05", "Shop", "12.00"),
+        ],
+        [THREE, _three(220.0, "2026-03-09", "Stall", "4.00")],
+    )
+    tables = [
+        _change("money_in").tables[0].model_copy(update={"end": "Sum in"}),
+        _change("money_out").tables[0].model_copy(update={"end": "Sum out"}),
+    ]
+    taught = read_template(view, LayoutTemplate(tables=tables), threshold=0.85)
+    assert [t.amount for t in taught.statements[0].transactions] == [
+        Decimal("50.00"),
+        Decimal("-12.00"),
+        Decimal("-4.00"),
+    ]
+    assert taught.row_tables == [0, 1, 1]
+
+
+def test_month_name_dates_take_the_period_year() -> None:
+    spec = synth.month_name_statement()
+    assert {r.day.year for r in spec.rows} == {2025, 2026}
+    template = LayoutTemplate(fields=_anchors(), tables=[_ledger(end="End of ledger")])
+    taught = read_template(_pdf_view(synth.month_name_rows_statement()), template, threshold=0.85)
+    statement = taught.statements[0]
+    assert [(t.posted, t.amount, t.payee) for t in statement.transactions] == synth.expected(spec)
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert "dates_without_year" not in taught.warnings
+
+
+def test_month_name_dates_without_a_period_read_no_rows() -> None:
+    spec = synth.month_name_statement()
+    template = LayoutTemplate(fields=_anchors(), tables=[_ledger(end="End of ledger")])
+    taught = read_template(
+        _pdf_view(synth.month_name_rows_statement(period=False)), template, threshold=0.85
+    )
+    assert taught.statements == []
+    assert not taught.read
+    assert taught.skipped_lines == len(spec.rows)
+    assert taught.warnings.count("dates_without_year") == 1
+
+
+def test_five_transaction_tables_are_refused() -> None:
+    def table(header: str) -> TableTemplate:
+        return TableTemplate(
+            kind="transactions",
+            columns=[
+                TableColumn(header="Posted", role="date"),
+                TableColumn(header=header, role="amount"),
+            ],
+        )
+
+    names = ("Alpha", "Bravo", "Charlie", "Delta", "Echo")
+    assert template_module.MAX_TRANSACTION_TABLES == 4
+    assert template_module.MAX_TABLES == 5
+    assert len(LayoutTemplate(tables=[table(n) for n in names[:4]]).tables) == 4
+    with pytest.raises(ValidationError, match="transaction tables"):
+        LayoutTemplate(tables=[table(n) for n in names])
+    holdings = TableTemplate(
+        kind="holdings",
+        columns=[
+            TableColumn(header="Units", role="quantity"),
+            TableColumn(header="Name", role="security"),
+        ],
+    )
+    assert len(LayoutTemplate(tables=[*(table(n) for n in names[:4]), holdings]).tables) == 5
+    with pytest.raises(ValidationError, match="one holdings table"):
+        LayoutTemplate(tables=[holdings, holdings])
+    # Taught again, the new transaction tables replace the earlier ones together.
+    earlier = LayoutTemplate(tables=[table(n) for n in names[:4]])
+    merged, _ = merge_templates(earlier, LayoutTemplate(tables=[table("Echo"), holdings]))
+    assert [t.columns[1].header for t in merged.tables] == ["Echo", "Name"]
+
+
+def test_parser_version_is_5() -> None:
+    # The plan wrote "2 to 3"; the reader stood at 4 when import 1d began.
+    assert template_module.PARSER_VERSION == "5"
+    assert template_module.TEMPLATE_REF.version == "5"
