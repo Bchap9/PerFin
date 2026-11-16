@@ -266,6 +266,14 @@ export function TransactionsPage() {
       moveFocus(button);
     }
   });
+  /** A deleted row leaves the selection, so no bulk action sends it. */
+  const unselect = (id: string): void => {
+    setSelected((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
   const confirmRow = (row: Transaction): void => {
     edit.mutate(
       { id: row.id, patch: { review_state: "confirmed" } },
@@ -399,6 +407,7 @@ export function TransactionsPage() {
           label={rowLabel(row, payeeList)}
           categories={categoryList}
           ruleNames={ruleNames}
+          categoriesFailed={categories.isError}
         />
       ),
     },
@@ -729,13 +738,7 @@ export function TransactionsPage() {
           transaction={deleting}
           label={rowLabel(deleting, payeeList)}
           accountName={accountLabelOf(deleting.account_id)}
-          onDeleted={(id) => {
-            setSelected((current) => {
-              const next = new Set(current);
-              next.delete(id);
-              return next;
-            });
-          }}
+          onDeleted={unselect}
           onClose={() => {
             setDeleting(null);
           }}
@@ -752,7 +755,13 @@ export function TransactionsPage() {
         />
       )}
       {drawerId === null ? null : (
-        <TransactionDrawer key={drawerId} transactionId={drawerId} alwaysOpen={txId === null || txId === alwaysId} onClose={closeDrawer} />
+        <TransactionDrawer
+          key={drawerId}
+          transactionId={drawerId}
+          alwaysOpen={txId === null || txId === alwaysId}
+          onClose={closeDrawer}
+          onDeleted={unselect}
+        />
       )}
       {transferring === null ? null : (
         <TransferDialog

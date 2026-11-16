@@ -53,6 +53,7 @@ export function CategoryCell({
   categories,
   ruleNames,
   onCategorised,
+  categoriesFailed = false,
 }: {
   row: Transaction;
   editable: boolean;
@@ -61,6 +62,8 @@ export function CategoryCell({
   ruleNames?: ReadonlyMap<string, string> | undefined;
   /** The server accepted the suggestion for this row (the category is the person's now). */
   onCategorised?: ((row: Transaction, categoryId: string) => void) | undefined;
+  /** The category list could not be read, so a name may be missing for good. */
+  categoriesFailed?: boolean;
 }) {
   const accept = useAcceptSuggestion();
   if (row.splits.length > 0) {
@@ -105,8 +108,11 @@ export function CategoryCell({
   const name = categories.find((category) => category.id === row.category_id)?.name;
   return (
     <span className="cat-cell">
-      {row.category_id === null || name === undefined ? (
+      {row.category_id === null ? (
         <span className="cat-cell__none">Uncategorised</span>
+      ) : name === undefined ? (
+        // The names are still loading, or failed to: never call a categorised row uncategorised.
+        <span className="cat-cell__none">{categoriesFailed ? "Category not loaded" : "Category…"}</span>
       ) : (
         <Chip colourClass={categoryColourClass(row.category_id, categories)}>{name}</Chip>
       )}
@@ -174,8 +180,20 @@ export function MerchantCell({ row, payees, tags }: { row: Transaction; payees: 
 }
 
 /** The note of one row, edited in a small dialog from the row menu. Saved optimistically, rolled back on failure. */
-export function NoteDialog({ row, label, onClose }: { row: Transaction; label: string; onClose: () => void }) {
-  const edit = useEditTransaction();
+export function NoteDialog({
+  row,
+  label,
+  onClose,
+  edit: given,
+}: {
+  row: Transaction;
+  label: string;
+  onClose: () => void;
+  /** The caller's edit, so the caller can say a refusal where it is seen (the drawer is modal, over the toasts). */
+  edit?: ReturnType<typeof useEditTransaction>;
+}) {
+  const own = useEditTransaction();
+  const edit = given ?? own;
   const formId = useId();
   const [draft, setDraft] = useState(row.notes ?? "");
   const save = (): void => {

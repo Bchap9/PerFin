@@ -329,7 +329,8 @@ describe("Always categorise a merchant, from what PerFin learned", () => {
     renderApp("/transactions?always=t-1");
     const unnamed = await screen.findByRole("dialog", { name: "SQ *QUIET BEAN COFFEE 0042" });
     expect(within(unnamed).getByText(/PerFin could not tell which merchant this is/)).toBeInTheDocument();
-    expect(within(unnamed).queryByRole("checkbox")).not.toBeInTheDocument();
+    // The drawer's tag boxes are there for a member; no "Always use…" box is.
+    expect(within(unnamed).queryByRole("checkbox", { name: /^Always use/ })).not.toBeInTheDocument();
     expect(plain.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
     cleanup();
 

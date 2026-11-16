@@ -400,7 +400,7 @@ export function TransactionDialog({ transaction, defaultAccountId, onClose }: Tr
         </Field>
         {transaction?.source_document_id == null ? null : (
           <p className="ledger-muted tx-form__wide">
-            <Link to="/documents/$documentId" params={{ documentId: transaction.source_document_id }} search={{ row: transaction.id }}>
+            <Link to="/inbox/documents/$documentId" params={{ documentId: transaction.source_document_id }} search={{ row: transaction.id }}>
               Imported from a document: open it
             </Link>
             . Changes here do not change the document.

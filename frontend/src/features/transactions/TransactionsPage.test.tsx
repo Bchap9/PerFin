@@ -48,8 +48,13 @@ describe("filters in the address", () => {
     const { router } = renderApp("/transactions");
     const user = userEvent.setup();
     await screen.findByRole("row", { name: /ACME/ });
-    // The search field is the first control after the heading.
-    expect(screen.getByRole("searchbox", { name: "Search transactions" })).toBeInTheDocument();
+    // The search field is the first control of the page: nothing comes before it, under the heading or above it.
+    const main = screen.getByRole("main");
+    expect(within(main).getByRole("heading", { name: "Transactions" })).toBeInTheDocument();
+    const controls = Array.from(main.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")).filter(
+      (element) => element.tabIndex >= 0,
+    );
+    expect(controls[0]).toBe(screen.getByRole("searchbox", { name: "Search transactions" }));
     await user.selectOptions(screen.getByLabelText("Account"), "a-1");
     await waitFor(() => {
       expect(currentHref(router)).toBe("/transactions?account=a-1");
@@ -418,6 +423,27 @@ describe("transactions grid", () => {
     expect(screen.queryByRole("button", { name: /Accept/ })).not.toBeInTheDocument();
   });
 
+  it("the row menu's Change category… opens the drawer", async () => {
+    setup();
+    const { router } = renderApp("/transactions?account=a-1");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Actions for ACME" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for ACME" })).getByRole("menuitem", { name: "Change category…" }));
+    expect(await screen.findByRole("dialog", { name: "ACME" })).toBeInTheDocument();
+    expect(currentHref(router)).toBe("/transactions?account=a-1&tx=x-2");
+  });
+
+  it("a category whose name did not load is not called Uncategorised", async () => {
+    const api = setup();
+    api.on("GET /api/v1/categories", () => problem(500, "internal"));
+    renderApp("/transactions");
+    const row = await screen.findByRole("row", { name: /Corner Market/ });
+    expect(within(row).queryByText("Uncategorised")).not.toBeInTheDocument();
+    expect(within(row).getByText("Category not loaded")).toBeInTheDocument();
+    // A row with no category still says so.
+    expect(within(screen.getByRole("row", { name: /ACME/ })).getByText("Uncategorised")).toBeInTheDocument();
+  });
+
   it("has no axe violations", async () => {
     setup("owner", [
       tx("x-1", { category_source: "dictionary", category_confidence: "0.90", status: "pending" }),
@@ -507,7 +533,7 @@ describe("rows of one file or one subscription", () => {
     await user.click(await screen.findByRole("button", { name: "Actions for Corner Market" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Corner Market" })).getByRole("menuitem", { name: "Edit" }));
     const dialog = within(await screen.findByRole("dialog"));
-    expect(dialog.getByRole("link", { name: "Imported from a document: open it" })).toHaveAttribute("href", "/documents/d-7?row=x-1");
+    expect(dialog.getByRole("link", { name: "Imported from a document: open it" })).toHaveAttribute("href", "/inbox/documents/d-7?row=x-1");
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
     // A row typed by hand came from no file.
     await user.click(screen.getByRole("button", { name: "Actions for ACME" }));

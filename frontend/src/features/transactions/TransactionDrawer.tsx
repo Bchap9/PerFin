@@ -21,6 +21,7 @@ import { useState } from "react";
 
 import { Button } from "../../components/Button";
 import { CategoryPicker } from "../../components/CategoryPicker";
+import { Checkbox } from "../../components/Checkbox";
 import { Chip } from "../../components/Chip";
 import { Drawer } from "../../components/Drawer";
 import { Field } from "../../components/Field";
@@ -38,6 +39,7 @@ import {
   useCategories,
   usePayees,
   useRuleNames,
+  useTags,
   type Category,
   type Transaction,
   type TransactionPage,
@@ -55,6 +57,8 @@ export interface TransactionDrawerProps {
   /** Opened from `?always=`: the "Always use…" box starts ticked. */
   alwaysOpen?: boolean;
   onClose: () => void;
+  /** The row was deleted from the drawer (the page drops it from its selection). */
+  onDeleted?: (id: string) => void;
 }
 
 /** "Merchant list, 90%": who or what decided the category, and how sure a guess is. */
@@ -67,6 +71,9 @@ export function decidedBy(row: Transaction, ruleNames: ReadonlyMap<string, strin
   const parts = [suggestion ? "Suggestion" : null, source, confidence].filter((part): part is string => part !== null);
   if (parts.length > 0) {
     return parts.join(", ");
+  }
+  if (row.splits.length > 0) {
+    return "Split: each line has its own category";
   }
   return row.category_id === null ? "Nobody yet" : "Not recorded";
 }
@@ -98,7 +105,7 @@ function fromGrid(queryClient: ReturnType<typeof useQueryClient>, id: string): T
 
 type Open = "edit" | "split" | "transfer" | "note" | "delete" | "category" | null;
 
-export function TransactionDrawer({ transactionId, alwaysOpen = false, onClose }: TransactionDrawerProps) {
+export function TransactionDrawer({ transactionId, alwaysOpen = false, onClose, onDeleted }: TransactionDrawerProps) {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: txKeys.one(transactionId),
@@ -112,7 +119,14 @@ export function TransactionDrawer({ transactionId, alwaysOpen = false, onClose }
   return (
     <Drawer open onClose={onClose} title={name}>
       {row !== undefined ? (
-        <DrawerBody row={row} alwaysOpen={alwaysOpen} onClose={onClose} />
+        <DrawerBody
+          row={row}
+          alwaysOpen={alwaysOpen}
+          onDeleted={(id) => {
+            onDeleted?.(id);
+            onClose();
+          }}
+        />
       ) : query.isError ? (
         <p role="alert" className="ledger-error">
           {errorMessage(query.error)}
@@ -124,17 +138,37 @@ export function TransactionDrawer({ transactionId, alwaysOpen = false, onClose }
   );
 }
 
-/** What a category change was, for its undo. */
+/**
+ * What a category change was, and how the row's category was decided before
+ * it. The API can only record a category as the person's choice, so only a
+ * choice the person had made before is put back exactly ("Undo"). A guess or a
+ * rule's category can be chosen again, which makes it the person's; a
+ * suggestion, or a row nobody had decided, cannot be put back at all.
+ */
 interface Change {
   from: string | null;
   to: string | null;
+  /** The person had chosen `from` themselves. */
+  theirs: boolean;
+  /** How `from` was decided, in words ("Merchant list, 90%"). */
+  fromDecidedBy: string;
+  /** The suggestion the row carried, which a choice ends. */
+  suggestion: string | null;
 }
 
-function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen: boolean; onClose: () => void }) {
+interface DrawerBodyProps {
+  row: Transaction;
+  alwaysOpen: boolean;
+  /** The row was deleted: the drawer closes. */
+  onDeleted: (id: string) => void;
+}
+
+function DrawerBody({ row, alwaysOpen, onDeleted }: DrawerBodyProps) {
   const canWrite = useCanWrite();
   const accounts = useAccounts();
   const categories = useCategories();
   const payees = usePayees();
+  const tags = useTags();
   const ruleNames = useRuleNames(row.category_source === "rule" && row.category_rule_id != null);
   const edit = useEditTransaction();
   const accept = useAcceptSuggestion();
@@ -148,6 +182,8 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
   const editable = canWrite && account?.can_edit === true;
   const label = rowLabel(row, payeeList);
   const categoryName = (id: string | null): string => (id === null ? "no category" : (categoryList.find((category) => category.id === id)?.name ?? "the category it had"));
+  const tagList = tags.data ?? [];
+  const tagNames = row.tag_ids.map((id) => tagList.find((tag) => tag.id === id)?.name).filter((tag): tag is string => tag !== undefined);
   const suggested = isSuggestion(row) ? categoryList.find((category) => category.id === row.suggested_category_id) : undefined;
   const current = row.category_id === null ? undefined : categoryList.find((category) => category.id === row.category_id);
   const date = formatDate(row.posted_date) ?? row.posted_date;
@@ -158,16 +194,39 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
       return;
     }
     accept.reset();
-    const from = row.category_id;
+    const was: Omit<Change, "to"> = {
+      from: row.category_id,
+      theirs: row.category_source === "person",
+      fromDecidedBy: decidedBy(row, ruleNames),
+      suggestion: isSuggestion(row) && row.suggested_category_id != null ? categoryName(row.suggested_category_id) : null,
+    };
     edit.mutate(
       { id: row.id, patch: { category_id: categoryId } },
       {
         onSuccess: () => {
           setUndone(null);
-          setChange({ from, to: categoryId });
+          setChange({ ...was, to: categoryId });
         },
       },
     );
+  };
+
+  /** What the row was before the change, said after it. */
+  const before = (was: Change): string | null => {
+    if (was.theirs) {
+      return null;
+    }
+    if (was.from !== null) {
+      return `Before, it was ${categoryName(was.from)} (${was.fromDecidedBy}).`;
+    }
+    return was.suggestion === null
+      ? "Before, it had no category."
+      : `Before, it had no category and PerFin suggested ${was.suggestion}; a suggestion cannot be put back.`;
+  };
+
+  const toggleTag = (tagId: string, on: boolean): void => {
+    const next = on ? [...row.tag_ids, tagId] : row.tag_ids.filter((id) => id !== tagId);
+    edit.mutate({ id: row.id, patch: { tag_ids: next } });
   };
 
   const undo = (): void => {
@@ -246,6 +305,12 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
           <dt>Category by</dt>
           <dd>{decidedBy(row, ruleNames)}</dd>
         </div>
+        {editable ? null : (
+          <div>
+            <dt>Tags</dt>
+            <dd>{tagNames.length === 0 ? "None" : tagNames.join(", ")}</dd>
+          </div>
+        )}
       </dl>
 
       <div className="tx-drawer__category">
@@ -286,32 +351,40 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
               </Field>
             ) : suggested !== undefined ? null : (
               <p>
-                {current === undefined ? (
+                {row.category_id === null ? (
                   <span className="cat-cell__none">Uncategorised</span>
+                ) : current === undefined ? (
+                  <span className="cat-cell__none">{categories.isError ? "Category not loaded" : "Loading the category…"}</span>
                 ) : (
                   <Chip colourClass={categoryColourClass(current.id, categoryList)}>{current.name}</Chip>
                 )}
               </p>
             )}
-            {/* The toast region is behind the modal drawer: a refusal is said here too. */}
-            {edit.isError || accept.isError ? (
-              <p role="alert" className="ledger-error">
-                {errorMessage(edit.isError ? edit.error : accept.error)}
-              </p>
-            ) : null}
+            {accept.data?.changed === 0 ? <p role="status">That suggestion is no longer there.</p> : null}
             {change === null && undone === null ? null : (
               <div className="tx-notice">
                 <p role="status" className="tx-notice__text">
                   {change === null
                     ? undone
-                    : change.to === null
-                      ? "No category is your choice for this transaction."
-                      : `${categoryName(change.to)} is your choice for this transaction.`}
+                    : [
+                        change.to === null
+                          ? "No category is your choice for this transaction."
+                          : `${categoryName(change.to)} is your choice for this transaction.`,
+                        before(change),
+                      ]
+                        .filter((part): part is string => part !== null)
+                        .join(" ")}
                 </p>
-                {change === null ? null : (
+                {change === null ? null : change.theirs ? (
                   <span className="tx-notice__actions">
                     <Button size="sm" loading={edit.isPending} aria-label={`Undo: put back ${categoryName(change.from)}`} onClick={undo}>
                       Undo
+                    </Button>
+                  </span>
+                ) : change.from === null ? null : (
+                  <span className="tx-notice__actions">
+                    <Button size="sm" loading={edit.isPending} aria-label={`Choose ${categoryName(change.from)} again, as your choice`} onClick={undo}>
+                      {`Choose ${categoryName(change.from)} again`}
                     </Button>
                   </span>
                 )}
@@ -328,6 +401,33 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
           />
         ) : null}
       </div>
+
+      {editable ? (
+        <fieldset className="tx-drawer__tags">
+          <legend>Tags</legend>
+          {tagList.length === 0 ? (
+            <p className="ledger-muted">{tags.isError ? errorMessage(tags.error) : tags.isPending ? "Loading the tags…" : "No tags yet."}</p>
+          ) : (
+            tagList.map((tag) => (
+              <Checkbox
+                key={tag.id}
+                label={tag.name}
+                checked={row.tag_ids.includes(tag.id)}
+                onChange={(event) => {
+                  toggleTag(tag.id, event.target.checked);
+                }}
+              />
+            ))
+          )}
+        </fieldset>
+      ) : null}
+
+      {/* The toast region is behind the modal drawer: a refusal is said here too. */}
+      {edit.isError || accept.isError ? (
+        <p role="alert" className="ledger-error">
+          {errorMessage(edit.isError ? edit.error : accept.error)}
+        </p>
+      ) : null}
 
       {editable ? (
         <div className="tx-drawer__actions">
@@ -377,6 +477,7 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
         <NoteDialog
           row={row}
           label={label}
+          edit={edit}
           onClose={() => {
             setOpen(null);
           }}
@@ -387,7 +488,7 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
           transaction={row}
           label={label}
           accountName={account === undefined ? undefined : accountLabel(account)}
-          onDeleted={onClose}
+          onDeleted={onDeleted}
           onClose={() => {
             setOpen(null);
           }}

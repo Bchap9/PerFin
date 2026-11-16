@@ -4,9 +4,10 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
-import { authedSession, currentHref, json, mockApi, renderApp, type SessionOptions } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, noContent, renderApp, type SessionOptions } from "../auth/testing";
 import type { MerchantRulePreview } from "../rules/api";
 import { CATEGORIES, category, lookupHandlers, NOW, page, tx } from "./fixtures";
+import { decidedBy } from "./TransactionDrawer";
 
 const MERCHANT = { raw_payee: "SQ *QUIET BEAN COFFEE 0042", payee_id: null, merchant_key: "quiet bean coffee", merchant: "Quiet Bean Coffee" };
 const ROW = tx("t-1", { ...MERCHANT, category_id: "c-2", category_source: "dictionary", category_confidence: "0.90", source_document_id: "d-7" });
@@ -104,8 +105,10 @@ describe("the transaction drawer", () => {
     });
   });
 
-  it("choosing a category is the person's choice and can be undone", async () => {
+  it("a chosen category shows at once as the person's, and a refusal puts the guess back", async () => {
     const api = setup();
+    let answer: (response: Response) => void = () => undefined;
+    api.on("PATCH /api/v1/transactions/:id", () => new Promise<Response>((resolve) => (answer = resolve)));
     renderApp("/transactions?tx=t-1");
     const user = userEvent.setup();
     const panel = within(await drawer());
@@ -115,12 +118,156 @@ describe("the transaction drawer", () => {
     });
     // At once, before the server answers: the person decided.
     expect(panel.getByText("You chose this")).toBeInTheDocument();
+    expect(panel.getByLabelText("Category")).toHaveValue("c-1");
+    // A fresh read of the row never answers, so only the drawer's own rollback can put the guess back.
+    api.on("GET /api/v1/transactions/:id", () => new Promise<Response>(() => undefined));
+    answer(json({ type: "urn:perfin:problem:conflict", title: "Conflict", status: 409, detail: "The row changed meanwhile." }, 409));
+    expect(await panel.findByRole("alert")).toHaveTextContent("The row changed meanwhile.");
+    expect(panel.getByLabelText("Category")).toHaveValue("c-2");
+    expect(panel.getByText("Merchant list, 90%")).toBeInTheDocument();
+    expect(panel.queryByText("You chose this")).not.toBeInTheDocument();
+  });
+
+  it("choosing a category is the person's choice, and their own earlier choice can be undone", async () => {
+    const api = setup({ ...ROW, category_source: "person", category_confidence: "1.00" });
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.selectOptions(panel.getByLabelText("Category"), "c-1");
+    await waitFor(() => {
+      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")[0]?.body).toEqual({ category_id: "c-1" });
+    });
+    expect(panel.getByText("You chose this")).toBeInTheDocument();
     const status = await panel.findByRole("status");
     expect(status).toHaveTextContent("Groceries is your choice for this transaction.");
     await user.click(panel.getByRole("button", { name: "Undo: put back Dining" }));
     await waitFor(() => {
       expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")[1]?.body).toEqual({ category_id: "c-2" });
     });
+    expect(await panel.findByText("Dining is back, as your choice.")).toBeInTheDocument();
+  });
+
+  it("after a guess, going back says it becomes the person's choice", async () => {
+    const api = setup();
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.selectOptions(panel.getByLabelText("Category"), "c-1");
+    expect(await panel.findByRole("status")).toHaveTextContent("Groceries is your choice for this transaction. Before, it was Dining (Merchant list, 90%).");
+    // The server cannot make Dining a guess again: nothing calls it an undo.
+    expect(panel.queryByRole("button", { name: /^Undo/ })).not.toBeInTheDocument();
+    await user.click(panel.getByRole("button", { name: "Choose Dining again, as your choice" }));
+    await waitFor(() => {
+      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")[1]?.body).toEqual({ category_id: "c-2" });
+    });
+    expect(await panel.findByText("Dining is back, as your choice.")).toBeInTheDocument();
+  });
+
+  it("after a suggestion, nothing offers to clear the category as if that were an undo", async () => {
+    const api = setup({ ...ROW, category_id: null, suggested_category_id: "c-1", category_source: "dictionary", category_confidence: "0.60" });
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.selectOptions(panel.getByLabelText("Category"), "c-2");
+    expect(await panel.findByRole("status")).toHaveTextContent(
+      "Dining is your choice for this transaction. Before, it had no category and PerFin suggested Groceries; a suggestion cannot be put back.",
+    );
+    expect(panel.queryByRole("button", { name: /^Undo|again/ })).not.toBeInTheDocument();
+    expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")).toHaveLength(1);
+  });
+
+  it("Edit details, Split, Mark as transfer and the note each open their dialog", async () => {
+    const opens: [string, string | null, string | RegExp][] = [
+      ["Edit details", null, "Edit transaction"],
+      ["Split", null, "Split transaction"],
+      ["More actions for SQ *QUIET BEAN COFFEE 0042", "Mark as transfer", "Link as transfer"],
+      ["More actions for SQ *QUIET BEAN COFFEE 0042", "Add note…", "Note on SQ *QUIET BEAN COFFEE 0042"],
+    ];
+    for (const [button, item, title] of opens) {
+      setup();
+      renderApp("/transactions?tx=t-1");
+      const user = userEvent.setup();
+      const panel = within(await drawer());
+      await user.click(panel.getByRole("button", { name: button }));
+      if (item !== null) {
+        await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: item }));
+      }
+      expect(await screen.findByRole("dialog", { name: title })).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("Delete asks, deletes, closes the drawer and leaves the row out of the selection", async () => {
+    const api = setup();
+    api.on("DELETE /api/v1/transactions/:id", () => noContent());
+    const { router } = renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("checkbox", { name: "Select SQ *QUIET BEAN COFFEE 0042" }));
+    expect(screen.getByRole("group", { name: "Actions for 1 selected" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Quiet Bean Coffee, Nov 1, 2026, -$42.10" }));
+    const panel = within(await drawer());
+    await user.click(panel.getByRole("button", { name: "More actions for SQ *QUIET BEAN COFFEE 0042" }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Delete" }));
+    const confirm = within(await screen.findByRole("dialog", { name: "Delete this transaction?" }));
+    expect(api.callsTo("DELETE", "/api/v1/transactions/t-1")).toHaveLength(0);
+    await user.click(confirm.getByRole("button", { name: "Delete transaction" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(api.callsTo("DELETE", "/api/v1/transactions/t-1")).toHaveLength(1);
+    expect(currentHref(router)).toBe("/transactions");
+    expect(screen.queryByRole("group", { name: "Actions for 1 selected" })).not.toBeInTheDocument();
+  });
+
+  it("tags are changed in the drawer", async () => {
+    const api = setup();
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    const tags = within(await panel.findByRole("group", { name: "Tags" }));
+    await user.click(tags.getByRole("checkbox", { name: "trip" }));
+    await waitFor(() => {
+      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")[0]?.body).toEqual({ tag_ids: ["t-1"] });
+    });
+    expect(tags.getByRole("checkbox", { name: "trip" })).toBeChecked();
+    cleanup();
+
+    // A viewer reads them.
+    setup({ ...ROW, tag_ids: ["t-1"] }, "viewer");
+    renderApp("/transactions?tx=t-1");
+    const read = within(await drawer());
+    expect(await read.findByText("trip")).toBeInTheDocument();
+    expect(read.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("a new category unticks the second box, whose counts were for the old one", async () => {
+    const api = setup();
+    api.on("POST /api/v1/rules/merchant/preview", (call) =>
+      json((call.body as { category_id: string }).category_id === "c-1" ? preview({ uncategorised: 3, guessed: 1 }) : preview()),
+    );
+    api.on("POST /api/v1/rules/merchant", () =>
+      json({ rule: rule("r-9", "Quiet Bean Coffee: Groceries", "c-1"), replaced: false, previous_category_id: null, job_id: null }, 201),
+    );
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.click(panel.getByRole("checkbox", { name: "Always use Dining for Quiet Bean Coffee" }));
+    await user.click(await panel.findByRole("checkbox", { name: "Also change the existing 22 transactions" }));
+    await user.selectOptions(panel.getByLabelText("Category"), "c-1");
+    expect(await panel.findByRole("checkbox", { name: "Always use Groceries for Quiet Bean Coffee" })).toBeChecked();
+    expect(await panel.findByRole("checkbox", { name: "Also change the existing 4 transactions" })).not.toBeChecked();
+    await user.click(panel.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/rules/merchant").map((call) => call.body)).toEqual([
+        { transaction_id: "t-1", category_id: "c-1", apply_to_existing: false },
+      ]);
+    });
+  });
+
+  it("a split row says each line has its own category", () => {
+    const split = { ...ROW, category_id: null, category_source: null, category_confidence: null, splits: [] as typeof ROW.splits };
+    expect(decidedBy({ ...split, splits: [{} as (typeof ROW.splits)[number]] }, undefined)).toBe("Split: each line has its own category");
+    expect(decidedBy(split, undefined)).toBe("Nobody yet");
   });
 
   it("the always box is unticked and asks the server for counts when ticked", async () => {
@@ -171,6 +318,42 @@ describe("the transaction drawer", () => {
       });
       cleanup();
     }
+  });
+
+  it("a refused note and a suggestion already gone are said inside the drawer", async () => {
+    const api = setup({ ...ROW, category_id: null, suggested_category_id: "c-1", category_source: "dictionary", category_confidence: "0.60" });
+    api.on("PATCH /api/v1/transactions/:id", () => json({ type: "urn:perfin:problem:conflict", title: "Conflict", status: 409, detail: "The row changed meanwhile." }, 409));
+    api.on("POST /api/v1/transactions/bulk", () => json({ action: "accept_suggestions", changed: 0, results: [] }));
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.click(panel.getByRole("button", { name: "Accept Groceries" }));
+    expect(await panel.findByText("That suggestion is no longer there.")).toBeInTheDocument();
+    await user.click(panel.getByRole("button", { name: "More actions for SQ *QUIET BEAN COFFEE 0042" }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Add note…" }));
+    const note = within(await screen.findByRole("dialog", { name: "Note on SQ *QUIET BEAN COFFEE 0042" }));
+    await user.type(note.getByLabelText("Note"), "lunch");
+    await user.click(note.getByRole("button", { name: "Save note" }));
+    expect(await panel.findByRole("alert")).toHaveTextContent("The row changed meanwhile.");
+  });
+
+  it("the rule's undo says inside the drawer whether it worked", async () => {
+    const api = setup();
+    api.on("POST /api/v1/rules/merchant", () =>
+      json({ rule: rule("r-9", "Quiet Bean Coffee: Dining", "c-2"), replaced: false, previous_category_id: null, job_id: null }, 201),
+    );
+    api.on("POST /api/v1/rules/:id/revert", () => json({ type: "urn:perfin:problem:conflict", title: "Conflict", status: 409, detail: "The rule changed meanwhile." }, 409));
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.click(panel.getByRole("checkbox", { name: "Always use Dining for Quiet Bean Coffee" }));
+    await user.click(await panel.findByRole("button", { name: "Save rule" }));
+    const saved = within(await panel.findByRole("group", { name: "Rule saved" }));
+    await user.click(saved.getByRole("button", { name: "Undo" }));
+    expect(await saved.findByRole("alert")).toHaveTextContent("Could not undo the rule: The rule changed meanwhile.");
+    api.on("POST /api/v1/rules/:id/revert", () => json({ rule_id: "r-9", reverted: 0, job_id: null }));
+    await user.click(saved.getByRole("button", { name: "Undo" }));
+    expect(await panel.findByText(/^Rule removed\./)).toBeInTheDocument();
   });
 
   it("?always=t-1 opens with the box ticked and nothing saved", async () => {

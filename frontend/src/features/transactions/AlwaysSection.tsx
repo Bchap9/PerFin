@@ -228,6 +228,7 @@ export function AlwaysSection({ transaction, categoryId, defaultChecked }: Alway
   const categories = useCategories();
   const [ticked, setTicked] = useState(defaultChecked);
   const [saved, setSaved] = useState<SavedRule | null>(null);
+  const [removed, setRemoved] = useState(false);
   const reason = localReason(transaction);
   const rule = useAlwaysRule({ transaction, categories: categories.data ?? [], categoryId, enabled: ticked && reason === null });
   const merchant = merchantName(transaction) ?? "this merchant";
@@ -259,6 +260,7 @@ export function AlwaysSection({ transaction, categoryId, defaultChecked }: Alway
                     onClick={() => {
                       void rule.save().then((result) => {
                         if (result !== null) {
+                          setRemoved(false);
                           setSaved(result);
                           setTicked(false);
                         }
@@ -285,8 +287,17 @@ export function AlwaysSection({ transaction, categoryId, defaultChecked }: Alway
           onDone={() => {
             setSaved(null);
           }}
+          onUndone={() => {
+            setRemoved(true);
+          }}
         />
       )}
+      {/* The drawer is modal, over the toasts: the undo is said here too. */}
+      {removed ? (
+        <p role="status" className="ledger-muted">
+          Rule removed. What it had categorised is without a category again, for PerFin to guess anew.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -295,6 +306,8 @@ export interface RuleSavedNoticeProps {
   saved: SavedRule;
   /** The notice is no longer needed: hidden, or undone. */
   onDone: () => void;
+  /** The rule was removed (called before `onDone`). */
+  onUndone?: () => void;
 }
 
 /**
@@ -309,10 +322,11 @@ export interface RuleSavedNoticeProps {
  * own choice, which is a decision nobody made. The notice says how to go back
  * by hand instead.
  */
-export function RuleSavedNotice({ saved, onDone }: RuleSavedNoticeProps) {
+export function RuleSavedNotice({ saved, onDone, onUndone }: RuleSavedNoticeProps) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { result } = saved;
   // Only a rule this save made: `replaced` alone is false both for a new rule
   // and for an existing one saved again with the category it had.
@@ -328,14 +342,18 @@ export function RuleSavedNotice({ saved, onDone }: RuleSavedNoticeProps) {
       return;
     }
     setBusy(true);
+    setError(null);
     try {
       await revertRule(result.rule.id);
       toast.notify({ tone: "success", title: "Rule removed", description: "What it had categorised is without a category again, for PerFin to guess anew." });
       void queryClient.invalidateQueries({ queryKey: queryRoots.rules });
       invalidateLedger(queryClient);
+      onUndone?.();
       onDone();
     } catch (caught) {
       toast.notify({ tone: "error", title: "Could not undo the rule", description: errorMessage(caught) });
+      // Also here, where focus is: a toast can sit behind a modal drawer.
+      setError(`Could not undo the rule: ${errorMessage(caught)}`);
       setBusy(false);
     }
   };
@@ -355,6 +373,11 @@ export function RuleSavedNotice({ saved, onDone }: RuleSavedNoticeProps) {
             }}
           />
         </div>
+      )}
+      {error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {error}
+        </p>
       )}
       <span className="tx-notice__actions">
         {canUndo ? (
