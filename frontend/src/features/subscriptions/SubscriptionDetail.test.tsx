@@ -2,6 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, currentHref, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, referenceHandlers } from "../planning/testing";
 
@@ -166,6 +167,22 @@ describe("one subscription up close", () => {
     expect(within(crumbs).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/plan");
     expect(within(crumbs).getByRole("link", { name: "Subscriptions" })).toHaveAttribute("href", "/plan/subscriptions");
     expect(within(crumbs).getByText("Streamly")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("has no axe violations as a page on a narrow screen", async () => {
+    narrowScreen();
+    const { container } = setup();
+    await screen.findByRole("heading", { level: 2, name: "Streamly" });
+    await screen.findByRole("table", { name: "Charges" });
+    await expectNoAxeViolations(container);
+  });
+
+  it("a bill's breadcrumbs lead back to the Bills tab on a narrow screen", async () => {
+    narrowScreen();
+    const water = { ...STREAMLY, id: "b-1", name: "Harbor Water", merchant: "Harbor Water", kind: "bill" };
+    setup({ path: "/plan/subscriptions/b-1?kind=bills", detail: { subscription: water, charges: [], events: [] } });
+    const crumbs = await screen.findByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Subscriptions" })).toHaveAttribute("href", "/plan/subscriptions?kind=bills");
   });
 
   it("a bill opened from the Bills tab closes back to the Bills tab", async () => {
