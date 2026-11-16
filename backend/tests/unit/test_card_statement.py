@@ -616,3 +616,37 @@ def test_a_deposit_account_word_after_page_one_is_no_veto() -> None:
     )
     view = DocumentView(lines=tuple(lines), source_format="pdf", truncated=False, page_count=2)
     assert CardStatementParser().detect(view) > 0
+
+
+EQUATION = [
+    [("Previous Balance 412.60", 62.0)],
+    [("Payments & Credits -300.00", 62.0)],
+    [("Purchases 266.40", 62.0)],
+    [("New Balance 379.00", 62.0)],
+]
+
+
+def test_the_card_equation_is_a_cue() -> None:
+    # No card word anywhere: the summary's three labels are the cue.
+    assert CardStatementParser().detect(_view([*EQUATION, HEADER, ROW])) == 0.45
+    # ``New Balance`` alone is a checking summary's too, and two of the three are none.
+    assert CardStatementParser().detect(_view([EQUATION[3], HEADER, ROW])) == 0.0
+    for missing in (1, 2, 3):
+        lines = [line for index, line in enumerate(EQUATION) if index != missing]
+        assert CardStatementParser().detect(_view([*lines, HEADER, ROW])) == 0.0
+    # A label starts its line: a sentence that mentions it is no summary line.
+    note = [("Your purchases this month", 62.0)]
+    assert CardStatementParser().detect(_view([*EQUATION[:2], note, EQUATION[3], HEADER, ROW])) == 0
+    # The labels as payees of the rows are no summary.
+    rows = [[("01/05/2025", 62.0), (line[0][0], 150.0), ("4.50", 500.0)] for line in EQUATION]
+    assert CardStatementParser().detect(_view([HEADER, *rows])) == 0.0
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Beginning Balance 10.00", "Total Deposits 2,000.00", "Checking Summary", "Withdrawals 40.00"],
+)
+def test_a_deposit_account_s_summary_beats_the_card_equation(line: str) -> None:
+    view = _view([[(line, 62.0)], *EQUATION, HEADER, ROW])
+    assert CardStatementParser().detect(view) == 0.0
+    assert max(PARSERS, key=lambda p: p.detect(view)).name == "statement_generic"

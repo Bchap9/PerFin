@@ -20,9 +20,14 @@ institutions, invented numbers).
   rows, each pending on its date, with one question naming the assumed year
   (``tests/fixtures/synth_bank_layouts.py``).
 * A statement of unsigned amounts under section titles, and one whose header
-  takes two lines, import clean; checks printed three across the page hold
-  the document with one ``lines_skipped`` item counting those not read
+  takes two lines, import clean; so do checks printed three across the
+  page, every one of them a row
   (``synth_bank_layouts``, ``synth_statement_headers``).
+* Round two (``tests/fixtures/synth_sections.py``, ``synth_bank_layouts2.py``):
+  a statement with no header row anywhere and one whose rows carry ``CR`` /
+  ``DB`` in a column of their own import clean; two accounts printed under
+  one masked number are two statements, each imported into the account
+  chosen for it; a lender's bill writes no bank transaction.
 * A card "Statement of Account" with only a statement date
   (``tests/fixtures/synth_card_statement.py``) imports into its credit card
   account with no review item.
@@ -59,15 +64,19 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
-from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping
+from app.domain.imports import proposals
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping, Assignment
 from app.domain.imports.service import request_apply
 from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
+from app.ingestion.match.accounts import match_shared_number
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_bank_layouts as layouts
+from tests.fixtures import synth_bank_layouts2 as layouts2
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
+from tests.fixtures import synth_sections as sections
 from tests.fixtures import synth_statement_headers as headers
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
@@ -223,7 +232,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/6")
+    assert document.parser_version.endswith("/7")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -306,7 +315,7 @@ def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> No
         stmt.period_start,
         stmt.statement_date,
     )
-    assert document.parser_version == "card_statement_generic/8"
+    assert document.parser_version == "card_statement_generic/9"
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -374,7 +383,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/8"
+    assert low[0].payload["parser"] == "statement_generic/9"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }
@@ -464,23 +473,300 @@ def test_stacked_header_statement_imports_clean(env: Env) -> None:
     assert len(env.snapshots(account)) == 1
 
 
-def test_checks_across_the_page_raise_lines_skipped(env: Env) -> None:
+def test_checks_across_the_page_import_clean(env: Env) -> None:
     account = env.ledger.account(
         env.household_id, number_last4="5127", type="checking", currency="USD"
     )
     document_id = env.ingest(layouts.checks_three_across())
 
     document = env.document(document_id)
-    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
     assert document.account_id == account.id
-    items = env.open_reviews(document_id)
-    skipped = [item for item in items if item.payload.get("reason") == "lines_skipped"]
-    assert len(skipped) == 1, [item.payload for item in items]
-    assert skipped[0].payload["count"] == 7
-    # The checks beside the left group were not read: nothing vouches for the
-    # closing balance, so none is recorded.
-    assert len(env.transactions(account)) == 9
-    assert env.snapshots(account) == []
+    # Every check of every group is a row: the statement adds up, and its
+    # closing balance is recorded.
+    rows = env.transactions(account)
+    assert len(rows) == 16
+    assert sorted((r.raw_payee or "", r.amount) for r in rows) == sorted(
+        (payee or "", _money6(amount))
+        for _, amount, payee in layouts.EXPECTED_ROWS["checks_three_across"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    assert len(env.snapshots(account)) == 1
+
+
+def test_headerless_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="2946", type="checking", currency="USD"
+    )
+    document_id = env.ingest(sections.headerless_sections_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    assert document.parser_version == "statement_generic/9"
+    rows = env.transactions(account)
+    assert len(rows) == 11
+    assert _rows(rows) == sorted(
+        (posted, _money6(amount), payee)
+        for posted, amount, payee in sections.EXPECTED_ROWS["headerless_sections_checking"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    # Four deposits in, seven withdrawals out: the titles give the direction.
+    assert sum(1 for r in rows if r.amount < 0) == 7
+    assert len(env.snapshots(account)) == 1
+
+
+def test_two_accounts_by_summary_import_into_two_accounts(env: Env) -> None:
+    checking = env.ledger.account(
+        env.household_id, type="checking", currency="USD", name="Everyday Checking"
+    )
+    savings = env.ledger.account(
+        env.household_id, type=AccountType.SAVINGS, currency="USD", name="Premier Savings"
+    )
+    document_id = env.ingest(sections.two_accounts_one_number())
+
+    # Both accounts print one masked number and each statement carries it;
+    # no account of the household has that number yet: each is asked about.
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert [len(s.transactions) for s in stored.statements] == [9, 3]
+    assert [s.account.last4 for s in stored.statements] == ["0000", "0000"]
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert {i.payload.get("reason") for i in env.open_reviews(document_id)} == {"account_not_found"}
+    assert env.transactions(checking) == env.transactions(savings) == []
+
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        request_apply(
+            db,
+            env.principal(),
+            document_id,
+            ApplyMapping(
+                assignments=[
+                    Assignment(target="statement", index=0, account_id=checking.id),
+                    Assignment(target="statement", index=1, account_id=savings.id),
+                ]
+            ),
+            request=None,
+        )
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    for account, (_, closing, expected) in zip(
+        (checking, savings), sections.EXPECTED_ACCOUNTS, strict=True
+    ):
+        rows = env.transactions(account)
+        assert _rows(rows) == sorted((d, _money6(a), p) for d, a, p in expected)
+        assert all(r.review_state is ReviewState.NONE for r in rows)
+        assert [s.balance for s in env.snapshots(account)] == [closing]
+    assert len(env.transactions(checking)) == 9
+    assert len(env.transactions(savings)) == 3
+
+
+def _pair(env: Env) -> tuple[Account, Account]:
+    """A checking and a savings account of the household under one masked number."""
+    checking = env.ledger.account(
+        env.household_id,
+        type=AccountType.CHECKING,
+        currency="USD",
+        name="Everyday Checking",
+        number_last4="0000",
+    )
+    savings = env.ledger.account(
+        env.household_id,
+        type=AccountType.SAVINGS,
+        currency="USD",
+        name="Premier Savings",
+        number_last4="0000",
+    )
+    return checking, savings
+
+
+@pytest.mark.parametrize("builder", ["two_accounts_one_number", "two_accounts_named_above"])
+def test_two_accounts_under_one_number_land_on_their_accounts_by_type(
+    env: Env, builder: str
+) -> None:
+    checking, savings = _pair(env)
+    document_id = env.ingest(getattr(sections, builder)())
+
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert [(s.account.account_type, s.account.last4) for s in stored.statements] == [
+        ("checking", "0000"),
+        ("savings", "0000"),
+    ]
+    # The number is that of both accounts; each summary's title says which
+    # of the two its statement is. Nothing is asked.
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    for account, (_, closing, expected) in zip(
+        (checking, savings), sections.EXPECTED_ACCOUNTS, strict=True
+    ):
+        rows = env.transactions(account)
+        assert _rows(rows) == sorted((d, _money6(a), p) for d, a, p in expected)
+        assert [s.balance for s in env.snapshots(account)] == [closing]
+    # The Accounts dialog says the same of each statement.
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        found = proposals.detect_accounts(db, env.principal(), document_id)
+    assert [(f.status, f.account_id) for f in found.accounts] == [
+        ("matched", checking.id),
+        ("matched", savings.id),
+    ]
+
+
+def test_unknown_accounts_under_one_number_are_proposed_by_their_titles(env: Env) -> None:
+    document_id = env.ingest(sections.two_accounts_one_number())
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        found = proposals.detect_accounts(db, env.principal(), document_id)
+    proposed = [f.proposal for f in found.accounts]
+    assert all(p is not None for p in proposed)
+    # A savings account is proposed as one, not as a checking account.
+    assert [(p.type, p.number_last4) for p in proposed if p is not None] == [
+        (AccountType.CHECKING, "0000"),
+        (AccountType.SAVINGS, "0000"),
+    ]
+
+
+def test_two_accounts_under_one_number_wait_when_no_title_says_which(env: Env) -> None:
+    checking, savings = _pair(env)
+    document_id = env.ingest(sections.two_accounts_unnamed())
+
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert [(s.account.account_type, s.account.last4) for s in stored.statements] == [
+        (None, "0000"),
+        (None, "0000"),
+    ]
+    # Two accounts carry the number and no title names a kind: nothing is
+    # guessed, each statement is asked about with both accounts as candidates.
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    items = [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert [i.payload.get("reason") for i in items] == ["account_ambiguous"] * 2
+    assert all(
+        set(i.payload.get("candidates", [])) == {str(checking.id), str(savings.id)} for i in items
+    )
+    assert env.transactions(checking) == env.transactions(savings) == []
+
+
+def test_a_savings_statement_never_lands_on_the_checking_account_by_its_number(
+    env: Env,
+) -> None:
+    # The household knows the checking account only. The savings statement
+    # carries the same number: it is asked about, not put on that account.
+    checking = env.ledger.account(
+        env.household_id,
+        type=AccountType.CHECKING,
+        currency="USD",
+        name="Everyday Checking",
+        number_last4="0000",
+    )
+    document_id = env.ingest(sections.two_accounts_one_number())
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    items = [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert [(i.payload.get("statement"), i.payload.get("account_type")) for i in items] == [
+        (1, "savings")
+    ]
+    assert len(env.transactions(checking)) == 9
+
+
+def test_a_checking_statement_never_lands_on_the_savings_account_by_its_number(
+    env: Env,
+) -> None:
+    # The other way round: the only account with the digits is a savings
+    # account, and the checking statement is asked about with it as the
+    # candidate.
+    savings = env.ledger.account(
+        env.household_id,
+        type=AccountType.SAVINGS,
+        currency="USD",
+        name="Premier Savings",
+        number_last4="0000",
+    )
+    document_id = env.ingest(sections.two_accounts_one_number())
+
+    items = [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert [(i.payload.get("statement"), i.payload.get("reason")) for i in items] == [
+        (0, "account_ambiguous")
+    ]
+    assert len(env.transactions(savings)) == 3
+
+
+def test_a_shared_number_is_matched_by_type_then_by_name(env: Env) -> None:
+    checking, savings = _pair(env)
+    holiday = env.ledger.account(
+        env.household_id,
+        type=AccountType.SAVINGS,
+        currency="USD",
+        name="Holiday Club",
+        number_last4="0000",
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+
+        def match(kind: str | None, name: str | None = None, **kwargs: Any) -> uuid.UUID | None:
+            found = match_shared_number(
+                db, env.household_id, last4="0000", account_type=kind, name=name, **kwargs
+            )
+            assert set(found.candidates) <= {checking.id, savings.id, holiday.id}
+            return found.account_id
+
+        assert match("checking") == checking.id
+        # Two savings accounts carry the digits: the name says which, or nothing does.
+        assert match("savings") is None
+        assert match("savings", "PREMIER SAVINGS") == savings.id
+        assert match("savings", "Holiday Club Savings") == holiday.id
+        assert match("savings", "Thistlebeck Reserve") is None
+        # No type named, a type no account with the digits has, and a type
+        # another statement of the document names too.
+        assert match(None, "Everyday Checking") is None
+        assert match("creditcard") is None
+        assert match("checking", told_apart=False) is None
+        # Only accounts the uploader may import into.
+        assert match("checking", allowed=frozenset({savings.id})) is None
+
+
+def test_marker_column_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="6183", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts2.marker_column_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    rows = env.transactions(account)
+    assert _rows(rows) == sorted(
+        (posted, _money6(amount), payee)
+        for posted, amount, payee in layouts2.EXPECTED_ROWS["marker_column_checking"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    # DB is money out (five rows), CR money in (three).
+    assert sum(1 for r in rows if r.amount < 0) == 5
+    assert len(env.snapshots(account)) == 1
+
+
+def test_loan_bill_writes_no_bank_rows(env: Env) -> None:
+    # Accounts a bank reading of the bill could land on: its own digits.
+    checking = env.ledger.account(
+        env.household_id, number_last4="7714", type="checking", currency="USD"
+    )
+    document_id = env.ingest(sections.loan_bill_with_activity())
+
+    document = env.document(document_id)
+    # The loan parser has the bill or nobody has; no bank parser reads it.
+    assert not (document.parser_version or "").startswith(
+        ("statement_generic/", "card_statement_generic/")
+    )
+    stored = ExtractResult.model_validate(document.extraction)
+    assert stored.statements == []
+    assert env.query(select(Transaction).where(Transaction.household_id == env.household_id)) == []
+    assert env.snapshots(checking) == []
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

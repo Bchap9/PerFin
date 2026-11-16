@@ -11,9 +11,12 @@ quantifiers, so a crafted page cannot make matching expensive.
   ``DR`` / ``DB``. A sign or a currency symbol may stand one space from
   what follows it (``- $310.00``, ``$ 1,480.25``), a gap may precede a
   separator (``7,310 .00``) and one footnote mark may follow the figure
-  (``642.18*``). Two decimals are required (statements print cents); a bare
-  integer is not an amount, so dates and reference numbers are never read
-  as money. :func:`find_amounts` joins a lone symbol to the figure after it
+  (``642.18*``). Thousands are grouped in threes or the Indian way
+  (``1,14,964.36``: groups of two, a last group of three). Two decimals are
+  required (statements print cents); a bare integer is not an amount, so
+  dates and reference numbers are never read as money. A figure under one
+  unit printed without its zero (``.15``) is read only for a caller that
+  asks (``bare_cents``). :func:`find_amounts` joins a lone symbol to the figure after it
   and a lone sign to a symbol, never to bare digits (``900.00 - 150.00`` is
   two positive figures). :attr:`Amount.sign_detached` says the sign stood a
   space away: on a summary line it may be the separator after a label
@@ -75,7 +78,7 @@ _MONTHS: Final = {
 _AMOUNT: Final = re.compile(
     r"(?P<open>\()?(?:(?P<sign>[-+\u2212])(?P<gap>\s)?)?"
     r"(?:(?P<cur>[$\u00a3\u20ac])(?P<gap2>\s)?)?(?P<sign2>[-+\u2212])?"
-    r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)\.(?P<dec>\d{2})"
+    r"(?P<int>\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}|\d+)?\.(?P<dec>\d{2})"
     r"(?P<close>\))?(?P<trail>-)?(?:\s?(?P<mark>CR|DR|DB|Cr|Dr|Db|cr|dr|db))?"
 )
 #: Whitespace between a digit and a separator that a digit follows (``7,310 .00``).
@@ -119,8 +122,14 @@ class Amount:
         return _CURRENCY_SYMBOLS.get(self.symbol) if self.symbol else None
 
 
-def read_amount(text: str) -> Amount | None:
-    """The amount ``text`` is (the whole cell), or None."""
+def read_amount(text: str, *, bare_cents: bool = False) -> Amount | None:
+    """The amount ``text`` is (the whole cell), or None.
+
+    ``bare_cents``: a figure under one unit printed without its zero
+    (``.15``, ``-.30``, ``$.45``, ``.81 CR``) reads as ``0.15``. Only the
+    reader of a cell in a money column asks for it: in running text a point
+    before two digits is anything (:func:`find_amounts` never asks).
+    """
     text = text.strip()[:MAX_TOKEN]
     if text and text[-1] in _FOOTNOTE_MARKS:
         text = text[:-1]
@@ -134,12 +143,14 @@ def read_amount(text: str) -> Amount | None:
         return None  # ``- -5.00``: two signs are one figure only when printed as one
     if bool(match["open"]) != bool(match["close"]):
         return None
+    if match["int"] is None and not bare_cents:
+        return None
     sign = match["sign"] or match["sign2"]
     negative = bool(match["open"]) or bool(match["trail"]) or sign in ("-", "\u2212")
     if negative and (match["open"] and (sign or match["trail"])):
         return None
     try:
-        value = Decimal(f"{match['int'].replace(',', '')}.{match['dec']}")
+        value = Decimal(f"{(match['int'] or '0').replace(',', '')}.{match['dec']}")
     except InvalidOperation:  # pragma: no cover - the pattern guarantees digits
         return None
     mark = (match["mark"] or "").upper()

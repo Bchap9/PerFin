@@ -74,11 +74,13 @@ from app.domain.imports.schemas import (
     MappingSpec,
 )
 from app.domain.imports.service import (
+    SPLIT_BY_SUMMARY,
     _item_spec,
     _spec,
     _stored_result,
     choose_mapping,
     request_apply,
+    statement_match,
     stored_investments,
 )
 from app.ingestion.match.accounts import importable_account_ids, match_account
@@ -432,6 +434,7 @@ def _detect(
     fallback_institution = _institution_name(db, document) or _printed_institution(document)
     currency = _base_currency(db, document.household_id)
     out: list[tuple[_Found, DetectedAccount]] = []
+    split = result.parse is not None and SPLIT_BY_SUMMARY in result.parse.warnings
     for found in _found(db, document, result, items):
         institution = found.institution or fallback_institution
         item = _item_for(found, items)
@@ -456,12 +459,26 @@ def _detect(
             else:
                 status = "ambiguous" if candidates else "new"
         else:
-            match = match_account(
-                db,
-                document.household_id,
-                last4=found.last4,
-                institution=institution,
-                allowed=allowed,
+            match = (
+                # Accounts split at their summaries go by the type each names.
+                statement_match(
+                    db,
+                    document.household_id,
+                    result,
+                    found.index,
+                    institution=institution,
+                    allowed=allowed,
+                )
+                if found.target == "statement"
+                and split
+                and found.last4 == result.statements[found.index].account.last4
+                else match_account(
+                    db,
+                    document.household_id,
+                    last4=found.last4,
+                    institution=institution,
+                    allowed=allowed,
+                )
             )
             account_id = match.account_id
             status = "matched" if account_id is not None else "done"

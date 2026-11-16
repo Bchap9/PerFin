@@ -668,13 +668,16 @@ a child answering with parser output is `bad_output`.
   outside the transaction rows and their wrapped lines (a checking
   account's `CARDMEMBER SERV WEB PYMT` or `CREDIT CARD PAYMENT` row is
   no cue): one of "card ending", "credit card", "card statement",
-  "minimum payment", "credit limit", "corporate card", "charge card", or
-  two of the weaker "new charges" and "cardmember"/"card member"
-  ("Parser choice" below has the limits).
+  "minimum payment", "credit limit", "corporate card", "charge card",
+  two of the weaker "new charges" and "cardmember"/"card member", or a
+  card's summary ("Parser choice" below has the limits).
   Numeric rows with and without a year in one table are both read.
-- **Bank and card statement layouts** (`table_statement.py` version 7,
-  `statement_header.py`; the two module docs have every rule and its
-  limits). What the reader does with the ways statements are printed:
+- **Bank and card statement layouts** (`table_statement.py` version 9,
+  with three modules of pure functions beside it: `statement_header.py`
+  for headers, `statement_lines.py` for single lines and
+  `statement_kind.py` for what a first page's summary names; the module
+  docs have every rule and its limits). What the reader does with the
+  ways statements are printed:
   - *Headers* (`statement_header.read_header`). Two headings printed so
     close that they are one cell (`Date Transaction Description`,
     `WITHDRAWAL BALANCE`) are read as the fewest known headings that use
@@ -692,7 +695,13 @@ a child answering with parser output is `bad_output`.
     of headings only: a line with an amount is no header. A line of
     heading words that heads a table PerFin does not read (`Date |
     Balance | Date | Balance`) ends the table above it; a title or a
-    row's wrapped text made of heading words does not.
+    row's wrapped text made of heading words does not. A line that
+    prints the same description heading twice with a money or balance
+    heading between the two (`Description | Amount | Description |
+    Amount`) heads a grid of labels and values, not a transaction table:
+    it is no header, and it still ends the table above it. One `|`, `I`,
+    `l` or `!` right behind a bracketed unit (`AMOUNT (EUR)I`) is the
+    column rule read as a character and is dropped.
   - *Rows off their columns.* A figure under no heading goes to the
     numeric column that starts left of it when that column has none on
     the line; a date printed so close to the description that both are
@@ -700,7 +709,47 @@ a child answering with parser output is `bad_output`.
     both the debit and the credit column a zero counts as none; two
     amounts say nothing and the row is counted as skipped. Amounts are
     read with a `DB` marker, a sign or a currency symbol a space away
-    from the figure (`-$ 12.00`) and one footnote mark after it.
+    from the figure (`-$ 12.00`) and one footnote mark after it. In a
+    money column of a statement table, cents printed without their zero
+    (`.15`) are an amount; anywhere else such a text is none. Indian
+    grouping (`1,14,964.36`) is read everywhere. A cell of words that
+    stands under a numeric heading and under another goes to the other
+    (a short category left of its heading is no amount); of two dates
+    under one date heading the first is the row's; and where the header
+    prints two headings as one cell (`Amount Description`), an amount
+    printed in one cell with its description is split off it.
+  - *Words printed beside or over a row.* A notice printed up the margin
+    of the page puts a word left of some rows, and a tall line takes it
+    for a cell of the date column; a watermark lies over the dates and
+    is one cell with them. A line whose date column holds a date among
+    other words is read once more without the words printed outside the
+    table, and is a row when the column then holds a date and nothing
+    else. A word of the margin is a cell that ends 12 points or more
+    left of the table's leftmost heading, is neither a date nor an
+    amount, and stands where a line of the page without a date has a
+    cell too (a word printed beside rows only may be a flag of theirs:
+    `Hold`). A watermark is a word whose box holds every other word of
+    its cell and that is printed at the same place on another page (a
+    stamp over one row is printed once); the cell's other words go to
+    their own columns. Everything else is as before: such a line takes
+    no date from the line above and is counted. No row is ever given an
+    amount it does not print: a line without a figure in a money column
+    is counted.
+  - *A marker in a column of its own.* A column of `CR`/`DR`/`DB` cells
+    under a heading no word names (`Amount | DC`) signs the amounts
+    beside it: the row takes the nearest such cell right of its amount
+    when the amount prints no sign or marker itself, the row has no debit
+    or credit column and no figure stands between the two. The marker is
+    its letters only (`Dr.` is none).
+  - *The amount under its row.* In a table with one money column, a
+    dated line with description text and no figure takes the amount
+    printed alone under the money heading on one of the next three lines
+    of its page (a card's purchase abroad: `63.00 CAD`, `1.28 Exchange
+    Rate`, then the amount). The lines of words between the two are the
+    row's memo. A dated line, a total, a balance label, a title, a
+    header, a line with a figure of its own, or a figure that is the
+    total of the rows read so far ends the search, and the row is
+    counted as skipped as before.
   - *Sections* (`SECTION_TITLES`). A section title (`Deposits and
     additions`, `Electronic withdrawals`, `Checks paid`, `Payments and
     credits`, `Purchases`, `Fees`, ...) types its rows as before and now
@@ -723,12 +772,84 @@ a child answering with parser output is `bad_output`.
     with their printed running balance, on a statement that reconciles,
     is the total of something else and holds nothing. A total says how
     much, never which way: one that agrees vouches for no row.
+  - *Sections without a header row.* A section title outside any table
+    (before the first header, or after a line of heading words ended the
+    table) opens a section whose lines are read by their own shape
+    (`statement_lines.led_row`): a date at the start, words, one amount
+    at the end. The section runs over a page break and under its title
+    printed again or marked `continued`; it closes at its total, at
+    another title, a block title or a header, and after six lines in a
+    row that are no such row. Two rows or more whose printed total is
+    theirs (one row when the total is its amount) are imported with the
+    title's direction and type (warning `sections_without_header:<n>`,
+    the number of sections read). A section whose total disagrees is not
+    read: each of its lines is counted (`rows_without_header:<n>`) and
+    the statement waits. A row of a section that printed no total scores
+    its amount at most 0.7 unless the statement reconciles. Lines that
+    are refused and counted instead of read: two figures at the end (an
+    amount beside a balance cannot be told apart without a header), a
+    figure followed by another date (two entries side by side), a lone
+    `CR`/`DR`/`DB`, dash or plus in front of the amount. A sentence that
+    starts with a date and ends with a figure (more than thirty words), a
+    dated balance or total line and a line of a date and a figure only
+    are neither read nor counted, inside a table as well (a dated
+    sentence anywhere in it; a date and a figure with no words under a
+    title printed inside it). A document with no header at all is a
+    statement when a title has three such rows after it.
+  - *A title printed with its total.* A known section title printed with
+    one figure and a total word beside it, on one of the two lines over a
+    header (`Withdrawals / Debits | 5 items totaling $912.40`), names the
+    section and gives its total, which is checked like a `Total ...`
+    line; it is never a row of the table above. `N item(s) totaling X`
+    printed alone is a section's total. A printed minus under a "money
+    in" title stays a minus. A title with its total right under another
+    title with a figure is the last count line of a summary box
+    (`Deposits | 2 items | 250.00` over `Withdrawals | 3 items |
+    120.00`) and names nothing: the table under the box is read by its
+    printed signs.
+  - *Vertical rules printed as text.* A cell that is one or more
+    vertical bars and nothing else (`|` between the two halves of a table
+    printed across the page, on the header line, on a line of its own and
+    after a row's amount) is dropped before anything is read
+    (`statement_lines.without_rules`), and a line of bars alone is no
+    line: a bar is no heading, no description and no figure. A dash is
+    kept (it may be a sign, a separator or an empty column), and so is a
+    bar among the words of a cell.
+  - *Tables printed across the page.* Under `Number | Date Paid | Amount`
+    printed two or three times side by side, every group is read by its
+    own columns (`statement_header.across_groups`): a date and an amount
+    in a group make a row, left to right. A group whose cells read no
+    row is counted (`table_across_unread:<n>`). In a table whose header
+    names only a check number, a date and an amount, every row is a
+    check paid, its number printed or not.
+  - *A second listing.* A table printed across whose **every** row has a
+    partner of the same day, the same magnitude and the same direction
+    among the rows of the other tables, each partner taken once (a
+    deposit is no second print of a check), lists again what the
+    transaction table already holds (`Summary of checks` under a table
+    with a `Check No.` column): its rows are dropped, none is counted
+    (warning `checks_listed_twice`). One row without a partner keeps the
+    whole table, and a statement that then does not add up is held.
+  - *Undated interest and fee lines of a card.* Only on a card, in a
+    section titled as fees or interest: an undated line of words with one
+    figure, not zero, is held until the section's total. When the total
+    is that of the section's dated rows with the held lines, and not
+    without them, they are rows dated on the period's last day (date
+    confidence at most 0.9). With another total or none they stay
+    summary lines; without a printed period they are skipped and
+    counted. A line naming another span of time (`Total interest charged
+    in 2026`) and any such line of a bank statement are never rows.
   - *A date printed once per day.* An undated line with description text
     and one figure in a money column, close under the row above it, takes
     that row's date when a dated row follows in the same table (or, at the
     table's end, when the statement already has two such rows); otherwise
     it stays what it was, a summary line. Its date scores at most 0.9
-    (warning `dates_carried`).
+    (warning `dates_carried`). The lines between two balance lines
+    (`Beginning Balance`, `6 Credits This Period`, `Ending Balance`, the
+    second dated or not) are a summary and never rows; under `Balance
+    brought forward` they are rows once a dated transaction row follows,
+    or when their running balances chain from the opening line to the
+    closing one.
   - *Newest first.* Rows printed from the latest day back are read in the
     order they happened, so the running balances agree (warning
     `rows_newest_first`); only when a running balance is printed or every
@@ -743,7 +864,9 @@ a child answering with parser output is `bad_output`.
     a line is the one printed, and a closing label after `previous`,
     `last` or `prior` closes nothing. A label printed without its figure
     takes the figure printed alone on the line next to it (confidence
-    0.9). A dash standing apart between a label and its figure (`Ending
+    0.9). The text searched for a label's figure ends where the next
+    label of the summary starts, so a label without a figure never takes
+    its neighbour's. A dash standing apart between a label and its figure (`Ending
     Balance - $992.50`) is a minus or only a separator: the reading the
     rows agree with is taken (the other balance and the rows' total, or
     the running balance beside the first or last row), and a balance
@@ -785,38 +908,99 @@ a child answering with parser output is `bad_output`.
     deposit account (`checking`, `savings`, `deposits`, `withdrawals` as
     one of the first two of at most three words: `Business Checking`,
     `Total Deposits`) rules the card reader out. A line that only
-    mentions one (`AutoPay from Checking ending 7731`) does not.
+    mentions one (`AutoPay from Checking ending 7731`) does not. A card
+    that prints no card word is known by its summary
+    (`statement_kind.card_summary`: `Payments and Credits`, a charge
+    label such as `Purchases`, and `New Balance`, each at the start of a
+    short page-1 line outside the rows); read as a bank statement its
+    figures would add up with every sign the wrong way round. The
+    deposit-account veto still comes first, so a checking statement that
+    says `New Balance` is no card. Neither generic reader takes a loan's
+    bill (`statement_kind.loan_bill`: a principal balance or payoff
+    amount and an amount or payment due on page 1): both score 0.0, so
+    the loan parser has the document or nobody has, and its activity
+    table is never read as bank transactions. A deposit account's label
+    (`Total Deposits`, `Share Savings Ending Balance`, a dated `Beginning
+    Balance` line inside a table) lifts that guard: a member statement
+    that lists a loan beside its shares is still read. Inside a table
+    any dated balance line does (`Previous Balance`, `New Balance`); in
+    a summary those two are a loan's as well and lift nothing.
   - *What is counted.* A line that is found and not imported is counted
     in `skipped_lines`, with its box in `skipped_regions`, and raises the
     `lines_skipped` item, so the document waits instead of ending
     `processed` with fewer rows than it prints: a dated line without a
     readable amount; an undated line with a figure in a money column that
     a dated row follows and that is no carried-date row; rows above the
-    first account or share (`rows_outside_account`); date-led lines
-    ending in an amount under a section title and no header
-    (`rows_without_header:<n>`; a titled section without a header is not
-    read), and the same lines with words on them after a header of
-    heading words that ended the table without being one PerFin reads
-    (`Date | Balance`; figures by day under it have no words and are not
-    counted); and each dated entry right of the left group of a table
-    printed two or three times across the page (`Number | Date Paid |
-    Amount` three times: the left group is read, the others are counted,
-    `table_across_unread:<n>`, and the statement cannot add up and is
-    held). `Date | Amount` pairs printed across are balances by day: not
-    read and not counted.
+    first account or share (`rows_outside_account`); the date-led lines
+    of a section without a header that is not read, because its total
+    disagrees or it has too few rows (`rows_without_header:<n>`), a
+    line of such a section whose words start like a total's and are a
+    payee's (`Total Wine and More`), the date-led lines that follow a
+    section's total on its page under no title, and
+    the same lines with words on them after a header of heading words
+    that is not one PerFin reads, whether it ended a table or stands
+    outside any (`Date |
+    Balance`; figures by day under it have no words and are not counted,
+    and neither is a dated balance line of a summary grid printed under
+    the table, with or without another label and its value beside it);
+    each group of a table printed across the page that
+    prints a date or a figure and reads no row
+    (`table_across_unread:<n>`); a dated line whose amount was looked
+    for under it and not found; the undated lines with a figure of a
+    table that ends without one row read; and an undated interest or fee
+    line of a card that makes its section's total on a statement with no
+    printed period. `Date | Amount` pairs printed across are balances by
+    day: not read and not counted. The rows of a second listing
+    (`checks_listed_twice`) are dropped without a count: the transaction
+    table holds each of them.
   - *Credit-union shares.* The shares of a member statement are named by
     the title over each table, also when the title carries a figure
     (`PRIMARY SHARE ID 0000 | Dividends Paid YTD: | 4.12`) or starts with
     the number (`ID 0040 - SHARE DRAFT`).
-  - *Not read* (counted or held, never guessed): titled sections without
-    a header row, one field per line, decimal commas and month names
-    other than English, two accounts with the same masked number,
-    description lines printed above their dated line, and loan
-    sub-accounts of a member statement.
+  - *Accounts told apart by their summaries.* A checking and a savings
+    account printed under one masked number are split where each
+    account's summary starts (`statement_lines.summary_starts`: an
+    opening balance line outside a table, after a closing one, with
+    another figure than the account above), when two of the parts or
+    more hold a table. Each is a statement of its own, checked against
+    its own balances (warning `accounts_by_summary`). **Which account
+    each is:** its name and type come from its summary's title (`CHECKING
+    SUMMARY` gives `CHECKING`), looked for in the cell printed before the
+    balance label on the opening line (`SAVINGS ID 0040 | Beginning
+    Balance | 900.00`), else in the four lines over that line on its
+    page, nearest first, up to a line of a table or a balance line: the
+    summary's own title or, when that names no kind of account
+    (`Statement period activity summary`), the product's name printed
+    over it (`Larkrise | Essential Checking`). A title is at most six
+    words, prints no amount and names one kind of account
+    (`accounts.title_kind`: checking, savings, money market, share draft
+    and the other words of `account_kind`); `Checking & Savings`, a line
+    of a list of accounts with its figures, a footer sentence and
+    `TRANSFER TO SAVINGS` name nothing. A title that names no kind gives
+    neither a name nor a type: no type is ever guessed. Its last four
+    digits are the title's own number when it has one (`ID 0040`), else
+    the one number printed in the document outside its tables (the masked
+    number both accounts share), else, when the document prints several,
+    the one number printed in that summary's head; with none or two
+    there, none. Where any title numbers its account the document numbers
+    its accounts in their titles, the number printed once is the member's
+    and an account whose title has none gets none. The importer puts the
+    statements of such a document on accounts by their type (*Matching*
+    below). A balance brought forward that equals the one
+    carried forward, a balance printed over the header of a later page
+    with no closing figure after it but the account's own (`Balance
+    Forward`), and an
+    account's summary printed once more on a later page with the same
+    figures, start no account.
+  - *Not read* (counted or held, never guessed): one field per line,
+    decimal commas and month names other than English, description lines
+    printed above their dated line, a headerless section whose lines
+    print an amount and a balance, and loan sub-accounts of a member
+    statement.
 
   Parser versions are part of `document.parser_version`
-  (`statement_generic/8`, `card_statement_generic/8`, the institution
-  parsers `/6`). A document stored by an earlier version keeps its rows
+  (`statement_generic/9`, `card_statement_generic/9`, the institution
+  parsers `/7`). A document stored by an earlier version keeps its rows
   until it is read again; "Process again" reads it with the current
   rules, which can change its rows, its period and whether it waits in
   review.
@@ -1458,7 +1642,21 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   statements with its own last four digits or, when it records none, the
   single statement nothing matched, never several accounts at once. No account, or one that does not
   fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
-  `account_type_mismatch`, `currency_mismatch`). **No
+  `account_type_mismatch`, `currency_mismatch`). In a document the
+  parser split at its accounts' summaries (`accounts_by_summary`), two
+  statements may carry the **same** last four digits (a checking and a
+  savings account printed under one masked number), and the digits then
+  name none of them: a statement of such a document goes to the one
+  account with its digits that has the type its summary names, the name
+  telling several of one type apart
+  (`match.accounts.match_shared_number`, `imports.service.statement_match`).
+  One that names no type while another statement carries its digits, or
+  the type another statement names too, waits with every account of
+  those digits as a candidate (`account_ambiguous`), and a savings
+  statement never lands on the checking account because of the digits.
+  The Accounts dialog matches the same way. In any other file the same
+  digits on two statements are one account (two months in one OFX
+  file). **No
   row a statement's own figures do not vouch for is written** (investment
   rows have no pending state, so what is in doubt waits in a
   `low_confidence_field` item); what is held depends on what the
@@ -2894,7 +3092,7 @@ the document page.
   and a dated line without an amount is skipped with its box recorded. The
   anchors give the period (yearless row dates take its year), the account's
   last four digits and the balances, and the statement is reconciled and
-  scored like a parser's (parser `layout_template/3`), so a template that
+  scored like a parser's (parser `layout_template/4`), so a template that
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.

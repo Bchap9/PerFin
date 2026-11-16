@@ -41,9 +41,9 @@ nothing says when the statement is from, a year assumed from the day the
 file was made or arrived (:func:`assume_years`): the rows are kept, each
 waiting on its date, never split around a date printed in a notice.
 
-And tables printed two or three across the page: the left group of a checks
-table is read and every check beside it is counted; a table of daily
-balances printed across is neither read nor counted.
+And tables printed two or three across the page: every group of a checks
+table is read, each check a row; a table of daily balances printed across
+is neither read nor counted.
 """
 
 from __future__ import annotations
@@ -1596,18 +1596,26 @@ def test_shares_with_nothing_above_them_count_nothing() -> None:
     assert "rows_outside_account" not in outcome.warnings
 
 
-def test_lines_of_a_headerless_section_are_counted_not_read() -> None:
+def test_lines_of_a_headerless_section_are_read() -> None:
     result = _read(synth.titled_sections_without_headers())
     statement = _only(result)
-    assert _rows(statement) == synth.EXPECTED_ROWS["titled_sections_without_headers"]
-    assert len(statement.transactions) == 4
-    assert all(t.amount < 0 for t in statement.transactions)
-    assert _skipped(result) == 3
-    assert "rows_without_header:3" in _warnings(result)
-    assert result.parse is not None
-    assert len(result.parse.skipped_regions) == 3
-    # The deposits were not read, so the statement cannot add up: it is held.
-    assert _status(statement) == "mismatch"
+    assert len(statement.transactions) == 7
+    # The three deposits stand under their title alone: money in, by the title.
+    deposits = statement.transactions[:3]
+    assert [t.amount for t in deposits] == [Decimal("1420.00"), Decimal("75.00"), Decimal("31.20")]
+    assert [t.payee for t in deposits] == [
+        "Payroll Coldharbour Printworks",
+        "Mobile Deposit",
+        "Refund Ashlar Street Cobblers",
+    ]
+    assert _rows(statement)[3:] == synth.EXPECTED_ROWS["titled_sections_without_headers"]
+    assert all(t.amount < 0 for t in statement.transactions[3:])
+    assert _skipped(result) == 0
+    assert not any(w.startswith("rows_without_header") for w in _warnings(result))
+    assert "sections_without_header:1" in _warnings(result)
+    # No total is printed under the deposits; the balances check them.
+    assert _status(statement) == "ok"
+    assert all(not t.low_confidence for t in statement.transactions)
 
 
 def _undated(payee: str, amount: str) -> list[tuple[str, float]]:
@@ -2541,23 +2549,30 @@ def test_a_range_inside_a_sentence_on_page_one_is_no_period() -> None:
 # -- tables printed two or three across -------------------------------------------
 
 
-def test_checks_across_the_page_are_counted() -> None:
+def test_checks_across_the_page_are_all_read() -> None:
     result = _read(synth.checks_three_across())
     statement = _only(result)
     expected = synth.EXPECTED_ROWS["checks_three_across"]
     assert _rows(statement) == expected
-    assert len(statement.transactions) == 9
+    assert len(statement.transactions) == 16
     checks = statement.transactions[5:]
-    assert [t.payee for t in checks] == ["CHECK 2301", "CHECK 2304", "CHECK 2308", "CHECK 2311"]
+    # Line by line, each line from its left group to its right one.
+    assert [t.payee for t in checks] == [
+        f"CHECK {number}" for number in range(2301, 2313) if number != 2307
+    ]
+    assert len(checks) == 11
     assert all(t.amount < 0 for t in checks)
-    # Seven checks stand right of the left group: found, not read, counted.
-    assert _skipped(result) == 7
-    assert "table_across_unread:7" in _warnings(result)
+    assert _skipped(result) == 0
+    assert not any(w.startswith("table_across_unread") for w in _warnings(result))
+    assert "checks_listed_twice" not in _warnings(result)
     assert result.parse is not None
-    # One box per line of the checks table, whatever it holds.
-    assert len(result.parse.skipped_regions) == 4
-    # They were not read, so the statement cannot add up: it is held.
-    assert _status(statement) == "mismatch"
+    assert result.parse.skipped_regions == []
+    # Every check is a row, so the statement adds up.
+    assert _status(statement) == "ok"
+    # Each row's box is its own group's, not the line's.
+    boxes = [t.bbox for t in checks[:3]]
+    assert all(box is not None for box in boxes)
+    assert boxes[0][2] < boxes[1][0] < boxes[1][2] < boxes[2][0]  # type: ignore[index]
 
 
 def test_daily_balances_across_the_page_are_neither_read_nor_counted() -> None:
@@ -2581,7 +2596,7 @@ ACROSS_HEADER = [
 ]
 
 
-def test_only_dates_right_of_the_left_group_are_entries() -> None:
+def test_each_group_of_a_table_across_is_read_by_its_own_columns() -> None:
     outcome = _parse(
         [
             ACROSS_HEADER,
@@ -2603,11 +2618,22 @@ def test_only_dates_right_of_the_left_group_are_entries() -> None:
     statement = _one(outcome)
     assert [(t.payee, t.amount) for t in statement.transactions] == [
         ("CHECK 3101", Decimal("-20.00")),
+        ("CHECK 3102", Decimal("-4.11")),
         ("CHECK 3103", Decimal("-7.50")),
     ]
-    assert outcome.skipped_lines == 1
-    assert outcome.skipped_regions == [(1, (62.0, 114.0, 420.0, 123.0))]
-    assert outcome.warnings.count("table_across_unread:1") == 1
+    assert [t.posted for t in statement.transactions] == [
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+        date(2026, 1, 7),
+    ]
+    # Each row is its own group's box.
+    assert [t.bbox for t in statement.transactions[:2]] == [
+        (62.0, 114.0, 225.0, 123.0),
+        (260.0, 114.0, 420.0, 123.0),
+    ]
+    assert outcome.skipped_lines == 0
+    assert outcome.skipped_regions == []
+    assert not any(w.startswith("table_across_unread") for w in outcome.warnings)
 
 
 # -- a whole credit-union member statement ----------------------------------------
@@ -3041,9 +3067,9 @@ def test_a_wrapped_line_that_starts_with_purchase_is_no_title() -> None:
     assert _one(outcome).transactions[0].memo == "Purchase returned to the shop"
 
 
-def test_checks_across_the_page_above_the_first_share_are_counted() -> None:
-    # The left group's check belongs to no share (a row outside every
-    # account); the one printed beside it is an entry found and not read.
+def test_checks_across_the_page_above_the_first_share_are_rows_outside_it() -> None:
+    # Both checks are read, and both belong to no share: rows outside every
+    # account, counted one each.
     checks = [
         ACROSS_HEADER,
         [
@@ -3058,6 +3084,7 @@ def test_checks_across_the_page_above_the_first_share_are_counted() -> None:
     outcome = _parse(_two_shares(checks))
     assert "accounts_by_balance" in outcome.warnings
     assert len(outcome.statements) == 2
-    assert outcome.warnings.count("table_across_unread:1") == 1
+    assert not any(w.startswith("table_across_unread") for w in outcome.warnings)
     assert "rows_outside_account" in outcome.warnings
     assert outcome.skipped_lines == 2
+    assert len(outcome.skipped_regions) == 2

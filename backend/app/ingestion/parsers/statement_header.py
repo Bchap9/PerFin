@@ -27,6 +27,8 @@ without a PDF.
   line ("Stacked headers" below).
 * :func:`across_start` says where the second copy of a table printed two or
   three times across the page starts ("Tables printed across the page").
+* :func:`across_groups` gives the columns of every copy of such a table,
+  one list per printed group.
 
 How :func:`read_header` works on a line:
 
@@ -50,11 +52,29 @@ How :func:`read_header` works on a line:
    no digit, and none of :data:`NOT_A_DESCRIPTION` (a title such as
    ``DAILY ENDING BALANCE`` between ``Date`` and ``Amount`` heads a list
    of balances, not rows). Two unknown cells, and the line is no header.
-6. The line is a header when it names a date, a description or check
+6. A line that prints the **same description heading** twice (the same
+   words, whatever the letters' case) with a money or balance heading
+   **between** the two (left to right, by where each heading starts; the
+   headings may be cells or phrases of one cell) is no header: ``Date |
+   Description | Amount | Description | Amount`` heads a grid of labels
+   and their values (an account summary), and its lines are no rows. It
+   is :func:`header_like`, so it ends the table above it. A table printed
+   across the page is found before this and is not meant. Text headings
+   in **different** words are the text columns of one table, with a
+   money heading between them (``Transaction | Amount | Details |
+   Balance``) or without (``Payee | Description``, ``Details |
+   Particulars | Code | Reference``): the first one named is its
+   description column and the line is a header. Known limits: a grid
+   whose labels are headed in words outside the vocabulary (``Item |
+   Amount | Item | Amount``), in two different words, or by a heading a
+   line above it stacks onto, is still read as a header; its lines are
+   then left to the reader's rule for summary lines between two balance
+   lines.
+7. The line is a header when it names a date, a description or check
    number, and a money column; else it may be a headless header
    (:func:`_headless`).
 
-Steps 2 to 5 are for a line of headings only: they are skipped on a line
+Steps 2 to 6 are for a line of headings only: they are skipped on a line
 that holds an amount or has more than :data:`MAX_HEADER_CELLS` cells, and a
 cell of more than :data:`MAX_SPLIT_WORDS` words is never split, so a row,
 a total or a sentence that happens to say "date", "description" and
@@ -84,6 +104,14 @@ group as it reads any table, and counts the entries beside it (it does not
 read them). When it is not (``Date | Amount | Date | Amount``: a table of
 daily balances), the line is no header; it is :func:`header_like`, so it
 ends the table above it and nothing under it is read or counted.
+
+:func:`across_groups` gives the same line's columns group by group: one
+list per printed group, left to right, each column with the span of its
+own heading (a heading printed in one cell with its neighbour's, ``Amount
+Date``, has the span of its own words). Its first list is what
+:func:`read_header` returns before the ``across`` column. It is None
+wherever :func:`read_header` declares no ``across`` column: on any line
+that is no table across, and on ``Date | Amount`` pairs.
 
 Stacked headers
 ---------------
@@ -130,7 +158,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations, pairwise
 from typing import Final, Literal
@@ -259,8 +287,10 @@ MAX_SPLIT_WORDS: Final = 12
 MAX_HEADER_CELLS: Final = 12
 _DATE_ROLES: Final = frozenset({"date", "post_date"})
 #: A unit in brackets after a money heading, brackets included, is at most
-#: 12 characters (``(SGD)``, ``[in USD]``).
-_UNIT_BRACKETS: Final = re.compile(r"\s*(?:\([^()\[\]]{1,10}\)|\[[^()\[\]]{1,10}\])\s*$")
+#: 12 characters (``(SGD)``, ``[in USD]``). One ``|``, ``I``, ``l`` or ``!``
+#: printed directly behind the closing bracket is the column rule read as
+#: a character (``AMOUNT (EUR)I``) and goes with the unit.
+_UNIT_BRACKETS: Final = re.compile(r"\s*(?:\([^()\[\]]{1,10}\)|\[[^()\[\]]{1,10}\])[|Il!]?\s*$")
 #: A unit as a last word: three capital letters (``AMOUNT EUR``).
 _UNIT_WORD: Final = re.compile(r"\s+([A-Z]{3})\s*$")
 #: Three capital letters after a money heading that are a word, not a
@@ -311,10 +341,12 @@ def heading_role(text: str, headers: Mapping[str, Role] = HEADERS) -> Role | Non
 
     The role of the normalised text; else, for a **money** heading
     (:data:`NUMERIC_ROLES`), its role after dropping one unit printed after
-    it: a bracketed group of at most 12 characters (``Amount (SGD)``) or one
-    last word of three capital letters (``AMOUNT EUR``; not a word of
-    :data:`NOT_A_UNIT`). A text heading keeps its words: ``Description
-    (USD)`` is no heading.
+    it: a bracketed group of at most 12 characters (``Amount (SGD)``, with
+    one rule glyph ``|``, ``I``, ``l`` or ``!`` directly behind the bracket:
+    ``AMOUNT (EUR)I``) or one last word of three capital letters (``AMOUNT
+    EUR``; not a word of :data:`NOT_A_UNIT`). A text heading keeps its
+    words: ``Description (USD)`` is no heading, and neither are ``Amount I``
+    or ``Balance (EUR) due``.
     """
     role = headers.get(normalise(text))
     if role is not None:
@@ -437,12 +469,12 @@ def _headings(
     return [*whole, *parts], unmatched
 
 
-def _across(
+def _across_headings(
     line: ViewLine, headers: Mapping[str, Role]
-) -> tuple[list[tuple[Role, Cell]], float] | None:
-    """The headings of the first group of a table printed across the page and
-    the ``x0`` the second group starts at (module doc, "Tables printed across
-    the page"), or None when ``line`` is no such header."""
+) -> tuple[list[tuple[Role, Cell]], int] | None:
+    """Every heading of a table printed across the page, left to right, and
+    how many of them are one group (module doc, "Tables printed across the
+    page"), or None when ``line`` is no such header."""
     if not _plain(line):
         return None
     numbers = ACROSS_CHECK_HEADINGS - headers.keys()
@@ -461,9 +493,36 @@ def _across(
         if len(roles) % size or group * (len(roles) // size) != roles:
             continue
         if "date" in group and "amount" in group:
-            return headings[:size], headings[size][1].x0
+            return headings, size
         return None
     return None
+
+
+def _across(
+    line: ViewLine, headers: Mapping[str, Role]
+) -> tuple[list[tuple[Role, Cell]], float] | None:
+    """The headings of the first group of a table printed across the page and
+    the ``x0`` the second group starts at, or None when ``line`` is no such
+    header."""
+    found = _across_headings(line, headers)
+    if found is None:
+        return None
+    headings, size = found
+    return headings[:size], headings[size][1].x0
+
+
+def _group_columns(group: Sequence[tuple[Role, Cell]]) -> dict[Role, Column]:
+    """One column per role of one group of headings: the first heading of a role."""
+    columns: dict[Role, Column] = {}
+    for role, cell in group:
+        columns.setdefault(role, Column(role, cell.x0, cell.x1))
+    return columns
+
+
+def _is_table(roles: Collection[Role]) -> bool:
+    """A group of an across table that is a header by itself: besides its
+    date it names a description or check number and a money column."""
+    return bool(set(roles) & {"description", "check"} and set(roles) & MONEY_ROLES)
 
 
 def across_start(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> float | None:
@@ -479,20 +538,58 @@ def across_start(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> float
     return None if found is None else found[1]
 
 
+def across_groups(
+    line: ViewLine, headers: Mapping[str, Role] = HEADERS
+) -> list[list[Column]] | None:
+    """The columns of each group of a table printed across the page.
+
+    For a line :func:`read_header` reads as a table across (its result ends
+    with an ``across`` column): one list of columns per printed group, left
+    to right, each column with its own heading's span; the first list is
+    :func:`read_header`'s columns without the ``across`` one. None for any
+    other line: a plain header, a line that is no header, and ``Date |
+    Amount`` pairs (balances by day), whose entries are no transactions.
+    """
+    found = _across_headings(line, headers)
+    if found is None:
+        return None
+    headings, size = found
+    groups = [_group_columns(headings[at : at + size]) for at in range(0, len(headings), size)]
+    if not _is_table(groups[0].keys()):
+        return None
+    return [list(group.values()) for group in groups]
+
+
+def _label_value_grid(headings: Sequence[tuple[Role, Cell]]) -> bool:
+    """The headings name a description, then a column of figures, then the
+    same description again, left to right (module doc, 6)."""
+    figured: dict[str, bool] = {}  # a label -> a figure heading stands right of it
+    for role, cell in sorted(headings, key=lambda heading: heading[1].x0):
+        if role == "description":
+            label = normalise(cell.text)
+            if figured.get(label):
+                return True
+            figured.setdefault(label, False)
+        elif role in NUMERIC_ROLES:
+            figured = dict.fromkeys(figured, True)
+    return False
+
+
 def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[Column] | None:
     """The table columns ``line`` declares, or None when it is no header.
 
     A table printed across the page (:func:`across_start`) declares the
     columns of its first group and an ``across`` column from the second
     group on, when the first group is a header by itself; else it is none.
+    Any other line of headings that prints the same description heading
+    twice with a money or balance heading between the two is none either
+    (module doc, 6).
     """
     across = _across(line, headers)
     if across is not None:
         group, start = across
-        left: dict[Role, Column] = {}
-        for role, cell in group:
-            left.setdefault(role, Column(role, cell.x0, cell.x1))
-        if not (left.keys() & {"description", "check"} and left.keys() & MONEY_ROLES):
+        left = _group_columns(group)
+        if not _is_table(left.keys()):
             return None  # ``Date | Amount`` pairs: balances by day
         return [*left.values(), Column("across", start, math.inf)]
     plain = _plain(line)
@@ -508,6 +605,8 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
         roles.add(role)
         found.append(Column(role, cell.x0, cell.x1))
     if plain:
+        if _label_value_grid(headings):
+            return None  # a label beside its value, twice: a grid, no table
         if len(dates) > 1 and "post_date" not in roles:
             # Two date headings: the left one is the row's date, the next its posting date.
             first, second = sorted(dates, key=lambda c: c.x0)[:2]
