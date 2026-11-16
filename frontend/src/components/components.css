@@ -780,6 +780,17 @@ a.btn--danger:hover {
   padding-bottom: var(--space-1);
 }
 
+/* A select on the tab row says what it filters by its placeholder; its
+   label stays for screen readers, so the row is one line high. */
+.tabs__aside .field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .tabs__tab {
   min-height: 2.25rem;
   margin-bottom: -1px;
