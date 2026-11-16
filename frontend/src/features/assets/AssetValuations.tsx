@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * The Valuations tab of a manual asset's account hub
+ * (`/accounts/<account>?tab=valuations`): the asset's details with Edit and
+ * Delete asset, a form to add a value, the value over time and the history.
+ * Deleting the asset removes its details; the account and its values stay,
+ * and the hub returns to its overview.
+ */
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Button } from "../../components/Button";
@@ -16,10 +23,9 @@ import { amountSign, formatDecimal, isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
 import { labelOf } from "../investments/format";
 import { SeriesChart } from "../networth/SeriesChart";
-import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
-import { useRouteParam } from "../planning/useRouteParam";
 import {
   addValuation,
   assetKeys,
@@ -87,7 +93,7 @@ function EditDialog({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   );
 }
 
-function Valuations({ asset }: { asset: Asset }) {
+function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
   const accounts = useAccounts();
   const currency = accounts.data?.find((a) => a.id === asset.account_id)?.currency ?? asset.current_value?.value.currency ?? "USD";
   const query = useQuery({ queryKey: assetKeys.valuations(asset.id), queryFn: () => listValuations(asset.id) });
@@ -104,7 +110,9 @@ function Valuations({ asset }: { asset: Asset }) {
     { id: "date", header: "Date", rowHeader: true, cell: (v) => formatDate(v.valued_on) ?? v.valued_on },
     { id: "value", header: "Value", align: "end", cell: (v) => <MoneyText amount={v.value.amount} currency={v.value.currency} tone="none" /> },
     { id: "source", header: "Source", cell: (v) => (v.source === "manual" ? "Entered by you" : "Provider") },
-    {
+  ];
+  if (editable) {
+    columns.push({
       id: "remove",
       header: <span className="visually-hidden">Delete</span>,
       align: "end",
@@ -113,48 +121,51 @@ function Valuations({ asset }: { asset: Asset }) {
           Delete
         </Button>
       ),
-    },
-  ];
+    });
+  }
 
   return (
     <div className="planning-stack">
-      <Card title="Add a value" headingLevel={3}>
-        <form
-          className="planning-row"
-          aria-label="Add a value"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!isIsoDate(valuedOn)) {
-              setProblem("Enter a valid date.");
-              return;
-            }
-            if (!isDecimalString(value.trim()) || amountSign(value.trim()) < 0) {
-              setProblem("Enter a value of zero or more.");
-              return;
-            }
-            setProblem(null);
-            void add.run({ valued_on: valuedOn, value: { amount: value.trim(), currency } }).then((done) => {
-              if (done !== undefined) {
-                setValue("");
+      {editable ? (
+        <Card title="Add a value">
+          <form
+            className="planning-row"
+            aria-label="Add a value"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!isIsoDate(valuedOn)) {
+                setProblem("Enter a valid date.");
+                return;
               }
-            });
-          }}
-        >
-          <Field label="Date">
-            <Input type="date" value={valuedOn} onChange={(event) => { setValuedOn(event.target.value); }} />
-          </Field>
-          <Field label={`Value (${currency})`}>
-            <Input inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
-          </Field>
-          <Button type="submit" variant="primary" loading={add.busy}>
-            Save value
-          </Button>
-        </form>
-        <ErrorLine message={problem ?? add.error ?? remove.error} />
-      </Card>
+              if (!isDecimalString(value.trim()) || amountSign(value.trim()) < 0) {
+                setProblem("Enter a value of zero or more.");
+                return;
+              }
+              setProblem(null);
+              void add.run({ valued_on: valuedOn, value: { amount: value.trim(), currency } }).then((done) => {
+                if (done !== undefined) {
+                  setValue("");
+                }
+              });
+            }}
+          >
+            <Field label="Date">
+              <Input type="date" value={valuedOn} onChange={(event) => { setValuedOn(event.target.value); }} />
+            </Field>
+            <Field label={`Value (${currency})`}>
+              <Input inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
+            </Field>
+            <Button type="submit" variant="primary" loading={add.busy}>
+              Save value
+            </Button>
+          </form>
+          <ErrorLine message={problem ?? add.error} />
+        </Card>
+      ) : null}
+      <ErrorLine message={remove.error} />
       <QueryState loading={query.isPending} error={query.error} label="valuations">
         {rows.length >= 2 ? (
-          <Card title="Value over time" headingLevel={3}>
+          <Card title="Value over time">
             <SeriesChart points={valuationPoints(rows)} series={[{ key: "value", label: "Value" }]} currency={currency} label="Value over time" />
             {change === null ? null : (
               <p>
@@ -171,40 +182,36 @@ function Valuations({ asset }: { asset: Asset }) {
   );
 }
 
-/** `assetId` is given by the account hub (Stage 3 bridge); otherwise the route parameter is used. */
-export function AssetDetailPage({ assetId: given }: { assetId?: string } = {}) {
-  const fromRoute = useRouteParam("assetId");
-  const assetId = given ?? fromRoute;
+/** The asset of a manual asset account, by its id (found by the hub from `GET /assets`). */
+export function AssetValuations({ assetId }: { assetId: string }) {
   const navigate = useNavigate();
   const query = useQuery({ queryKey: assetKeys.one(assetId), queryFn: () => getAsset(assetId), enabled: assetId !== "" });
+  const accounts = useAccounts();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const remove = useAction(() => deleteAsset(assetId), { invalidate: [queryRoots.assets, queryRoots.accounts, queryRoots.netWorth], success: "Asset deleted" });
   const asset = query.data;
+  // Details may be changed by someone who can edit the asset's account; the server checks again.
+  const editable = asset !== undefined && accounts.data?.find((entry) => entry.id === asset.account_id)?.can_edit === true;
 
   return (
-    <PlanningPage
-      title={asset?.name ?? "Asset"}
-      actions={
-        <>
-          <Link to="/assets" className="btn btn--secondary btn--md">
-            All assets
-          </Link>
-          {asset === undefined ? null : (
-            <>
-              <Button onClick={() => { setEditing(true); }}>Edit</Button>
-              <Button variant="danger" onClick={() => { setConfirming(true); }}>
-                Delete asset
-              </Button>
-            </>
-          )}
-        </>
-      }
-    >
+    <div className="planning-stack">
       <QueryState loading={query.isPending} error={query.error} label="the asset">
         {asset === undefined ? null : (
           <>
-            <Card title="Summary" headingLevel={2}>
+            <Card
+              title={asset.name}
+              actions={
+                editable ? (
+                  <>
+                    <Button size="sm" onClick={() => { setEditing(true); }}>Edit</Button>
+                    <Button size="sm" variant="danger" onClick={() => { setConfirming(true); }}>
+                      Delete asset
+                    </Button>
+                  </>
+                ) : undefined
+              }
+            >
               <dl className="wealth-figures">
                 <div>
                   <dt>Current value</dt>
@@ -225,12 +232,12 @@ export function AssetDetailPage({ assetId: given }: { assetId?: string } = {}) {
               </dl>
               {asset.description === null ? null : <p className="muted">{asset.description}</p>}
             </Card>
-            <Valuations asset={asset} />
+            <Valuations asset={asset} editable={editable} />
           </>
         )}
       </QueryState>
       {editing && asset !== undefined ? <EditDialog asset={asset} onClose={() => { setEditing(false); }} /> : null}
-      {confirming ? (
+      {confirming && asset !== undefined ? (
         <Dialog
           open
           onClose={() => { setConfirming(false); }}
@@ -245,7 +252,8 @@ export function AssetDetailPage({ assetId: given }: { assetId?: string } = {}) {
                 onClick={() => {
                   void remove.run().then((done) => {
                     if (done !== undefined) {
-                      void navigate({ to: "/assets" });
+                      setConfirming(false);
+                      void navigate({ to: "/accounts/$accountId", params: { accountId: asset.account_id } });
                     }
                   });
                 }}
@@ -258,6 +266,6 @@ export function AssetDetailPage({ assetId: given }: { assetId?: string } = {}) {
           <ErrorLine message={remove.error} />
         </Dialog>
       ) : null}
-    </PlanningPage>
+    </div>
   );
 }

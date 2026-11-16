@@ -253,6 +253,44 @@ describe("investments in the address", () => {
   });
 });
 
+describe("an investment account's hub", () => {
+  const brokerage = async (call: Parameters<Handler>[0]) => {
+    const body = (await (await accounts()(call)).json()) as { items: Record<string, unknown>[] };
+    return json(body.items.find((entry) => entry["id"] === BROKERAGE));
+  };
+  const handlers = (): Record<string, Handler> => ({
+    ...ownerSession(),
+    "GET /api/v1/accounts": accounts(),
+    "GET /api/v1/accounts/:id": brokerage,
+    "GET /api/v1/investments/holdings": () => json(holdings),
+    "GET /api/v1/investments/accounts/:id/cost-method": () => json({ account_id: BROKERAGE, method: "fifo" }),
+    "GET /api/v1/investments/transactions": () => json({ items: [], next_cursor: null }),
+    "GET /api/v1/securities": () => json({ items: [], next_cursor: null }),
+  });
+
+  it("a brokerage hub has holdings, activity and performance for that account", async () => {
+    const api = mockApi(handlers());
+    renderApp(`/accounts/${BROKERAGE}?tab=holdings`);
+    expect(await screen.findByRole("heading", { level: 1, name: "Brokerage" })).toBeInTheDocument();
+    const tabs = within(screen.getByRole("tablist", { name: "Brokerage" })).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "Transactions", "Documents", "Holdings", "Activity", "Performance"]);
+    expect(await screen.findByRole("table", { name: "Holdings" })).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/investments/holdings")[0]?.search).toContain(`account=${BROKERAGE}`);
+    const method = await screen.findByRole("list", { name: "Cost basis method by account" });
+    expect(within(method).getAllByRole("listitem")).toHaveLength(1);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Activity" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/investments/transactions").some((call) => call.search.includes(`account=${BROKERAGE}`))).toBe(true);
+    });
+    await user.click(screen.getByRole("tab", { name: "Performance" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/investments/performance").some((call) => call.search.includes(`account=${BROKERAGE}`))).toBe(true);
+    });
+  });
+});
+
 const security = (patch: Record<string, unknown> = {}) => ({
   id: SEC,
   symbol: "ACME",

@@ -114,3 +114,69 @@
     align-items: flex-start;
   }
 }
+
+/* The account hub: header, balance, tabs and their panels. */
+.account-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.account-hub__balance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.account-hub__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.hub-tx__description {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.hub-docs {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-docs__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.hub-docs__item:first-child {
+  border-top: 0;
+}
+
+.hub-docs__name {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  min-height: 24px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.hub-docs__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

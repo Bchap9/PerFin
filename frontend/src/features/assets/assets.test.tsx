@@ -2,8 +2,9 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp, type Handler } from "../auth/testing";
+import { currentHref, json, mockApi, noContent, renderApp, type Handler } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
+import { account, page } from "../transactions/fixtures";
 
 const ASSET = "20000000-0000-4000-8000-000000000001";
 const STAMP = "2026-11-01T10:00:00Z";
@@ -19,6 +20,10 @@ const asset = {
   created_at: STAMP,
   updated_at: STAMP,
 };
+
+/** The asset's account; its hub holds the Valuations tab. */
+const HOME = account(ACCOUNT_CHECKING, "Family home", { type: "manual_asset", asset_kind: "property", balance: money("330000.00"), balance_date: "2026-06-01" });
+const HUB = `/accounts/${ACCOUNT_CHECKING}`;
 
 describe("assets", () => {
   it("shows each asset's kind and how it is valued on its account in the property group", async () => {
@@ -68,12 +73,17 @@ describe("assets", () => {
     const api = mockApi({
       ...ownerSession(),
       ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
       "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
       "GET /api/v1/assets/:id": () => json(asset),
       "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
       "POST /api/v1/assets/:id/valuations": () => json(valuation("v3", "2026-11-03", "335000.00"), 201),
     });
-    renderApp(`/assets/${ASSET}`);
+    renderApp(`${HUB}?tab=valuations`);
+    expect(await screen.findByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Family home" })).toBeInTheDocument();
+    expect(await screen.findByText("Appraisal")).toBeInTheDocument();
     expect(await screen.findByText(/Since the first value/)).toHaveTextContent("+$30,000.00 (+10.00%)");
     const user = userEvent.setup();
     const form = screen.getByRole("form", { name: "Add a value" });
@@ -81,5 +91,32 @@ describe("assets", () => {
     await user.click(within(form).getByRole("button", { name: "Save value" }));
     await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/assets/:id/valuations")).toHaveLength(1); });
     expect(api.callsTo("POST", "/api/v1/assets/:id/valuations")[0]?.body).toMatchObject({ value: { amount: "335000", currency: "USD" } });
+  });
+
+  it("deleting the asset details keeps the account", async () => {
+    const state = { items: [asset] };
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: state.items, next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [] }),
+      "DELETE /api/v1/assets/:id": () => {
+        state.items = [];
+        return noContent();
+      },
+    });
+    const { router } = renderApp(`${HUB}?tab=valuations`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete asset" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete asset" });
+    expect(dialog).toHaveTextContent("The account and its values stay.");
+    await user.click(within(dialog).getByRole("button", { name: "Delete asset" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", `/api/v1/assets/${ASSET}`)).toHaveLength(1); });
+    await vi.waitFor(() => { expect(currentHref(router)).toBe(HUB); });
+    expect(api.callsTo("DELETE", "/api/v1/accounts/:id")).toHaveLength(0);
   });
 });

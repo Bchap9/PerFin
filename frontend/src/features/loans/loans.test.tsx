@@ -2,8 +2,9 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 import { money, ownerSession, referenceHandlers } from "../planning/testing";
+import { account, page } from "../transactions/fixtures";
 
 const LOAN = "10000000-0000-4000-8000-000000000001";
 const STAMP = "2026-11-01T10:00:00Z";
@@ -36,6 +37,16 @@ const loan = {
   },
 };
 
+/** The loan's account, a mortgage; its hub holds the loan's tabs. */
+const MORTGAGE = account(loan.account_id, "Home mortgage", { type: "mortgage", is_asset: false, balance: money("-190000.00") });
+const HUB = `/accounts/${loan.account_id}`;
+
+/** The account list and the account itself, as the hub reads them. */
+function mortgageHandlers(extra: Partial<typeof MORTGAGE> = {}): Record<string, Handler> {
+  const shown = { ...MORTGAGE, ...extra };
+  return { "GET /api/v1/accounts": page([shown]), "GET /api/v1/accounts/:id": () => json(shown) };
+}
+
 const scenario = (payoff: string, payments: number, interest: string, extra: string) => ({
   payoff_date: payoff,
   payments,
@@ -63,6 +74,7 @@ describe("loans", () => {
     const api = mockApi({
       ...ownerSession(),
       ...referenceHandlers(),
+      ...mortgageHandlers(),
       "GET /api/v1/loans/:id": () => json(loan),
       "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
       "GET /api/v1/loans/:id/schedule": () => json({ loan_id: LOAN, basis: "projected", start_balance: money("190000.00"), rows: [], totals: { payments: 327, principal: money("190000.00"), interest: money("205000.00"), extra: money("0"), escrow: money("0"), paid: money("395000.00"), payoff_date: "2054-01-15" } }),
@@ -78,9 +90,9 @@ describe("loans", () => {
           schedule: null,
         }),
     });
-    renderApp(`/loans/${LOAN}`);
+    renderApp(`${HUB}?tab=payoff`);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("tab", { name: "Extra payments" }));
+    expect(await screen.findByRole("tab", { name: "Payoff", selected: true })).toBeInTheDocument();
     const form = await screen.findByRole("form", { name: "Extra payment simulator" });
 
     await user.click(within(form).getByRole("button", { name: "Simulate" }));
@@ -203,6 +215,7 @@ describe("recording a loan payment", () => {
     const api = mockApi({
       ...ownerSession(),
       ...referenceHandlers(),
+      ...mortgageHandlers(),
       "GET /api/v1/loans/:id": () => json(loan),
       "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
       "GET /api/v1/loans/:id/schedule": () => json(schedule),
@@ -212,9 +225,9 @@ describe("recording a loan payment", () => {
         return json(payment, 201);
       },
     });
-    renderApp(`/loans/${LOAN}`);
+    renderApp(`${HUB}?tab=payments`);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("tab", { name: "Payments" }));
+    expect(await screen.findByRole("tab", { name: "Payments", selected: true })).toBeInTheDocument();
     return { api, user, form: await screen.findByRole("form", { name: "Record a payment" }) };
   };
   const posted = (api: ReturnType<typeof mockApi>) => api.callsTo("POST", `/api/v1/loans/${LOAN}/payments`);
@@ -267,6 +280,7 @@ describe("editing a loan", () => {
   const handlers = (extra: Record<string, Handler> = {}): Record<string, Handler> => ({
     ...ownerSession(),
     ...referenceHandlers(),
+    ...mortgageHandlers(),
     "GET /api/v1/loans/:id": () => json(loan),
     "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
     "GET /api/v1/loans/:id/schedule": () => json(schedule),
@@ -284,7 +298,7 @@ describe("editing a loan", () => {
         },
       }),
     );
-    renderApp(`/loans/${LOAN}`);
+    renderApp(`${HUB}?tab=schedule`);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Edit loan" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit loan" });
@@ -315,7 +329,7 @@ describe("editing a loan", () => {
 
   it("checks the terms before sending and shows the server's refusal", async () => {
     const api = mockApi(handlers({ "PATCH /api/v1/loans/:id": () => problem(422, "invalid-payment-date") }));
-    renderApp(`/loans/${LOAN}`);
+    renderApp(`${HUB}?tab=schedule`);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Edit loan" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit loan" });
@@ -338,15 +352,77 @@ describe("editing a loan", () => {
   });
 
   it("is not offered when the loan's account cannot be edited", async () => {
-    const readOnly: Handler = async (call) => {
-      const base = referenceHandlers()["GET /api/v1/accounts"] ?? (() => json({ items: [], next_cursor: null }));
-      const body = (await (await base(call)).json()) as { items: Record<string, unknown>[] };
-      return json({ items: body.items.map((entry) => ({ ...entry, can_edit: false })), next_cursor: null });
-    };
-    mockApi(handlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }), "GET /api/v1/accounts": readOnly }));
-    renderApp(`/loans/${LOAN}`);
-    expect(await screen.findByRole("heading", { name: "Checking" })).toBeInTheDocument();
+    mockApi(handlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }), ...mortgageHandlers({ can_edit: false }) }));
+    renderApp(`${HUB}?tab=schedule`);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home mortgage" })).toBeInTheDocument();
     expect(await screen.findByText("6.125% fixed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit loan" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete loan" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the loan on its account", () => {
+  const schedule = { loan_id: LOAN, basis: "projected", start_balance: money("190000.00"), rows: [], totals: { payments: 327, principal: money("190000.00"), interest: money("205000.00"), extra: money("0"), escrow: money("0"), paid: money("395000.00"), payoff_date: "2054-01-15" } };
+
+  it("shows the schedule, payments, rate changes and payoff as tabs of the account", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      ...mortgageHandlers(),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
+      "GET /api/v1/loans/:id/schedule": () => json(schedule),
+      "GET /api/v1/loans/:id/rate-changes": () => json({ items: [] }),
+    });
+    renderApp(`${HUB}?tab=schedule`);
+    expect(await screen.findByRole("tab", { name: "Schedule", selected: true })).toBeInTheDocument();
+    const tabs = within(screen.getByRole("tablist", { name: "Home mortgage" })).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "Transactions", "Documents", "Schedule", "Payments", "Rate changes", "Payoff"]);
+    expect(await screen.findByRole("table", { name: "Amortisation schedule, from today" })).toBeInTheDocument();
+    expect(screen.getByText("Balance owed")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Breadcrumbs" })).toHaveTextContent("Home mortgage");
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Rate changes" }));
+    expect(await screen.findByRole("tab", { name: "Rate changes", selected: true })).toBeInTheDocument();
+  });
+
+  it("deleting the loan keeps the account", async () => {
+    const state = { items: [loan] };
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      ...mortgageHandlers(),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: state.items, next_cursor: null }),
+      "GET /api/v1/loans/:id/schedule": () => json(schedule),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: loan.account_id, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "DELETE /api/v1/loans/:id": () => {
+        state.items = [];
+        return noContent();
+      },
+    });
+    const { router } = renderApp(`${HUB}?tab=schedule`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete loan" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete loan" });
+    expect(dialog).toHaveTextContent("The account stays.");
+    await user.click(within(dialog).getByRole("button", { name: "Delete loan" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", `/api/v1/loans/${LOAN}`)).toHaveLength(1); });
+    await vi.waitFor(() => { expect(currentHref(router)).toBe(HUB); });
+    expect(api.callsTo("DELETE", "/api/v1/accounts/:id")).toHaveLength(0);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home mortgage" })).toBeInTheDocument();
+    expect(await screen.findByText("Loan deleted")).toBeInTheDocument();
+  });
+
+  it("offers to add the terms on the schedule of a mortgage that has none", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      ...mortgageHandlers(),
+      "GET /api/v1/loans": () => json({ items: [], next_cursor: null }),
+    });
+    renderApp(`${HUB}?tab=schedule`);
+    expect(await screen.findByText("This account has no loan terms yet.")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Add loan terms" }));
+    expect(await screen.findByRole("dialog", { name: "Loan terms for Home mortgage" })).toBeInTheDocument();
   });
 });
