@@ -19,6 +19,7 @@ export const queryRoots = {
   loans: ["loans"],
   assets: ["assets"],
   recurring: ["recurring"],
+  subscriptions: ["subscriptions"],
   netWorth: ["net-worth"],
   documents: ["documents"],
   review: ["review"],
