@@ -1,0 +1,84 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * The command palette (app/CommandPalette.tsx): a Dialog near the top of the
+ * window with one input and a list of up to twelve destinations. The active
+ * option is accent-soft behind the body text (a pair checked by contrast.ts).
+ */
+
+.dialog.palette {
+  width: min(36rem, calc(100vw - 2 * var(--space-4)));
+  margin-top: 12vh;
+}
+
+.palette .dialog__body {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.palette__input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-md);
+}
+
+.palette__input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.palette__list {
+  max-height: min(24rem, 50vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.palette__list[hidden] {
+  display: none;
+}
+
+.palette__option {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.palette__option--active {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.palette__empty {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--color-text-muted);
+}
+
+.palette__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 819px) {
+  .dialog.palette {
+    margin-top: var(--space-4);
+  }
+
+  .palette__hint {
+    display: none;
+  }
+}
