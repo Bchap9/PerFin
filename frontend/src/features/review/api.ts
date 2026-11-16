@@ -24,6 +24,11 @@ export const reviewKeys = {
     state,
   ],
   one: (id: string) => [...queryRoots.review, "one", id],
+  reconciliation: (documentId: string) => [
+    ...queryRoots.review,
+    "reconciliation",
+    documentId,
+  ],
 } as const;
 
 export type ReviewFilter = ReviewItemState | "all";
@@ -624,4 +629,77 @@ export function balanceCorrection(
     document.closing_balance = closing.trim();
   }
   return { document, resolve };
+}
+
+// ---- reconciliation -----------------------------------------------------------
+
+export type DocumentReconciliation = Schemas["DocumentReconciliation"];
+export type StatementReconciliation = Schemas["StatementReconciliation"];
+export type ReconcileRow = Schemas["ReconcileRow"];
+export type ReconcileCause = Schemas["ReconcileCause"];
+export type CauseKind = ReconcileCause["kind"];
+export type RemovedRow = Schemas["RemovedRow"];
+export type ReconcileOutcome = Schemas["ReconcileOutcome"];
+
+/** The statements of a document against the ledger rows they produced. */
+export function getReconciliation(
+  documentId: string,
+): Promise<DocumentReconciliation> {
+  return unwrap(
+    api.GET("/api/v1/documents/{document_id}/reconciliation", {
+      params: { path: { document_id: documentId } },
+    }),
+  );
+}
+
+/** Confirm a statement that balances; the balances are sent as typed. */
+export function confirmReconciliation(
+  documentId: string,
+  body: Schemas["ReconcileConfirm"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/confirm", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Accept a statement as read, without balancing it (no balance is recorded). */
+export function acceptReconciliation(
+  documentId: string,
+  body: Schemas["ReconcileAccept"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/accept", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Put a removed row of the document back. */
+export function restoreRow(
+  documentId: string,
+  body: Schemas["ReconcileRestore"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/restore", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Remove the rows an earlier reading of the statement left behind. */
+export function removeEarlierRows(
+  documentId: string,
+  body: Schemas["ReconcileRemoveEarlier"],
+): Promise<ReconcileOutcome> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/reconciliation/remove-earlier", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
 }
