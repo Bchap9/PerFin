@@ -360,6 +360,42 @@ def test_accounts_value_an_investment_account_as_net_worth_does(
     assert single["balance"]["amount"] == "1200.00"
 
 
+def test_an_investment_account_s_history_is_valued_as_net_worth_does(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ledger alone says 1000.00 every day from the deposit on; the
+    # account is worth its cash plus its holdings on each day, priced at the
+    # latest close (or trade price) on or before it.
+    monkeypatch.setattr(accounts_service, "today", lambda: TODAY)
+    brokerage = world.accounts["brokerage"]
+    body = _get(
+        world.owner,
+        f"{API}/accounts/{brokerage.id}/balances",
+        start="2026-02-28",
+        end="2026-06-30",
+    )
+    by_day = {p["date"]: p["balance"]["amount"] for p in body["items"]}
+    assert len(by_day) == (TODAY - date(2026, 2, 28)).days + 1
+    assert by_day["2026-02-28"] == "0.00"
+    assert by_day["2026-03-01"] == "1000.00"  # the deposit, nothing bought yet
+    assert by_day["2026-03-02"] == "1000.00"  # 0.00 cash + 10 x 100.00
+    assert by_day["2026-06-28"] == "1000.00"
+    assert by_day["2026-06-29"] == "1200.00"  # the close of 120.00
+    assert by_day["2026-06-30"] == "1200.00"
+    # The last point is the balance the account shows.
+    single = _get(world.owner, f"{API}/accounts/{brokerage.id}")
+    assert by_day["2026-06-30"] == single["balance"]["amount"]
+    # A bank account's history is its ledger, as before.
+    checking = world.accounts["checking"]
+    bank = _get(
+        world.owner,
+        f"{API}/accounts/{checking.id}/balances",
+        start="2026-06-01",
+        end="2026-06-30",
+    )
+    assert bank["items"][-1]["balance"]["amount"] == "3800.00"
+
+
 def test_projection(world: World) -> None:
     owner = world.owner
     body = _get(owner, f"{NW}/projection", months=12, basis_months=3)

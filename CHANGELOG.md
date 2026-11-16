@@ -107,6 +107,12 @@ Stage 4 of four on the way to 1.0.0: the release review.
   merchant were put together by their text, so rows printed as `E` or `XY
   #0042` could make one series. Text of fewer than three letters now groups
   nothing, as for a merchant key.
+- **A brokerage account's chart shows what it is worth.** `GET
+  /accounts/{id}/balances` (the account page's chart) gave a brokerage or
+  retirement account its ledger balance on each day, so an account worth
+  its holdings charted a line near 0.00 while its page said otherwise. Each
+  day is now valued as `GET /accounts` and net worth value it: cash plus
+  holdings at that day's latest close.
 - **More of a bank's own lines are read, and more plain wording is
   suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
   fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`

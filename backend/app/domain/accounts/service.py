@@ -643,6 +643,31 @@ def delete_account(
 # ---------------------------------------------------------------------------
 
 
+def _history(db: Session, account: Account, first: date, last: date) -> list[balances.DailyBalance]:
+    """End-of-day balances of ``first..last``, each day valued as :func:`_balances` does.
+
+    The ledger's, except that an investment account is worth its cash plus
+    its holdings on each day: one net-worth book read for the range, valued
+    per day (at most ``MAX_HISTORY_DAYS`` of them).
+    """
+    if account.type not in INVESTMENT_TYPES:
+        return balances.balance_history(db, account, first, last)
+    book = NetWorthBook.load(
+        db,
+        account.household_id,
+        [account.id],
+        target=account.currency,
+        until=last,
+        include_excluded=True,
+    )
+    days = (last - first).days + 1
+    out: list[balances.DailyBalance] = []
+    for offset in range(days):
+        day = first + timedelta(days=offset)
+        out.append(balances.DailyBalance(day, book.values_on(day)[account.id]))
+    return out
+
+
 def balance_history(
     db: Session,
     principal: Principal,
@@ -666,7 +691,7 @@ def balance_history(
             f"Ask for at most {MAX_HISTORY_DAYS} days at a time.",
             extra={"max_days": MAX_HISTORY_DAYS},
         )
-    series = balances.balance_history(db, account, first, last)
+    series = _history(db, account, first, last)
     return BalanceHistoryOut(
         account_id=account.id,
         currency=account.currency,
