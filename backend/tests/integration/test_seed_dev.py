@@ -201,6 +201,21 @@ def test_investments_loans_assets_and_net_worth(admin_client: TestClient) -> Non
     assert Decimal(latest["liabilities"]["amount"]) != 0
 
 
+def test_investment_accounts_are_funded_before_they_buy(admin_client: TestClient) -> None:
+    # Cash is never negative, so each account is worth at least its holdings.
+    held: dict[str, Decimal] = {}
+    for holding in admin_client.get(f"{API}/investments/holdings").json()["holdings"]:
+        value = holding["market_value"]
+        assert value is not None
+        held[holding["account_id"]] = held.get(holding["account_id"], Decimal(0)) + Decimal(
+            value["amount"]
+        )
+    assert len(held) == 2
+    balances = {a["id"]: Decimal(a["balance"]["amount"]) for a in items(admin_client, "/accounts")}
+    for account_id, holdings_value in held.items():
+        assert balances[account_id] >= holdings_value
+
+
 def test_tax_year_documents_and_review_queue(admin_client: TestClient) -> None:
     years = items(admin_client, "/tax-years")
     assert len(years) == 1
