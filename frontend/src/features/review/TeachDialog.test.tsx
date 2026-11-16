@@ -6,17 +6,20 @@ import { authedSession, json, mockApi, problem, renderApp, type Handler } from "
 import { account, lookupHandlers, NOW } from "../transactions/fixtures";
 import type { ReviewItem } from "./api";
 import {
+  DIRECTION_CHOICES,
   IGNORE_LABEL,
   OTHER_LABEL,
   SELECTION_CHOICES,
   columnsFromWords,
   keptText,
   newSelection,
+  previewSummary,
   problems,
   rolesForTable,
   teachBody,
   warningText,
   type PageWord,
+  type Selection,
   type TeachRole,
 } from "./teach";
 
@@ -76,10 +79,61 @@ const PAGE = {
   words_truncated: false,
 };
 
-function reviewApi(detail: ReviewItem, extra: Record<string, Handler> = {}) {
+/** What a preview answers: nothing is saved, the reading is shown. */
+function previewOut(extra: Record<string, unknown> = {}) {
+  return {
+    document_id: "d-1",
+    fields: [],
+    tables: [],
+    ignored: 0,
+    notes: [],
+    applied: [],
+    warnings: [],
+    reprocessed: [],
+    preview: {
+      rows: [],
+      row_count: 0,
+      reconciliation: "unavailable",
+      difference: null,
+      similar_waiting: 0,
+      account_id: null,
+      ...extra,
+    },
+  };
+}
+
+function appliedOut(extra: Record<string, unknown> = {}) {
+  return {
+    document_id: "d-1",
+    fields: [],
+    tables: [],
+    ignored: 0,
+    notes: [],
+    applied: [],
+    warnings: [],
+    reprocessed: [],
+    ...extra,
+  };
+}
+
+function isPreview(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "preview" in body && body.preview === true;
+}
+
+/** Answers a preview with ``shown`` and an apply with ``applied``. */
+function teachHandler(shown: unknown, applied: unknown = appliedOut()): Handler {
+  return (call) => json(isPreview(call.body) ? shown : applied);
+}
+
+function reviewApi(
+  detail: ReviewItem,
+  extra: Record<string, Handler> = {},
+  documentAccount: string | null = null,
+) {
   return mockApi({
     "GET /api/v1/auth/session": authedSession({ role: "owner" }),
-    ...lookupHandlers([account("a-1", "Everyday")]),
+    ...lookupHandlers([account("a-1", "Everyday"), account("a-2", "Rainy day")]),
+    "GET /api/v1/documents/:id": () => json({ id: "d-1", account_id: documentAccount }),
     "GET /api/v1/review": () => json({ items: [detail], next_cursor: null }),
     "GET /api/v1/review/:id": () => json(detail),
     "GET /api/v1/documents/:id/regions": () => json(PAGE),
@@ -127,6 +181,8 @@ describe("teach helpers", () => {
       remember: true,
       reprocessSimilar: false,
       itemId: null,
+      accountId: null,
+      preview: false,
     });
     expect(body).toEqual({
       labels: [],
@@ -140,31 +196,141 @@ describe("teach helpers", () => {
             { x0: 125, x1: 305, role: "other", note: "Who was paid" },
             { x0: 305, x1: 500, role: "amount" },
           ],
+          direction: "as_printed",
+          continues: false,
         },
       ],
       remember: true,
       reprocess_similar: false,
       replace: false,
       resolve: false,
+      preview: false,
       institution_name: "Quill Society",
     });
   });
+
+  function table(kind: "transactions" | "holdings", extra: Partial<Selection> = {}): Selection {
+    const drawn = newSelection(1, [50, 75, 500, 115], WORDS);
+    const roles: readonly TeachRole[] =
+      kind === "transactions" ? ["date", "payee", "amount"] : ["symbol", "quantity", "price"];
+    return {
+      ...drawn,
+      kind,
+      columns: drawn.columns.map((c, i) => ({ ...c, role: roles.at(i) ?? "ignore" })),
+      ...extra,
+    };
+  }
+
+  it("teachBody carries the direction, the continuation and the account", () => {
+    const drawn = newSelection(1, [50, 75, 500, 115], WORDS);
+    expect(drawn.direction).toBe("as_printed");
+    expect(drawn.continues).toBe(false);
+    const body = teachBody(
+      [table("transactions", { direction: "money_out", continues: true }), table("holdings")],
+      {
+        institutionName: "",
+        remember: false,
+        reprocessSimilar: true,
+        itemId: "r-1",
+        accountId: "a-2",
+        preview: true,
+      },
+    );
+    expect(body.account_id).toBe("a-2");
+    expect(body.preview).toBe(true);
+    expect(body.tables?.[0]).toMatchObject({
+      kind: "transactions",
+      direction: "money_out",
+      continues: true,
+    });
+    // A holdings table has no direction to say.
+    expect(body.tables?.[1]).not.toHaveProperty("direction");
+    expect(body.tables?.[1]).not.toHaveProperty("continues");
+    const none = teachBody([], {
+      institutionName: "",
+      remember: false,
+      reprocessSimilar: true,
+      itemId: null,
+      accountId: null,
+      preview: false,
+    });
+    expect(none).not.toHaveProperty("account_id");
+    expect(none.preview).toBe(false);
+  });
+
+  it("offers the four directions in plain words", () => {
+    expect(DIRECTION_CHOICES).toEqual([
+      { value: "as_printed", label: "As printed (the amounts carry their own sign)" },
+      { value: "money_in", label: "Money in (deposits, credits)" },
+      { value: "money_out", label: "Money out (withdrawals, charges)" },
+      { value: "card", label: "Card: charges are printed as positive amounts" },
+    ]);
+  });
+
+  it("allows a second transactions table and refuses a fifth", () => {
+    const two = [table("transactions"), table("transactions", { direction: "money_out" })];
+    expect(problems(two)).toEqual([]);
+    const four = [...two, table("transactions"), table("transactions")];
+    expect(problems([...four, table("holdings")])).toEqual([]);
+    expect(problems([...four, table("transactions")])).toEqual([
+      "A layout takes at most four transaction tables.",
+    ]);
+    expect(problems([table("holdings"), table("holdings")])).toEqual([
+      "A layout takes one holdings table.",
+    ]);
+  });
+
+  it("previewSummary says whether the rows add up", () => {
+    const base = { rows: [], row_count: 12, similar_waiting: 0, account_id: null };
+    expect(previewSummary({ ...base, reconciliation: "ok", difference: "0.00" })).toBe(
+      "12 rows read. They add up to the balances.",
+    );
+    expect(previewSummary({ ...base, reconciliation: "mismatch", difference: "-81.40" })).toBe(
+      "12 rows read. They differ from the balances by -81.40.",
+    );
+    expect(previewSummary({ ...base, reconciliation: "unavailable", difference: null })).toBe(
+      "12 rows read. There are no balances to check them against.",
+    );
+    expect(previewSummary({ ...base, reconciliation: null, difference: null })).toBe(
+      "12 rows read. There are no balances to check them against.",
+    );
+  });
+
+  it("says that an earlier import of the file was replaced", () => {
+    expect(warningText("rows_already_imported")).toBe(
+      "The rows imported earlier from this file were replaced by this reading; rows you had changed were kept.",
+    );
+  });
 });
+
+/** Opens the dialog from the review page and labels the header line as a transaction table. */
+async function openWithTable(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
+  const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
+  await user.selectOptions(await within(dialog).findByLabelText("Choose a line"), "1");
+  await user.click(within(dialog).getByRole("button", { name: "Add this line" }));
+  await user.selectOptions(within(dialog).getByLabelText("What is this?"), "transactions");
+  await user.selectOptions(within(dialog).getByLabelText("Column 1: Booked"), "date");
+  await user.selectOptions(within(dialog).getByLabelText("Column 2: Narrative"), "payee");
+  await user.selectOptions(within(dialog).getByLabelText("Column 3: Movement"), "amount");
+  return dialog;
+}
+
+const SHOWN_ROWS = [
+  { posted_date: "2026-04-07", amount: "-62.57", payee: "Grocer", table: 0, page: 1 },
+  { posted_date: "2026-04-09", amount: "-18.83", payee: null, table: 0, page: 1 },
+];
 
 describe("teach dialog", () => {
   it("labels a selection, describes another with free text and posts the labels", async () => {
     const api = reviewApi(item(), {
-      "POST /api/v1/documents/:id/teach": () =>
-        json({
-          document_id: "d-1",
-          fields: [],
-          tables: [],
-          ignored: 0,
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut(),
+        appliedOut({
           notes: ["The society's branch code"],
-          applied: [],
           warnings: ["no_label:closing_balance"],
-          reprocessed: [],
         }),
+      ),
     });
     renderApp("/review");
     const user = userEvent.setup();
@@ -201,9 +367,18 @@ describe("teach dialog", () => {
     await user.type(within(dialog).getByLabelText("Describe it"), "The society's branch code");
     expect(within(dialog).getAllByTestId("selection-box")).toHaveLength(2);
 
-    await user.click(within(dialog).getByRole("button", { name: "Apply to this file" }));
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    expect(apply).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
     await waitFor(() => {
-      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[0]?.body).toEqual({
+      expect(apply).toBeEnabled();
+    });
+    expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[0]?.body).toMatchObject({
+      preview: true,
+    });
+    await user.click(apply);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).toEqual({
         labels: [
           { field: "closing_balance", page: 1, bbox: [60, 40, 190, 50] },
           {
@@ -218,6 +393,7 @@ describe("teach dialog", () => {
         reprocess_similar: true,
         replace: false,
         resolve: true,
+        preview: false,
         item_id: "r-1",
       });
     });
@@ -229,7 +405,10 @@ describe("teach dialog", () => {
   it("asks before replacing another taught layout and says what earlier teaching is kept", async () => {
     let calls = 0;
     const api = reviewApi(item(), {
-      "POST /api/v1/documents/:id/teach": () => {
+      "POST /api/v1/documents/:id/teach": (call) => {
+        if (isPreview(call.body)) {
+          return json(previewOut());
+        }
         calls += 1;
         return calls === 1
           ? problem(409, "layout-conflict")
@@ -257,14 +436,20 @@ describe("teach dialog", () => {
     await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
     expect(within(dialog).getByLabelText(/Replace the layout remembered/)).not.toBeChecked();
     const apply = within(dialog).getByRole("button", { name: "Apply and remember" });
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
     await user.click(apply);
     expect(
       await within(dialog).findByText(/Another layout of this institution was taught before/),
     ).toBeInTheDocument();
+    // Replacing changes what is remembered, not what is read: the preview still stands.
     await user.click(within(dialog).getByLabelText(/Replace the layout remembered/));
+    expect(apply).toBeEnabled();
     await user.click(apply);
     await waitFor(() => {
-      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).toMatchObject({
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[2]?.body).toMatchObject({
         remember: true,
         replace: true,
       });
@@ -277,20 +462,10 @@ describe("teach dialog", () => {
 
   it("lets the same layout be taught afresh without a conflict first", async () => {
     const api = reviewApi(item(), {
-      "POST /api/v1/documents/:id/teach": () =>
-        json({
-          document_id: "d-1",
-          fields: [],
-          tables: [],
-          ignored: 0,
-          notes: [],
-          applied: [],
-          warnings: [],
-          reprocessed: ["d-1"],
-          fingerprint_id: "f-3",
-          merged_from: null,
-          kept: [],
-        }),
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut(),
+        appliedOut({ reprocessed: ["d-1"], fingerprint_id: "f-3", merged_from: null, kept: [] }),
+      ),
     });
     renderApp("/review");
     const user = userEvent.setup();
@@ -300,13 +475,209 @@ describe("teach dialog", () => {
     await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
     expect(within(dialog).getByText(/drop earlier lines, notes or labels taught by mistake/)).toBeInTheDocument();
     await user.click(within(dialog).getByLabelText(/Replace the layout remembered/));
-    await user.click(within(dialog).getByRole("button", { name: "Apply and remember" }));
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    const apply = within(dialog).getByRole("button", { name: "Apply and remember" });
     await waitFor(() => {
-      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[0]?.body).toMatchObject({
+      expect(apply).toBeEnabled();
+    });
+    await user.click(apply);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).toMatchObject({
         remember: true,
         replace: true,
+        preview: false,
       });
     });
+  });
+
+  it("apply is disabled until a preview was shown", async () => {
+    const api = reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    expect(apply).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    const posts = api.callsTo("POST", "/api/v1/documents/:id/teach");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toMatchObject({
+      preview: true,
+      tables: [{ kind: "transactions", direction: "as_printed", continues: false }],
+    });
+  });
+
+  it("changing a direction clears the preview", async () => {
+    const api = reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    const preview = within(dialog).getByRole("button", { name: "Preview" });
+    await user.click(preview);
+    expect(await within(dialog).findByText(/2 rows read\./)).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Direction"), "money_out");
+    expect(within(dialog).queryByText(/2 rows read\./)).toBeNull();
+    expect(apply).toBeDisabled();
+    await user.click(preview);
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    // The continuation and the account are part of the reading too.
+    await user.click(
+      within(dialog).getByLabelText(
+        "The table continues on the following pages without its header",
+      ),
+    );
+    expect(apply).toBeDisabled();
+    await user.click(preview);
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    await user.selectOptions(within(dialog).getByLabelText("Account for this file"), "a-2");
+    expect(apply).toBeDisabled();
+    await user.click(preview);
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    await user.click(apply);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")).toHaveLength(5);
+    });
+    expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[4]?.body).toMatchObject({
+      preview: false,
+      account_id: "a-2",
+      tables: [{ kind: "transactions", direction: "money_out", continues: true }],
+    });
+  });
+
+  it("the preview lists rows and says whether they add up", async () => {
+    reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({
+          rows: SHOWN_ROWS,
+          row_count: 14,
+          reconciliation: "mismatch",
+          difference: "-81.40",
+        }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    expect(
+      await within(dialog).findByText("14 rows read. They differ from the balances by -81.40."),
+    ).toBeInTheDocument();
+    const rows = within(dialog).getByRole("table", { name: "First rows read" });
+    expect(within(rows).getAllByRole("row")).toHaveLength(3);
+    const first = within(rows).getAllByRole("row")[1];
+    expect(first).toBeDefined();
+    if (first === undefined) {
+      return;
+    }
+    expect(within(first).getByText("2026-04-07")).toBeInTheDocument();
+    expect(within(first).getByText("Grocer")).toBeInTheDocument();
+    expect(within(first).getByText("-62.57")).toBeInTheDocument();
+    expect(within(first).getByText("Selection 1")).toBeInTheDocument();
+    // A viewer who may not see the file's content gets no payee text.
+    expect(within(rows).getByText("Not shown")).toBeInTheDocument();
+    expect(within(dialog).getByText("The first 2 of 14 rows are shown.")).toBeInTheDocument();
+  });
+
+  it("says how many waiting files will be read again", async () => {
+    reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 2, similar_waiting: 3 }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    await user.type(within(dialog).getByLabelText("Institution"), "Harbourmoss Mutual");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    expect(await within(dialog).findByText(/2 rows read\./)).toBeInTheDocument();
+    const waiting = "3 other waiting file(s) with this layout will be read again.";
+    // Only a remembered layout reads the other files again.
+    expect(within(dialog).queryByText(waiting)).toBeNull();
+    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
+    expect(within(dialog).getByText(waiting)).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByLabelText("Read files already received with this layout again"),
+    );
+    expect(within(dialog).queryByText(waiting)).toBeNull();
+  });
+
+  it("the account select starts on the document's account", async () => {
+    const api = reviewApi(
+      item(),
+      { "POST /api/v1/documents/:id/teach": teachHandler(previewOut()) },
+      "a-2",
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
+    const select = within(dialog).getByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(select).toHaveValue("a-2");
+    });
+    expect(within(select).getByRole("option", { name: "Not chosen" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "Everyday" })).toBeInTheDocument();
+    await user.selectOptions(await within(dialog).findByLabelText("Choose a line"), "0");
+    await user.click(within(dialog).getByRole("button", { name: "Add this line" }));
+    await user.selectOptions(within(dialog).getByLabelText("What is this?"), "closing_balance");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[0]?.body).toMatchObject({
+        account_id: "a-2",
+        preview: true,
+      });
+    });
+    await user.selectOptions(select, "");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")).toHaveLength(2);
+    });
+    expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).not.toHaveProperty(
+      "account_id",
+    );
+  });
+
+  it("the outcome links to what PerFin has learned", async () => {
+    reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut(),
+        appliedOut({ warnings: ["rows_already_imported"] }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
+    expect(within(dialog).queryByRole("link", { name: "See what PerFin has learned" })).toBeNull();
+    await user.selectOptions(await within(dialog).findByLabelText("Choose a line"), "0");
+    await user.click(within(dialog).getByRole("button", { name: "Add this line" }));
+    await user.selectOptions(within(dialog).getByLabelText("What is this?"), "closing_balance");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    await user.click(apply);
+    const link = await within(dialog).findByRole("link", { name: "See what PerFin has learned" });
+    expect(link).toHaveAttribute("href", "/documents/learned");
+    expect(within(dialog).getByText(/were replaced by this reading/)).toBeInTheDocument();
   });
 
   it("words what was kept and the new warnings", () => {

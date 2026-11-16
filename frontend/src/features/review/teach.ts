@@ -16,6 +16,9 @@ type Schemas = components["schemas"];
 export type TeachField = Schemas["TeachLabel"]["field"];
 export type TeachRole = Schemas["TeachColumn"]["role"];
 export type TableKind = Schemas["TeachTable"]["kind"];
+/** What the single amount column of a transaction table means. */
+export type TableDirection = NonNullable<Schemas["TeachTable"]["direction"]>;
+export type TeachPreview = Schemas["TeachPreview"];
 /** What a selection is: a field, a table, "ignore" or "other". */
 export type SelectionKind = TeachField | TableKind;
 
@@ -41,6 +44,17 @@ export const SELECTION_CHOICES: readonly Choice<SelectionKind>[] = [
   { value: "other", label: OTHER_LABEL },
   { value: "ignore", label: IGNORE_LABEL },
 ];
+
+/** What a single amount column means (separate debit and credit columns say it themselves). */
+export const DIRECTION_CHOICES: readonly Choice<TableDirection>[] = [
+  { value: "as_printed", label: "As printed (the amounts carry their own sign)" },
+  { value: "money_in", label: "Money in (deposits, credits)" },
+  { value: "money_out", label: "Money out (withdrawals, charges)" },
+  { value: "card", label: "Card: charges are printed as positive amounts" },
+];
+
+/** The most transaction tables one layout takes (the server's limit). */
+export const MAX_TRANSACTION_TABLES = 4;
 
 export function selectionLabel(kind: SelectionKind | ""): string {
   return SELECTION_CHOICES.find((c) => c.value === kind)?.label ?? "Not chosen yet";
@@ -114,6 +128,10 @@ export interface Selection {
   /** The value as the person reads it (optional correction). */
   value: string;
   columns: ColumnDraft[];
+  /** For a transaction table: what its amount column means. */
+  direction: TableDirection;
+  /** For a transaction table: it runs on over later pages without its header. */
+  continues: boolean;
 }
 
 export function wordsIn(words: readonly PageWord[], bbox: readonly number[]): PageWord[] {
@@ -244,6 +262,8 @@ export function newSelection(
     note: "",
     value: "",
     columns: columnsFromWords(words, bbox),
+    direction: "as_printed",
+    continues: false,
   };
 }
 
@@ -269,6 +289,12 @@ export function problems(selections: readonly Selection[]): string[] {
       }
     }
   }
+  if (selections.filter((s) => s.kind === "transactions").length > MAX_TRANSACTION_TABLES) {
+    out.push("A layout takes at most four transaction tables.");
+  }
+  if (selections.filter((s) => s.kind === "holdings").length > 1) {
+    out.push("A layout takes one holdings table.");
+  }
   return out;
 }
 
@@ -279,6 +305,10 @@ export interface TeachOptions {
   itemId: string | null;
   /** Start the remembered layout afresh instead of adding to what was taught. */
   replace?: boolean;
+  /** The account the file belongs to (null: not chosen, the server keeps the document's). */
+  accountId: string | null;
+  /** Only show what would be read: nothing is applied or remembered. */
+  preview: boolean;
 }
 
 /** The request body for the selections (selections without a kind are left out). */
@@ -300,6 +330,9 @@ export function teachBody(selections: readonly Selection[], options: TeachOption
           role: c.role === "" ? "ignore" : c.role,
           ...(c.role === "other" ? { note: c.note.trim() } : {}),
         })),
+        ...(sel.kind === "transactions"
+          ? { direction: sel.direction, continues: sel.continues }
+          : {}),
       });
       continue;
     }
@@ -321,9 +354,44 @@ export function teachBody(selections: readonly Selection[], options: TeachOption
     reprocess_similar: options.reprocessSimilar,
     replace: options.remember && options.replace === true,
     resolve: options.itemId !== null,
+    preview: options.preview,
+    ...(options.accountId === null ? {} : { account_id: options.accountId }),
     ...(name === "" ? {} : { institution_name: name }),
     ...(options.itemId === null ? {} : { item_id: options.itemId }),
   };
+}
+
+/** One sentence on what a preview read and whether it adds up. */
+export function previewSummary(
+  preview: Pick<TeachPreview, "row_count" | "reconciliation" | "difference">,
+): string {
+  const read = `${String(preview.row_count)} rows read. `;
+  if (preview.reconciliation === "ok") {
+    return `${read}They add up to the balances.`;
+  }
+  if (preview.reconciliation === "mismatch" && preview.difference !== null) {
+    return `${read}They differ from the balances by ${preview.difference}.`;
+  }
+  if (preview.reconciliation === "mismatch") {
+    return `${read}They do not add up to the balances.`;
+  }
+  return `${read}There are no balances to check them against.`;
+}
+
+/**
+ * What a preview depends on: the selections as they would be sent and the
+ * account. A preview is only good for the reading it was made from.
+ */
+export function readingKey(selections: readonly Selection[], accountId: string | null): string {
+  const body = teachBody(selections, {
+    institutionName: "",
+    remember: false,
+    reprocessSimilar: false,
+    itemId: null,
+    accountId,
+    preview: true,
+  });
+  return JSON.stringify([body.labels, body.tables, accountId]);
 }
 
 /** Plain words for the server's warning codes. */
@@ -336,7 +404,7 @@ export function warningText(code: string): string {
     case "unreadable":
       return `The ${named} could not be read from the selection; type it in.`;
     case "rows_already_imported":
-      return "Rows of this file were imported before; the table is remembered but not imported again.";
+      return "The rows imported earlier from this file were replaced by this reading; rows you had changed were kept.";
     case "does_not_reconcile":
       return "With these balances the statement still does not add up.";
     case "ignore_not_rememberable":
