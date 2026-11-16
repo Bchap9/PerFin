@@ -17,8 +17,17 @@ same source). Against the account's existing transactions:
   source order), so a second identical purchase that day is simply new.
 * everything else is **new**.
 
-:func:`plan` is pure (unit-tested without a database); :func:`load_existing`
-reads the candidates: the account's transactions inside the incoming date
+Before any of that, an incoming row whose hash has an **import tombstone** on
+the account (``app.domain.imports.tombstones``: an imported row a person
+deleted) is **removed**: it is not inserted, it is no exact and no near match,
+and it claims no existing row, so the row it once was cannot come back as a
+"possible duplicate" of its twin either. Two identical purchases on one day
+have different hashes (the running index), so deleting one leaves the other.
+
+:func:`plan` is pure (unit-tested without a database); :func:`dedupe` reads
+the tombstones of the account for the hashes it computed (a tombstone of
+another account never applies), and :func:`load_existing` reads the
+candidates: the account's transactions inside the incoming date
 range (a hash includes the date, so nothing outside it can match), plus their
 ``import_hash_alias`` rows (``app.domain.review.repo.alias_rows``): the hash of
 an imported row a person confirmed as a duplicate of a transaction that
@@ -31,7 +40,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -39,6 +48,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.imports.tombstones import tombstoned_hashes
 from app.domain.review.repo import alias_rows
 from app.domain.transactions.import_hash import (
     HashInput,
@@ -69,6 +79,8 @@ class DedupePlan:
     new: list[int] = field(default_factory=list)
     exact: list[int] = field(default_factory=list)
     near: dict[int, list[uuid.UUID]] = field(default_factory=dict)
+    #: Rows a person deleted (their hash is tombstoned): in none of the above.
+    removed: list[int] = field(default_factory=list)
 
     @property
     def to_insert(self) -> list[int]:
@@ -77,9 +89,15 @@ class DedupePlan:
 
 
 def plan(
-    hashes: Sequence[str], rows: Sequence[HashInput], existing: Sequence[Existing]
+    hashes: Sequence[str],
+    rows: Sequence[HashInput],
+    existing: Sequence[Existing],
+    tombstoned: Collection[str] = (),
 ) -> DedupePlan:
-    """Classify ``rows`` (with their ``hashes``) against ``existing`` (module doc)."""
+    """Classify ``rows`` (with their ``hashes``) against ``existing`` (module doc).
+
+    A row whose hash is in ``tombstoned`` is ``removed`` before anything else.
+    """
     if len(hashes) != len(rows):
         raise ValueError("one hash per row")
     by_hash: dict[str, list[Existing]] = defaultdict(list)
@@ -93,15 +111,20 @@ def plan(
         seen.add(row.id)
         by_day[(row.posted_date, canonical_amount(row.amount))].append(row)
     result = DedupePlan(hashes=list(hashes))
+    deleted = set(tombstoned)
+    result.removed = [index for index, digest in enumerate(hashes) if digest in deleted]
+    removed = set(result.removed)
     claimed: set[uuid.UUID] = set()
     for index, digest in enumerate(hashes):
+        if index in removed:
+            continue
         matches = by_hash.get(digest)
         if matches:
             result.exact.append(index)
             claimed.update(m.id for m in matches)
     exact = set(result.exact)
     for index, incoming in enumerate(rows):
-        if index in exact:
+        if index in exact or index in removed:
             continue
         candidates = [
             e
@@ -147,4 +170,9 @@ def dedupe(
 ) -> DedupePlan:
     """Hash ``rows`` for ``account_id`` and classify them against the ledger."""
     hashes = assign_import_hashes(account_id, rows)
-    return plan(hashes, rows, load_existing(db, household_id, account_id, rows))
+    return plan(
+        hashes,
+        rows,
+        load_existing(db, household_id, account_id, rows),
+        tombstoned_hashes(db, household_id, account_id, hashes),
+    )
