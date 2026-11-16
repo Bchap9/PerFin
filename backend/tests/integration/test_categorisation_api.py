@@ -32,7 +32,7 @@ from app.db.base import Base
 from app.db.models import AuditLog, Job, Setting, SettingScope
 from app.db.rls import set_context
 from app.domain.accounts.models import Account
-from app.domain.categorisation import cleanup, dictionary, memory, service
+from app.domain.categorisation import cleanup, dictionary, engine, memory, service
 from app.domain.categorisation.cleanup import Cleaned
 from app.domain.categorisation.dictionary import Hit, Merchant
 from app.domain.categorisation.memory import Direction
@@ -340,6 +340,20 @@ def test_the_first_refresh_adds_new_defaults_and_seeds_the_memory_once(
     assert calls == [(home.household_id, 1)]
     assert _memory_rows(db, home.household_id) == [("mossy bookshop", "out", home.other.id, 3)]
 
+    # The household forgets the merchant, and an admin asks for another look:
+    # the defaults are not added again and what was forgotten is not seeded back.
+    [entry_id] = db.execute(
+        select(MerchantMemory.id).where(MerchantMemory.household_id == home.household_id)
+    ).scalars()
+    assert memory.forget(db, home.household_id, entry_id) == 1
+
+    forced = service.refresh(db, home.household_id, force=True)
+
+    assert forced.ran is True
+    assert (forced.categories_added, forced.seeded) == (0, 0)
+    assert calls == [(home.household_id, 1)]
+    assert _memory_rows(db, home.household_id) == []
+
 
 def test_what_the_seeded_memory_knows_is_used_in_the_same_refresh(db: Session, home: Home) -> None:
     for amount in ("-8.10", "-14.25", "-9.60"):
@@ -361,12 +375,27 @@ def test_what_the_seeded_memory_knows_is_used_in_the_same_refresh(db: Session, h
 def test_a_forced_refresh_looks_again_although_nothing_moved(db: Session, home: Home) -> None:
     _store_state(db, home.household_id, _versions())
     row = home.row("CORNER GROCER 0417", merchant_key="corner grocer")
+    # Keyed and taught under a key today's clean-up would not give.
+    mine = home.row(
+        "MOSSY BOOKSHOP 12",
+        merchant_key="mossy bookshop",
+        category=home.other,
+        category_source="person",
+        category_confidence=Decimal(1),
+        updated_at=T1,
+    )
+    memory.record(db, home.household_id, "mossy bookshop", "out", home.other.id, at=T1)
+    mine_before = _stored(db, mine.id)
 
     result = service.refresh(db, home.household_id, force=True)
 
     assert result.ran is True
     assert _stored(db, row.id)["category_id"] == home.groceries.id
     assert len(_audits(db, home.household_id, "categorise.refresh")) == 1
+    # No version moved: no key is computed again, and nothing learned moves.
+    assert _stored(db, mine.id) == mine_before
+    assert _memory_rows(db, home.household_id) == [("mossy bookshop", "out", home.other.id, 1)]
+    assert (result.summary.keyed, result.summary.memory_moved) == (0, 0)
 
 
 def test_a_stored_state_that_is_not_one_counts_as_none(db: Session, home: Home) -> None:
@@ -377,6 +406,178 @@ def test_a_stored_state_that_is_not_one_counts_as_none(db: Session, home: Home) 
 
     assert _stored(db, row.id)["category_source"] == "dictionary"
     assert _state(db, home.household_id) == _versions()
+
+
+# ---------------------------------------------------------------------------
+# What was learned goes with a merchant to its new key
+# ---------------------------------------------------------------------------
+
+#: The next release's name for the cinema: every core that starts with the
+#: old name is read as this merchant.
+RENAMED = Merchant(key="velvet pictures", name="Velvet Pictures", category="leisure.cinema")
+
+
+def _ship_a_release_that_renames_the_cinema(
+    known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipped = dictionary.version()
+    known[RENAMED.key] = RENAMED
+
+    def lookup(core: str) -> Hit | None:
+        if core == PICTURES.key or core.startswith(PICTURES.key + " "):
+            return Hit(RENAMED, "prefix")
+        return _lookup(known, core)
+
+    monkeypatch.setattr(dictionary, "lookup", lookup)
+    monkeypatch.setattr(dictionary, "version", lambda: shipped + 1)
+
+
+def _learned_as(db: Session, household_id: uuid.UUID) -> set[tuple[str, str, uuid.UUID, int]]:
+    return set(_memory_rows(db, household_id))
+
+
+def test_what_the_household_taught_survives_a_new_name_for_the_merchant(
+    db: Session, home: Home, known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    # Nobody decided this one; the dictionary does not know the merchant yet.
+    early = home.row("VELVET PICTURE HOUSE 03")
+    engine.categorise_rows(db, hh, [early])
+    assert _stored(db, early.id)["merchant_key"] == "velvet picture house 03"
+    # Three times the household files it under a category of its own.
+    for _ in range(3):
+        row = home.row("VELVET PICTURE HOUSE 03")
+        engine.categorise_rows(db, hh, [row])
+        was = (row.category_id, row.category_source)
+        row.category_id = home.other.id
+        engine.person_decided(db, row, before_category_id=was[0], before_source=was[1], at=T1)
+        db.flush()
+    assert _learned_as(db, hh) == {("velvet picture house 03", "out", home.other.id, 3)}
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    result = service.refresh(db, hh)
+
+    # The rows have the dictionary's key now, and so has what was learned.
+    assert result.summary.memory_moved == 1
+    assert _learned_as(db, hh) == {("velvet pictures", "out", home.other.id, 3)}
+    # The row nobody decided is filed where the household files this
+    # merchant, not where the dictionary would: in the same refresh.
+    stored = _stored(db, early.id)
+    assert (stored["merchant_key"], stored["category_id"], stored["category_source"]) == (
+        "velvet pictures",
+        home.other.id,
+        "learned",
+    )
+    assert stored["category_confidence"] == Decimal("0.95")
+    assert stored["updated_at"] == stored["created_at"] == T0
+    # And so is the next one to arrive.
+    later = home.row("VELVET PICTURE HOUSE 03")
+    engine.categorise_rows(db, hh, [later])
+    stored = _stored(db, later.id)
+    assert (stored["merchant_key"], stored["category_id"], stored["category_source"]) == (
+        "velvet pictures",
+        home.other.id,
+        "learned",
+    )
+
+    [entry] = _audits(db, hh, "categorise.refresh")
+    assert entry.after is not None
+    assert entry.after["memory_moved"] == 1
+    text = [part for part in _flat([entry.before, entry.after]) if isinstance(part, str)]
+    assert not [part for part in text if "velvet" in part.lower() or "picture" in part.lower()]
+
+
+def test_learned_entries_meet_at_the_new_key_and_one_without_rows_follows_the_dictionary(
+    db: Session, home: Home, known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    home.row(
+        "VELVET PICTURE HOUSE 03",
+        merchant_key="velvet picture house 03",
+        category=home.other,
+        category_source="legacy",
+    )
+    for step in range(2):
+        memory.record(
+            db, hh, "velvet picture house 03", "out", home.other.id, at=T0 + timedelta(hours=step)
+        )
+    # Already taught under the name the next release uses, later and elsewhere too.
+    memory.record(db, hh, RENAMED.key, "out", home.other.id, at=T1)
+    memory.record(db, hh, RENAMED.key, "out", home.groceries.id, at=T0)
+    # Taught on rows that were deleted since: no row carries these keys.
+    memory.record(db, hh, PICTURES.key, "in", home.other.id, at=T0)
+    memory.record(db, hh, "mossy bookshop", "out", home.other.id, at=T0)
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    result = service.refresh(db, hh)
+
+    assert result.summary.memory_moved == 2
+    assert _learned_as(db, hh) == {
+        # Two and one for the same category are three; the other category stays its own.
+        (RENAMED.key, "out", home.other.id, 3),
+        (RENAMED.key, "out", home.groceries.id, 1),
+        (RENAMED.key, "in", home.other.id, 1),
+        # A merchant the dictionary still does not know stays where it is.
+        ("mossy bookshop", "out", home.other.id, 1),
+    }
+    merged = db.execute(
+        select(MerchantMemory.last_decided_at).where(
+            MerchantMemory.household_id == hh,
+            MerchantMemory.merchant_key == RENAMED.key,
+            MerchantMemory.direction == "out",
+            MerchantMemory.category_id == home.other.id,
+        )
+    ).scalar_one()
+    assert merged == T1
+
+
+def test_when_a_key_splits_only_the_decisions_of_the_rows_that_moved_go_with_them(
+    db: Session, home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+
+    def mine(raw_payee: str, key: str, category: Category) -> Transaction:
+        return home.row(
+            raw_payee,
+            merchant_key=key,
+            category=category,
+            category_source="person",
+            category_confidence=Decimal(1),
+            updated_at=T1,
+        )
+
+    # An older clean-up read all three as one merchant; today's tells the
+    # branches apart. Each row is one decision of the memory.
+    mine("PEBBLE MARKET NORTH", "pebble market", home.other)
+    mine("PEBBLE MARKET SOUTH", "pebble market", home.other)
+    mine("PEBBLE MARKET", "pebble market", home.groceries)
+    for _ in range(2):
+        memory.record(db, hh, "pebble market", "out", home.other.id, at=T1)
+    memory.record(db, hh, "pebble market", "out", home.groceries.id, at=T1)
+    # Two rows moved, but the memory holds one decision (the rest was
+    # forgotten or evicted): one goes, none is made up.
+    mine("AMBER ORCHARD ONE", "amber orchard", home.other)
+    mine("AMBER ORCHARD TWO", "amber orchard", home.other)
+    mine("AMBER ORCHARD", "amber orchard", home.other)
+    memory.record(db, hh, "amber orchard", "out", home.other.id, at=T1)
+    # The household forgot this merchant: its rows teach nothing again.
+    mine("TIN KETTLE EAST", "tin kettle", home.other)
+    mine("TIN KETTLE", "tin kettle", home.other)
+
+    monkeypatch.setattr(cleanup, "CLEANER_VERSION", cleanup.CLEANER_VERSION + 1)
+    result = service.refresh(db, hh)
+
+    assert result.summary.keyed == 5
+    assert _learned_as(db, hh) == {
+        ("pebble market north", "out", home.other.id, 1),
+        ("pebble market south", "out", home.other.id, 1),
+        ("pebble market", "out", home.groceries.id, 1),
+        ("amber orchard one", "out", home.other.id, 1),
+    }
+    assert result.summary.memory_moved == 2
 
 
 def test_dispatch_queues_only_households_behind(db: Session) -> None:
@@ -619,6 +820,52 @@ def test_learned_list_offers_a_rule_at_three_unanimous_decisions(
     seen = member.get(f"{CATEGORISATION}/learned").json()
     assert [item["merchant_key"] for item in seen["items"]] == ["corner grocer"]
     assert seen["items"][0]["example_transaction_id"] == str(newest.id)
+
+
+def test_the_example_is_a_row_the_caller_may_see_and_a_divided_merchant_gets_no_rule_offer(
+    actors: Actors, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    member = actors.new(role="member", household=owner.record.household)
+    shared = ledger.account(hh)
+    private = ledger.account(hh)
+    ledger.grant(hh, member.user.id, shared, GrantLevel.VIEW)
+    food = ledger.category(hh)
+    fun = ledger.category(hh)
+
+    # The merchant's newest row is on an account the member has no grant for.
+    _teach(ledger, hh, "amber orchard", food, 3)
+    older = ledger.transaction(
+        shared, raw_payee="AMBER ORCHARD", merchant_key="amber orchard", posted_date=T0.date()
+    )
+    newest = ledger.transaction(
+        private, raw_payee="AMBER ORCHARD", merchant_key="amber orchard", posted_date=T1.date()
+    )
+    # Three decisions for one category, and a fourth for another.
+    _teach(ledger, hh, "birch hardware", food, 3)
+    _teach(ledger, hh, "birch hardware", fun, 1)
+    ledger.transaction(shared, raw_payee="BIRCH HARDWARE", merchant_key="birch hardware")
+
+    def listed(client: AuthedClient) -> dict[str, Any]:
+        response = client.get(f"{CATEGORISATION}/learned")
+        assert response.status_code == 200, response.text
+        return {item["merchant_key"]: item for item in response.json()["items"]}
+
+    for_owner = listed(owner)
+    for_member = listed(member)
+    assert list(for_owner) == list(for_member) == ["amber orchard", "birch hardware"]
+
+    assert for_owner["amber orchard"]["example_transaction_id"] == str(newest.id)
+    # Never the id of a row on somebody else's account.
+    assert for_member["amber orchard"]["example_transaction_id"] == str(older.id)
+    assert for_member["amber orchard"]["offer_rule"] is True
+
+    for seen in (for_owner, for_member):
+        birch = seen["birch hardware"]
+        assert (birch["category_id"], birch["decisions"], birch["total"]) == (str(food.id), 3, 4)
+        # Three, but not every time: no rule is offered.
+        assert (birch["share"], birch["offer_rule"]) == ("0.75", False)
 
 
 def test_forget_removes_the_entry_and_is_404_for_another_household(

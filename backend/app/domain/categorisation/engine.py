@@ -35,7 +35,8 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlalchemy import ColumnElement, and_, or_, select, tuple_
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -46,6 +47,7 @@ from app.domain.categorisation import cleanup, dictionary, memory
 from app.domain.categorisation.cleanup import DescriptorKind
 from app.domain.categorisation.dictionary import Hit
 from app.domain.categorisation.memory import Direction, Learned
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.categorisation.pinned import pinned_update
 from app.domain.transactions.categories import category_ids_by_key
 from app.domain.transactions.categories import resolve as resolve_category
@@ -86,6 +88,16 @@ VIA_PENALTY: Final = Decimal("0.05")
 MIXED_CONFIDENCE: Final = Decimal("0.60")
 #: Money back from a merchant that takes money: its own category, as a refund.
 MONEY_BACK_CONFIDENCE: Final = Decimal("0.80")
+#: Kinds whose money coming in from a merchant is money back: the line says
+#: it is a refund, or it is a card purchase with the sign turned round.
+MONEY_BACK_KINDS: Final[frozenset[DescriptorKind]] = frozenset(
+    {"refund", "purchase", "recurring_purchase"}
+)
+#: The most a merchant's or a keyword's category is worth for money coming in
+#: on any other kind of line (a bank credit, a line of no known kind): it may
+#: be a refund, or earnings and payouts that are no spending at all, so it is
+#: only ever a suggestion. A merchant marked ``inflow`` is not held to it.
+MONEY_IN_MAX: Final = Decimal("0.70")
 KEYWORD_CONFIDENCE: Final = Decimal("0.60")
 KEYWORD_STRONG_CONFIDENCE: Final = Decimal("0.80")
 
@@ -155,6 +167,8 @@ class Summary:
     changed: int = 0
     #: Accounts of the rows counted in ``changed``.
     changed_accounts: set[uuid.UUID] = field(default_factory=set)
+    #: Learned entries (memory rows) carried over to a merchant's new key.
+    memory_moved: int = 0
 
 
 def _key_of(core: str) -> str | None:
@@ -205,7 +219,7 @@ def _hit_confidence(identity: Identity, hit: Hit, direction: Direction) -> Decim
     if identity.via is not None:
         confidence -= VIA_PENALTY
     if direction == "in" and not merchant.inflow:
-        confidence = MONEY_BACK_CONFIDENCE
+        confidence = MONEY_BACK_CONFIDENCE if identity.kind in MONEY_BACK_KINDS else MONEY_IN_MAX
     if merchant.mixed:
         confidence = MIXED_CONFIDENCE
     return confidence
@@ -227,6 +241,8 @@ def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Deci
     word = dictionary.keyword(identity.core, identity.via) if identity.core else None
     if word is not None:
         confidence = KEYWORD_STRONG_CONFIDENCE if word.strong else KEYWORD_CONFIDENCE
+        if direction == "in" and identity.kind not in MONEY_BACK_KINDS:
+            confidence = min(confidence, MONEY_IN_MAX)
         return ("keyword", word.category, confidence)
     return None
 
@@ -254,7 +270,11 @@ def decide(
     6. a telling word (``keyword``).
 
     When the household is split on the merchant (a share below the minimum),
-    steps 4 to 6 give a suggestion at most. ``categories`` is the household's
+    steps 4 to 6 give a suggestion at most. So do steps 5 and 6 for money
+    coming in on a line that is neither a refund nor a card purchase
+    (:data:`MONEY_BACK_KINDS`, :data:`MONEY_IN_MAX`), unless the merchant is
+    one that pays (``inflow``): earnings and payouts are not stored as
+    spending taken back. ``categories`` is the household's
     ``system_key -> id`` map; a key it has neither itself nor by its group
     answers nothing. ``learned`` is the memory's answer for ``identity.key``
     and ``direction``, or ``None``.
@@ -647,6 +667,115 @@ def person_decided(
         memory.record(db, row.household_id, key, direction, row.category_id, at=at)
 
 
+#: A person's row whose key moved: ``(old key, direction, category, new key)``.
+type _Taught = tuple[str, str, uuid.UUID, str]
+
+
+def _move_memory(
+    db: Session,
+    household_id: uuid.UUID,
+    renamed: Mapping[str, Collection[str | None]],
+    taught: Mapping[_Taught, int],
+) -> int:
+    """Carry what the household taught over to the keys its merchants have now.
+
+    ``renamed`` says, for every merchant key a row of the household carried,
+    the keys those rows have after the pass (``None``: a row that names
+    nobody any more); ``taught`` counts the person-decided rows that moved.
+    For each learned entry (one memory row: key, direction, category):
+
+    * every row of its key went to one new key: the entry goes there whole
+      (also the decisions of rows that were deleted since);
+    * the rows of its key now carry several keys (some may have kept it):
+      only the decisions of the person's rows that moved go with them, and
+      never more than the entry holds (what was forgotten stays forgotten);
+    * no row carries its key any more: it goes to the merchant the
+      dictionary now reads that key as, if it names one.
+
+    An entry that arrives where the household already has one for the same
+    direction and category is added to it; the later ``last_decided_at``
+    stays. Otherwise the memory is left as it is. Returns the entries moved,
+    in whole or in part.
+    """
+    held = db.execute(
+        select(
+            MerchantMemory.id,
+            MerchantMemory.merchant_key,
+            MerchantMemory.direction,
+            MerchantMemory.category_id,
+            MerchantMemory.decisions,
+            MerchantMemory.last_decided_at,
+        )
+        .where(MerchantMemory.household_id == household_id)
+        .order_by(MerchantMemory.merchant_key, MerchantMemory.id)
+        .with_for_update()
+    ).all()
+    #: ``(memory row, new key, decisions)``, all read before anything is
+    #: written: one key may move to a key that itself moves on.
+    moves: list[tuple[Any, str, int]] = []
+    for row in held:
+        old = row.merchant_key
+        now = renamed.get(old)
+        if now is None:
+            hit = dictionary.lookup(old)
+            if hit is not None and hit.merchant.key != old:
+                moves.append((row, hit.merchant.key, row.decisions))
+        elif len(now) == 1:
+            [only] = now
+            if only is not None and only != old:
+                moves.append((row, only, row.decisions))
+        else:
+            left = row.decisions
+            for new in sorted(key for key in now if key is not None and key != old):
+                count = min(taught.get((old, row.direction, row.category_id, new), 0), left)
+                if count:
+                    moves.append((row, new, count))
+                    left -= count
+    if not moves:
+        return 0
+    taken: Counter[uuid.UUID] = Counter()
+    for row, _, count in moves:
+        taken[row.id] += count
+    at = utcnow()
+    emptied = sorted(row.id for row in held if taken[row.id] == row.decisions)
+    for start in range(0, len(emptied), BATCH):
+        db.execute(
+            delete(MerchantMemory).where(
+                MerchantMemory.household_id == household_id,
+                MerchantMemory.id.in_(emptied[start : start + BATCH]),
+            )
+        )
+    for row in held:
+        if 0 < taken[row.id] < row.decisions:
+            db.execute(
+                update(MerchantMemory)
+                .where(MerchantMemory.household_id == household_id, MerchantMemory.id == row.id)
+                .values(decisions=row.decisions - taken[row.id], updated_at=at)
+            )
+    for row, new, count in moves:
+        statement = insert(MerchantMemory).values(
+            household_id=household_id,
+            merchant_key=new,
+            direction=row.direction,
+            category_id=row.category_id,
+            decisions=count,
+            last_decided_at=row.last_decided_at,
+        )
+        db.execute(
+            statement.on_conflict_do_update(
+                constraint="uq_merchant_memory_choice",
+                set_={
+                    "decisions": MerchantMemory.decisions + statement.excluded.decisions,
+                    "last_decided_at": func.greatest(
+                        MerchantMemory.last_decided_at, statement.excluded.last_decided_at
+                    ),
+                    "updated_at": at,
+                },
+            )
+        )
+    return len(taken)
+
+
 def reconsider(
     db: Session,
     household_id: uuid.UUID,
@@ -667,6 +796,13 @@ def reconsider(
     source and confidence never do. Without it only a missing key of a row
     being decided is filled in.
 
+    What the household taught goes with the keys: when ``rekey`` covers the
+    whole household (no ``transaction_ids``), the memory is carried over to
+    the new keys in the same transaction (:func:`_move_memory`,
+    ``Summary.memory_moved``). Rows decided earlier in the same pass did not
+    see it yet under the new key: the caller looks again when anything
+    moved.
+
     Pinned writes only: no ``updated_at`` moves. ``check_cancelled`` is
     called before each batch and stops the pass by raising. One
     ``transaction.categorised`` event when a categorisation changed; the
@@ -682,6 +818,10 @@ def reconsider(
     if not rekey:
         clauses.append(reconsidered_clause())
     known = _known(db, household_id)
+    #: Only a pass over every row knows where all the rows of a key went.
+    moving = rekey and transaction_ids is None
+    renamed: dict[str, set[str | None]] = {}
+    taught: Counter[_Taught] = Counter()
     after: tuple[Any, uuid.UUID] | None = None
     while True:
         if check_cancelled is not None:
@@ -721,6 +861,24 @@ def reconsider(
             if identity.key != found.merchant_key and (rekey or found.merchant_key is None):
                 changes[found.id] = {"merchant_key": identity.key}
                 summary.keyed += 1
+            if moving and found.merchant_key is not None:
+                renamed.setdefault(found.merchant_key, set()).add(identity.key)
+                if (
+                    identity.key is not None
+                    and identity.key != found.merchant_key
+                    and found.category_source == PERSON_SOURCE
+                    and found.category_id is not None
+                    and identity.kind in cleanup.TEACHABLE
+                ):
+                    # One decision of the memory stands for this row.
+                    taught[
+                        (
+                            found.merchant_key,
+                            memory.direction_of(found.amount),
+                            found.category_id,
+                            identity.key,
+                        )
+                    ] += 1
             if found.open:
                 to_decide.append(
                     _Open(
@@ -750,5 +908,7 @@ def reconsider(
         after = (batch[-1].posted_date, batch[-1].id)
         if len(batch) < BATCH:
             break
+    if moving:
+        summary.memory_moved = _move_memory(db, household_id, renamed, taught)
     _announce(db, household_id, summary)
     return summary

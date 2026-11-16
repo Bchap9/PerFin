@@ -13,10 +13,11 @@ is behind what this version ships (:func:`current_versions`),
    (``categories.add_new_defaults``);
 2. looks again at the rows nobody decided (``engine.reconsider``),
    recomputing every merchant key first when the clean-up or the dictionary
-   moved;
+   moved; what the household taught about a merchant goes with its rows to
+   the new key, so a correction is not lost to a new name;
 3. once per household, counts the categories it set before provenance
-   existed as decisions (``memory.seed_from_legacy``), and looks again when
-   that taught something;
+   existed as decisions (``memory.seed_from_legacy``);
+   and looks again when step 2 moved or step 3 added something learned;
 4. stores the state and writes one ``categorise.refresh`` audit row.
 
 It never runs the rules and never touches a row whose source is ``person``,
@@ -241,6 +242,7 @@ def _add(total: Summary, part: Summary) -> None:
     total.keyed += part.keyed
     total.changed += part.changed
     total.changed_accounts |= part.changed_accounts
+    total.memory_moved += part.memory_moved
 
 
 def refresh(
@@ -286,8 +288,9 @@ def refresh(
     if not before.memory_seeded:
         # After the keys: the seed counts ``legacy`` rows by their merchant key.
         seeded = memory.seed_from_legacy(db, household_id)
-        if seeded:
-            _add(total, engine.reconsider(db, household_id, check_cancelled=check_cancelled))
+    if seeded or total.memory_moved:
+        # The first look did not know yet what is now learned under these keys.
+        _add(total, engine.reconsider(db, household_id, check_cancelled=check_cancelled))
 
     _store_state(db, household_id, row, after)
     audit(
@@ -306,6 +309,7 @@ def refresh(
             "suggested": total.suggested,
             "categories_added": added,
             "memory_seeded": seeded,
+            "memory_moved": total.memory_moved,
         },
         household_id=household_id,
         user_id=user_id,

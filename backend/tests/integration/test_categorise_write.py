@@ -257,7 +257,7 @@ def test_a_rule_wins_over_a_guess_and_is_marked_rule(db: Session, home: Home) ->
     assert (stored["category_id"], stored["category_source"]) == (home.other.id, "rule")
     assert stored["category_confidence"] == Decimal(1)
     assert stored["suggested_category_id"] is None
-    assert stored["category_rule_id"] in (rule.id, None)
+    assert stored["category_rule_id"] == rule.id
     assert _provenance(db, guessed) == (home.cinema.id, None, "dictionary", Decimal("0.90"))
     assert _provenance(db, filed) == (home.another.id, None, "file", Decimal("0.95"))
     assert dict(summary.by_source) == {"rule": 1, "dictionary": 1, "file": 1}
@@ -559,6 +559,61 @@ def test_rekey_recomputes_keys_of_decided_rows_without_changing_their_category(
         )
     ).all()
     assert events == []
+
+
+def _memory(db: Session, home: Home) -> set[tuple[str, str, uuid.UUID, int]]:
+    return {
+        (row.merchant_key, row.direction, row.category_id, row.decisions)
+        for row in db.execute(
+            select(MerchantMemory).where(MerchantMemory.household_id == home.household_id)
+        ).scalars()
+    }
+
+
+def test_a_key_is_left_alone_unless_a_rekey_of_the_whole_household_is_asked_for(
+    db: Session, home: Home
+) -> None:
+    # Keyed by an older clean-up; the guess itself is what would be made today.
+    guessed = home.row(
+        "CORNER GROCER 0090",
+        merchant_key="corner grocer 0090",
+        category=home.groceries,
+        category_source="dictionary",
+        category_confidence=Decimal("0.90"),
+    )
+    mine = home.row(
+        "CORNER GROCER 0090",
+        merchant_key="corner grocer 0090",
+        category=home.other,
+        category_source="person",
+        category_confidence=Decimal(1),
+        updated_at=T1,
+    )
+    memory.record(db, home.household_id, "corner grocer 0090", "out", home.other.id, at=T1)
+    before = {row.id: _stored(db, row.id) for row in (guessed, mine)}
+    taught = {("corner grocer 0090", "out", home.other.id, 1)}
+
+    # A second look is not a re-key: the row is read, its key stays.
+    summary = engine.reconsider(db, home.household_id)
+
+    assert (summary.scanned, summary.keyed, summary.changed) == (1, 0, 0)
+    assert _stored(db, guessed.id) == before[guessed.id]
+    assert _memory(db, home) == taught
+
+    # A re-key of some rows says nothing about the merchant's other rows:
+    # the key of those rows moves, what was learned does not.
+    part = engine.reconsider(db, home.household_id, transaction_ids=[mine.id], rekey=True)
+
+    assert (part.keyed, part.memory_moved) == (1, 0)
+    assert _stored(db, mine.id) == {**before[mine.id], "merchant_key": "corner grocer"}
+    assert _stored(db, guessed.id) == before[guessed.id]
+    assert _memory(db, home) == taught
+
+    # Every row of the household: now what was learned goes with them.
+    whole = engine.reconsider(db, home.household_id, rekey=True)
+
+    assert (whole.keyed, whole.memory_moved) == (1, 1)
+    assert _memory(db, home) == {("corner grocer", "out", home.other.id, 1)}
 
 
 def test_reconsider_keeps_to_the_rows_it_is_given_and_can_be_cancelled(

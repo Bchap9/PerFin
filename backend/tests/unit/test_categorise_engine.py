@@ -307,6 +307,47 @@ def test_money_back_from_a_merchant_takes_its_category() -> None:
 
 
 @pytest.mark.usefixtures("keywords")
+@pytest.mark.parametrize("kind", ["ach_credit", "ach_debit", "unknown"])
+def test_money_in_that_is_no_refund_is_only_suggested_for_a_spending_category(
+    kind: DescriptorKind,
+) -> None:
+    # A bank credit that names a ride service may be a refund, or earnings.
+    unsure = _suggestion("leisure.subscriptions", "dictionary", "0.70")
+    assert _decide(_identity(merchant=STREAMBOX, kind=kind), "in") == unsure
+    assert _decide(_identity(merchant=STREAMBOX, kind=kind, via="paypal"), "in") == unsure
+    # A store that sells everything is no surer for it.
+    assert _decide(_identity(merchant=EVERYMART, kind=kind), "in") == _suggestion(
+        "shopping.general", "dictionary", "0.60"
+    )
+    # A strong word is held to the same line, a weak one is below it anyway.
+    assert _decide(_identity("harbor", kind=kind, via="toast"), "in") == _suggestion(
+        "food.restaurants", "keyword", "0.70"
+    )
+    assert _decide(_identity("harbor pizza", kind=kind), "in") == _suggestion(
+        "food.restaurants", "keyword", "0.60"
+    )
+
+    # Not held to it: the same line going out, a merchant that pays, and
+    # money back on a line that says so or is a card purchase.
+    assert _decide(_identity(merchant=STREAMBOX, kind=kind)) == _fact(
+        "leisure.subscriptions", "dictionary", "0.90"
+    )
+    assert _decide(_identity("harbor", kind=kind, via="toast")) == _fact(
+        "food.restaurants", "keyword", "0.80"
+    )
+    assert _decide(_identity(merchant=PAYWORKS, kind=kind), "in") == _fact(
+        "income.salary", "dictionary", "0.90"
+    )
+    for back in ("refund", "purchase", "recurring_purchase"):
+        assert _decide(_identity(merchant=STREAMBOX, kind=back), "in") == _fact(
+            "leisure.subscriptions", "dictionary", "0.80"
+        )
+    assert _decide(_identity("harbor", kind="purchase", via="toast"), "in") == _fact(
+        "food.restaurants", "keyword", "0.80"
+    )
+
+
+@pytest.mark.usefixtures("keywords")
 def test_payroll_only_for_money_in() -> None:
     salary = _fact("income.salary", "dictionary", "0.90")
     assert _decide(_identity(merchant=PAYWORKS, kind="ach_credit"), "in") == salary
