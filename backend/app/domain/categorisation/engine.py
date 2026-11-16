@@ -15,7 +15,14 @@ caller hands it what it read from the database. A guess at least
 :data:`APPLY_MIN` sure is a fact (``category_id``); below that it is only a
 suggestion (``suggested_category_id``).
 
-The three write functions are still declarations and write nothing.
+What the three write functions leave alone: a row is **undecided** when it
+has no category, no source and no split (:func:`undecided_clause`), and only
+such a row is ever guessed for. :func:`reconsider` also looks again at its
+own earlier guesses (:func:`reconsidered_clause`): rows that carry a
+suggestion and facts whose source is ``dictionary`` or ``keyword``. A row
+whose source is ``person``, ``file``, ``rule``, ``payee``, ``learned`` or
+``legacy``, a row a person cleared, and a split row are never read for a
+guess. Audit rows and events carry counts and account ids only.
 """
 
 from __future__ import annotations
@@ -26,17 +33,25 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
+from sqlalchemy import ColumnElement, and_, or_, select, tuple_
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
+
+from app.core.audit import audit
+from app.core.clock import utcnow
+from app.core.events import emit
 from app.domain.categorisation import cleanup, dictionary, memory
 from app.domain.categorisation.cleanup import DescriptorKind
 from app.domain.categorisation.dictionary import Hit
 from app.domain.categorisation.memory import Direction, Learned
+from app.domain.categorisation.pinned import pinned_update
+from app.domain.transactions.categories import category_ids_by_key
 from app.domain.transactions.categories import resolve as resolve_category
-from app.domain.transactions.models import MERCHANT_KEY_MAX, Transaction
+from app.domain.transactions.models import MERCHANT_KEY_MAX, Transaction, TransactionSplit
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
     from starlette.requests import HTTPConnection
 
 #: A guess at least this sure is written as the category; below it, as a suggestion.
@@ -129,9 +144,16 @@ class Summary:
     """What one pass did (counts and account ids only)."""
 
     scanned: int = 0
+    #: Rows given a category, by how it was decided.
     by_source: Counter[str] = field(default_factory=Counter)
+    #: Rows given a suggestion only.
     suggested: int = 0
+    #: Rows whose merchant key was written.
     keyed: int = 0
+    #: Rows whose categorisation was written (a category, a suggestion, or a
+    #: guess taken back); a key alone does not count.
+    changed: int = 0
+    #: Accounts of the rows counted in ``changed``.
     changed_accounts: set[uuid.UUID] = field(default_factory=set)
 
 
@@ -258,6 +280,194 @@ def decide(
     return _guess(resolve_category(categories, key), source, confidence)
 
 
+# ---------------------------------------------------------------------------
+# The write path
+# ---------------------------------------------------------------------------
+
+FILE_SOURCE: Final = "file"
+RULE_SOURCE: Final = "rule"
+PERSON_SOURCE: Final = "person"
+FILE_CONFIDENCE: Final = Decimal("0.95")
+CERTAIN: Final = Decimal(1)
+#: Sources of a fact the engine may look at again (a suggestion always is).
+GUESS_AGAIN_SOURCES: Final = ("dictionary", "keyword")
+#: Rows read (and locked) per batch by :func:`reconsider`.
+BATCH: Final = 500
+
+_DECISION_COLUMNS: Final = (
+    "category_id",
+    "suggested_category_id",
+    "category_source",
+    "category_confidence",
+)
+
+
+def _no_split() -> ColumnElement[bool]:
+    return ~(
+        select(TransactionSplit.id)
+        .where(
+            TransactionSplit.household_id == Transaction.household_id,
+            TransactionSplit.transaction_id == Transaction.id,
+        )
+        .exists()
+    )
+
+
+def undecided_clause() -> ColumnElement[bool]:
+    """Rows nobody decided: no category, no source and no split.
+
+    A row with only a suggestion has a source and is not among them.
+    """
+    return and_(
+        Transaction.category_id.is_(None), Transaction.category_source.is_(None), _no_split()
+    )
+
+
+def reconsidered_clause() -> ColumnElement[bool]:
+    """Rows :func:`reconsider` evaluates: undecided ones and the engine's own guesses.
+
+    That is a row that carries a suggestion, or a fact whose source is
+    ``dictionary`` or ``keyword``. Never a split row.
+    """
+    return and_(
+        _no_split(),
+        or_(
+            and_(Transaction.category_id.is_(None), Transaction.category_source.is_(None)),
+            Transaction.suggested_category_id.is_not(None),
+            Transaction.category_source.in_(GUESS_AGAIN_SOURCES),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _Open:
+    """One row to guess for."""
+
+    id: uuid.UUID
+    account_id: uuid.UUID
+    identity: Identity
+    direction: Direction
+    payee_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
+class _Known:
+    """What one pass reads once: the household's keyed categories and payee defaults."""
+
+    categories: Mapping[str, uuid.UUID]
+    payee_defaults: Mapping[uuid.UUID, uuid.UUID]
+    now: datetime
+
+
+def _known(db: Session, household_id: uuid.UUID) -> _Known:
+    # Imported here: the importer's package is among this module's callers.
+    from app.domain.imports.repo import payee_default_categories
+
+    return _Known(
+        categories=category_ids_by_key(db, household_id),
+        payee_defaults=payee_default_categories(db, household_id),
+        now=utcnow(),
+    )
+
+
+def _decisions(
+    db: Session, household_id: uuid.UUID, known: _Known, rows: Sequence[_Open]
+) -> dict[uuid.UUID, Decision]:
+    """:func:`decide` for each of ``rows``, with the memory read once for all of them."""
+    keys = {(row.identity.key, row.direction) for row in rows if row.identity.key}
+    learned = memory.lookup(db, household_id, keys) if keys else {}
+    found: dict[uuid.UUID, Decision] = {}
+    for row in rows:
+        key = row.identity.key
+        found[row.id] = decide(
+            row.identity,
+            row.direction,
+            learned=learned.get((key, row.direction)) if key else None,
+            payee_default=known.payee_defaults.get(row.payee_id) if row.payee_id else None,
+            categories=known.categories,
+            now=known.now,
+        )
+    return found
+
+
+def _decision_values(decision: Decision) -> dict[str, Any]:
+    return {
+        "category_id": decision.category_id,
+        "suggested_category_id": decision.suggested_category_id,
+        "category_source": decision.source,
+        "category_confidence": decision.confidence,
+    }
+
+
+def _mark(summary: Summary, account_id: uuid.UUID, source: str | None) -> None:
+    """Count one row whose categorisation was written (``source``: it has a category now)."""
+    if source is not None:
+        summary.by_source[source] += 1
+    summary.changed += 1
+    summary.changed_accounts.add(account_id)
+
+
+def _count(summary: Summary, account_id: uuid.UUID, decision: Decision) -> None:
+    """Count one written guess: a fact, a suggestion, or one taken back."""
+    if decision.category_id is None and decision.suggested_category_id is not None:
+        summary.suggested += 1
+    _mark(summary, account_id, decision.source if decision.category_id is not None else None)
+
+
+def _write(
+    db: Session,
+    household_id: uuid.UUID,
+    changes: Mapping[uuid.UUID, Mapping[str, Any]],
+    rows: Mapping[uuid.UUID, Transaction] | None = None,
+) -> None:
+    """The pinned write; ``rows`` (the caller's ORM rows) then show what was written.
+
+    The values are set as loaded state, not as changes: the rows are not
+    dirty afterwards and reading them costs no query per row.
+    """
+    if not changes:
+        return
+    pinned_update(db, household_id, changes)
+    for row_id, values in changes.items():
+        row = (rows or {}).get(row_id)
+        if row is not None:
+            for column, value in values.items():
+                set_committed_value(row, column, value)
+
+
+def _announce(db: Session, household_id: uuid.UUID, summary: Summary) -> None:
+    """``transaction.categorised`` for live clients, when a categorisation was written."""
+    if not summary.changed:
+        return
+    emit(
+        db,
+        household_id,
+        "transaction.categorised",
+        {
+            # Members and viewers hear only about accounts they see.
+            "account_ids": sorted(str(account) for account in summary.changed_accounts),
+            "count": summary.changed,
+        },
+    )
+
+
+def _split_ids(db: Session, household_id: uuid.UUID, ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+    """Those of ``ids`` that are split."""
+    found: set[uuid.UUID] = set()
+    for start in range(0, len(ids), BATCH):
+        found.update(
+            db.execute(
+                select(TransactionSplit.transaction_id)
+                .where(
+                    TransactionSplit.household_id == household_id,
+                    TransactionSplit.transaction_id.in_(ids[start : start + BATCH]),
+                )
+                .distinct()
+            ).scalars()
+        )
+    return found
+
+
 def categorise_rows(
     db: Session,
     household_id: uuid.UUID,
@@ -268,9 +478,138 @@ def categorise_rows(
     user_id: uuid.UUID | None = None,
     request: HTTPConnection | None = None,
 ) -> Summary:
-    """Key and categorise rows just created and flushed, in the caller's transaction."""
-    del db, household_id, rows, file_categorised, protect, user_id, request
-    return Summary()
+    """Key and categorise rows just created and flushed, in the caller's transaction.
+
+    In this order:
+
+    1. every row gets its ``merchant_key`` (before the rules run: a rule may
+       name a merchant);
+    2. a row in ``file_categorised`` (the file gave it a category or split
+       it) is marked ``file``;
+    3. the household's rules run as the creation hook always ran them
+       (``app.domain.rules.service.apply_rules_to``): once per set of
+       protected fields, ``categorization`` protected for the file's rows and
+       ``protect[row.id]`` for what a person typed on a manual row. A row
+       that had neither a category nor a split and has one afterwards is the
+       rule's;
+    4. what is still undecided is guessed for (:func:`decide`).
+
+    A row that arrives with a category the file did not give (a person typed
+    it) is keyed and otherwise left as it is: recording that choice is
+    :func:`person_decided`'s. Everything this function writes itself is a
+    pinned write, so ``updated_at`` stays where it was; a rule's write moves
+    it, as it always did, and the importer equalises its rows afterwards.
+    One ``transaction.categorise`` audit row and one
+    ``transaction.categorised`` event say how many rows were categorised,
+    when any was. ``ValueError`` when a row is not the household's.
+    """
+    rows = list(rows)
+    if any(row.household_id != household_id for row in rows):
+        raise ValueError("every transaction must belong to household_id")
+    summary = Summary(scanned=len(rows))
+    if not rows:
+        return summary
+    # Imported here: ``app.domain.rules.service`` imports the transactions
+    # service, which calls this module.
+    from app.domain.rules.service import apply_rules_to
+
+    db.flush()
+    by_id = {row.id: row for row in rows}
+    ids = list(by_id)
+    filed = set(file_categorised)
+    identities = {row.id: identify(row.raw_payee) for row in rows}
+    split_before = _split_ids(db, household_id, ids)
+    source_before = {row.id: row.category_source for row in rows}
+    #: Rows that could still be decided by a rule or a guess.
+    blank = {
+        row.id
+        for row in rows
+        if row.category_id is None and row.category_source is None and row.id not in split_before
+    }
+
+    first: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in rows:
+        values: dict[str, Any] = {}
+        key = identities[row.id].key
+        if row.merchant_key != key:
+            values["merchant_key"] = key
+            summary.keyed += 1
+        if row.id in filed and row.category_source is None:
+            values["category_source"] = FILE_SOURCE
+            values["category_confidence"] = FILE_CONFIDENCE
+            # Also when the file split it: the lines carry the categories.
+            _mark(summary, row.account_id, FILE_SOURCE)
+        if values:
+            first[row.id] = values
+    _write(db, household_id, first, by_id)
+
+    groups: dict[frozenset[str], list[Transaction]] = {}
+    for row in rows:
+        guarded = set((protect or {}).get(row.id, ()))
+        if row.id in filed:
+            guarded.add("categorization")
+        groups.setdefault(frozenset(guarded), []).append(row)
+    for guarded_fields, group in sorted(groups.items(), key=lambda item: sorted(item[0])):
+        apply_rules_to(
+            db,
+            household_id,
+            group,
+            protect=sorted(guarded_fields),
+            user_id=user_id,
+            request=request,
+        )
+    db.flush()
+
+    split_after = _split_ids(db, household_id, sorted(blank))
+    second: dict[uuid.UUID, dict[str, Any]] = {}
+    still_open: list[_Open] = []
+    for row in rows:
+        source = row.category_source
+        if source == RULE_SOURCE:
+            if source_before[row.id] != RULE_SOURCE:
+                _mark(summary, row.account_id, RULE_SOURCE)
+        elif source is None and row.id in blank:
+            if row.category_id is not None or row.id in split_after:
+                second[row.id] = {
+                    "category_source": RULE_SOURCE,
+                    "category_confidence": CERTAIN,
+                }
+                _mark(summary, row.account_id, RULE_SOURCE)
+            else:
+                still_open.append(
+                    _Open(
+                        id=row.id,
+                        account_id=row.account_id,
+                        identity=identities[row.id],
+                        direction=memory.direction_of(row.amount),
+                        payee_id=row.payee_id,
+                    )
+                )
+    if still_open:
+        decided = _decisions(db, household_id, _known(db, household_id), still_open)
+        for item in still_open:
+            decision = decided[item.id]
+            if decision.source is not None:
+                second[item.id] = _decision_values(decision)
+                _count(summary, item.account_id, decision)
+    _write(db, household_id, second, by_id)
+
+    if summary.changed:
+        audit(
+            db,
+            action="transaction.categorise",
+            target_type="transaction",
+            after={
+                "count": summary.changed,
+                "by_source": dict(sorted(summary.by_source.items())),
+                "suggested": summary.suggested,
+            },
+            household_id=household_id,
+            user_id=user_id,
+            request=request,
+        )
+    _announce(db, household_id, summary)
+    return summary
 
 
 def person_decided(
@@ -281,8 +620,31 @@ def person_decided(
     before_source: str | None,
     at: datetime,
 ) -> None:
-    """Record that a person set or cleared ``row``'s category (or its splits)."""
-    del db, row, before_category_id, before_source, at
+    """Record that a person set or cleared ``row``'s category (or its splits).
+
+    Called by the transactions service after it assigned ``row.category_id``
+    (``None`` when the person cleared it or split the row), with what the row
+    held before. The row becomes the person's: source ``person`` at full
+    confidence, no rule and no suggestion. This is the person's own write,
+    made on the ORM row; ``updated_at`` moves in the caller.
+
+    The household's memory learns from it when the row has a merchant key
+    and its descriptor is of a teachable kind: the category this row counted
+    for before is taken back when that was a person's choice too (the memory
+    counts rows, not clicks), and the new one, if any, is counted.
+    """
+    row.category_source = PERSON_SOURCE
+    row.category_confidence = CERTAIN
+    row.category_rule_id = None
+    row.suggested_category_id = None
+    key = row.merchant_key
+    if not key or cleanup.clean(row.raw_payee).kind not in cleanup.TEACHABLE:
+        return
+    direction = memory.direction_of(row.amount)
+    if before_source == PERSON_SOURCE and before_category_id is not None:
+        memory.withdraw(db, row.household_id, key, direction, before_category_id)
+    if row.category_id is not None:
+        memory.record(db, row.household_id, key, direction, row.category_id, at=at)
 
 
 def reconsider(
@@ -293,6 +655,100 @@ def reconsider(
     rekey: bool = False,
     check_cancelled: Callable[[], None] | None = None,
 ) -> Summary:
-    """Look again at the rows nobody decided (never at a person's, a file's or a rule's)."""
-    del db, household_id, transaction_ids, rekey, check_cancelled
-    return Summary()
+    """Look again at the rows nobody decided (never at a person's, a file's or a rule's).
+
+    Over the household's rows, or those of ``transaction_ids``, newest first
+    in locked batches of :data:`BATCH`: the rows of
+    :func:`reconsidered_clause` are decided again (:func:`decide`; the rules
+    are not run). A row whose decision is unchanged is not written; a former
+    fact that is now only a suggestion, or nothing, loses its category. With
+    ``rekey`` the merchant key of **every** row of the scope is recomputed
+    first, decided rows included: their key may change, their category,
+    source and confidence never do. Without it only a missing key of a row
+    being decided is filled in.
+
+    Pinned writes only: no ``updated_at`` moves. ``check_cancelled`` is
+    called before each batch and stops the pass by raising. One
+    ``transaction.categorised`` event when a categorisation changed; the
+    audit row is the caller's (a refresh, a revert).
+    """
+    summary = Summary()
+    clauses: list[ColumnElement[bool]] = [Transaction.household_id == household_id]
+    if transaction_ids is not None:
+        wanted = sorted(set(transaction_ids))
+        if not wanted:
+            return summary
+        clauses.append(Transaction.id.in_(wanted))
+    if not rekey:
+        clauses.append(reconsidered_clause())
+    known = _known(db, household_id)
+    after: tuple[Any, uuid.UUID] | None = None
+    while True:
+        if check_cancelled is not None:
+            check_cancelled()
+        statement = select(
+            Transaction.id,
+            Transaction.account_id,
+            Transaction.posted_date,
+            Transaction.raw_payee,
+            Transaction.amount,
+            Transaction.payee_id,
+            Transaction.merchant_key,
+            Transaction.category_id,
+            Transaction.suggested_category_id,
+            Transaction.category_source,
+            Transaction.category_confidence,
+            reconsidered_clause().label("open"),
+        ).where(*clauses)
+        if after is not None:
+            statement = statement.where(
+                tuple_(Transaction.posted_date, Transaction.id) < tuple_(after[0], after[1])
+            )
+        batch = db.execute(
+            statement.order_by(Transaction.posted_date.desc(), Transaction.id.desc())
+            .limit(BATCH)
+            .with_for_update(of=Transaction)
+        ).all()
+        if not batch:
+            break
+        summary.scanned += len(batch)
+        changes: dict[uuid.UUID, dict[str, Any]] = {}
+        to_decide: list[_Open] = []
+        for found in batch:
+            if not (found.open or rekey):
+                continue
+            identity = identify(found.raw_payee)
+            if identity.key != found.merchant_key and (rekey or found.merchant_key is None):
+                changes[found.id] = {"merchant_key": identity.key}
+                summary.keyed += 1
+            if found.open:
+                to_decide.append(
+                    _Open(
+                        id=found.id,
+                        account_id=found.account_id,
+                        identity=identity,
+                        direction=memory.direction_of(found.amount),
+                        payee_id=found.payee_id,
+                    )
+                )
+        decided = _decisions(db, household_id, known, to_decide)
+        current = {
+            found.id: Decision(
+                category_id=found.category_id,
+                suggested_category_id=found.suggested_category_id,
+                source=found.category_source,
+                confidence=found.category_confidence,
+            )
+            for found in batch
+        }
+        for item in to_decide:
+            decision = decided[item.id]
+            if decision != current[item.id]:
+                changes.setdefault(item.id, {}).update(_decision_values(decision))
+                _count(summary, item.account_id, decision)
+        _write(db, household_id, changes)
+        after = (batch[-1].posted_date, batch[-1].id)
+        if len(batch) < BATCH:
+            break
+    _announce(db, household_id, summary)
+    return summary
