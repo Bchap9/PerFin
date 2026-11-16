@@ -206,6 +206,68 @@ describe("one subscription up close", () => {
     expect(within(detail).queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
+  it("a member cannot edit a series on an account they may only read", async () => {
+    setup({
+      session: { role: "member" },
+      handlers: {
+        "GET /api/v1/accounts": () =>
+          json({
+            items: [
+              {
+                id: ACCOUNT_CHECKING,
+                name: "Checking",
+                nickname: null,
+                type: "checking",
+                currency: "USD",
+                balance: money("1200.50"),
+                balance_date: "2026-11-03",
+                is_asset: true,
+                is_closed: false,
+                include_in_net_worth: true,
+                manual_balance: false,
+                can_edit: false,
+                asset_kind: null,
+                subtype: null,
+                subtype_label: null,
+                tax_treatment: null,
+                closed_on: null,
+                institution_id: null,
+                number_last4: null,
+                opened_on: null,
+                created_at: "2026-11-01T10:00:00Z",
+                updated_at: "2026-11-01T10:00:00Z",
+              },
+            ],
+            next_cursor: null,
+          }),
+      },
+    });
+    const detail = await screen.findByRole("dialog", { name: "Streamly" });
+    // Once the accounts are in: the name of the account is on screen.
+    expect(await within(detail).findByText("Checking")).toBeInTheDocument();
+    expect(within(detail).queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("a price change seen on one charge only is marked in the price history", async () => {
+    const change = { previous: money("-15.99"), current: money("-17.99"), on: "2026-11-10", pending: true };
+    setup({
+      detail: {
+        subscription: { ...STREAMLY, price_change: change },
+        charges: [],
+        events: [
+          event("e-3", "price_changed", "2026-11-10", { state: "open", amount_before: money("-15.99"), amount_after: money("-17.99") }),
+          event("e-2", "price_changed", "2026-06-10", { amount_before: money("-13.99"), amount_after: money("-15.99") }),
+        ],
+      },
+    });
+    const detail = await screen.findByRole("dialog", { name: "Streamly" });
+    const prices = within(detail).getByRole("region", { name: "Price history" });
+    expect(within(prices).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Nov 10, 2026: $15.99 to $17.99, not confirmed yet",
+      "Jun 10, 2026: $13.99 to $15.99",
+    ]);
+  });
+
   it("says so when the series cannot be read", async () => {
     setup({ handlers: { "GET /api/v1/subscriptions/:id": () => json({ type: "urn:perfin:problem:not-found", title: "Not found", status: 404, detail: "No such series." }, 404) } });
     const detail = await screen.findByRole("dialog", { name: "Subscription" });

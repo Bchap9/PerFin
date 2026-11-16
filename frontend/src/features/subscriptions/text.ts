@@ -91,6 +91,15 @@ export function eventText(event: EventWords): string {
 
 type EventWords = Pick<SubscriptionEvent, "kind" | "occurred_on" | "amount_before" | "amount_after">;
 
+/**
+ * ", not confirmed yet" for the price change that was seen on one charge
+ * only (the next charge at the new price confirms it); nothing otherwise.
+ */
+export function unconfirmedNote(event: EventWords, change: Subscription["price_change"]): string {
+  const pending = event.kind === "price_changed" && change?.pending === true && change.on === event.occurred_on;
+  return pending ? ", not confirmed yet" : "";
+}
+
 /** One line of the price history: "<date>: <a> to <b>". */
 export function priceLine(event: EventWords): string {
   const before = event.amount_before === null ? null : cost(event.amount_before);

@@ -67,6 +67,40 @@ const WATER = series("b-1", "Harbor Water", {
 });
 const MAYBE = series("s-4", "Puzzle Post", { status: "suggested", open_events: 0, next_due: "2026-11-25" });
 
+/** The account of every series here, as a member who may only read it sees it. */
+const READ_ONLY_ACCOUNTS: Handler = () =>
+  json({
+    items: [
+      {
+        id: ACCOUNT_CHECKING,
+        name: "Checking",
+        nickname: null,
+        type: "checking",
+        currency: "USD",
+        balance: money("1200.50"),
+        balance_date: "2026-11-03",
+        is_asset: true,
+        is_closed: false,
+        include_in_net_worth: true,
+        manual_balance: false,
+        can_edit: false,
+        asset_kind: null,
+        subtype: null,
+        subtype_label: null,
+        tax_treatment: null,
+        closed_on: null,
+        institution_id: null,
+        number_last4: null,
+        opened_on: null,
+        created_at: "2026-11-01T10:00:00Z",
+        updated_at: "2026-11-01T10:00:00Z",
+      },
+    ],
+    next_cursor: null,
+  });
+
+const MISSED_EVENT: Row = { id: "e-2", schedule_id: "s-1", name: "Streamly", kind: "missed", state: "open", occurred_on: "2026-11-10", amount_before: null, amount_after: null, transaction_id: null };
+
 function listBody(items: Row[], extra: Row = {}): Row {
   return {
     as_of: "2026-11-14",
@@ -232,7 +266,10 @@ describe("subscriptions view", () => {
 
   it("the row menu pauses, ends and says which of the two it is", async () => {
     const { api, user } = setup([STREAMLY], {
-      handlers: { "POST /api/v1/subscriptions/:id/decision": () => json(STREAMLY) },
+      handlers: {
+        "POST /api/v1/subscriptions/:id/decision": () => json(STREAMLY),
+        "PATCH /api/v1/recurring/:id": () => json({}),
+      },
     });
     const active = await screen.findByRole("table", { name: "Active" });
     const open = async (): Promise<HTMLElement> => {
@@ -247,9 +284,14 @@ describe("subscriptions view", () => {
     const menu = await open();
     expect(within(menu).queryByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    const listReads = api.callsTo("GET", "/api/v1/subscriptions").length;
     await user.click(within(menu).getByRole("button", { name: "This is a bill" }));
-    await vi.waitFor(() => { expect(bodies()).toHaveLength(3); });
-    expect(bodies()).toEqual([{ decision: "pause" }, { decision: "end" }, { decision: "confirm", kind: "bill" }]);
+    // Which of the two it is says nothing about the status: the kind alone is set, not a decision.
+    await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
+    expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.path).toBe("/api/v1/recurring/s-1");
+    expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.body).toEqual({ kind: "bill" });
+    expect(bodies()).toEqual([{ decision: "pause" }, { decision: "end" }]);
+    await vi.waitFor(() => { expect(api.callsTo("GET", "/api/v1/subscriptions").length).toBeGreaterThan(listReads); });
   });
 
   it("a paused series resumes and an ended one reopens", async () => {
@@ -276,9 +318,7 @@ describe("subscriptions view", () => {
     const changed = { ...STREAMLY, open_events: 1 };
     setup([changed, MAYBE, { ...CLOUD, status: "ended" }], {
       session: { role: "viewer" },
-      events: [
-        { id: "e-2", schedule_id: "s-1", name: "Streamly", kind: "missed", state: "open", occurred_on: "2026-11-10", amount_before: null, amount_after: null, transaction_id: null },
-      ],
+      events: [MISSED_EVENT],
     });
     const look = await screen.findByRole("region", { name: "Needs a look" });
     expect(await within(look).findByText("Expected on Nov 10, 2026, not seen")).toBeInTheDocument();
@@ -292,10 +332,64 @@ describe("subscriptions view", () => {
   });
 
   it("series that could not be converted are named", async () => {
-    setup([STREAMLY], { list: { subscriptions: totals(1, "15.99", "191.88", ["Lingua Club", "Brise Radio"]) } });
+    // The API names them by id; the page says their names.
+    const lingua = series("s-8", "Lingua Club");
+    const brise = series("s-9", "Brise Radio");
+    setup([STREAMLY, lingua, brise], { list: { subscriptions: totals(1, "15.99", "191.88", ["s-8", "s-9", "s-gone"]) } });
     const cost = await screen.findByRole("group", { name: "Cost of subscriptions" });
     expect(within(cost).getByText("Not included: Lingua Club")).toBeInTheDocument();
     expect(within(cost).getByText("Not included: Brise Radio")).toBeInTheDocument();
+    expect(within(cost).getByText("Not included: one that is not listed here")).toBeInTheDocument();
+    expect(cost).not.toHaveTextContent("s-8");
+    expect(cost).not.toHaveTextContent("s-gone");
+  });
+
+  it("asks for every status, the dismissed ones too", async () => {
+    const { api } = setup([STREAMLY]);
+    await screen.findByRole("table", { name: "Active" });
+    const search = new URLSearchParams(api.callsTo("GET", "/api/v1/subscriptions")[0]?.search ?? "");
+    expect(search.getAll("status")).toEqual(["suggested", "active", "confirmed", "paused", "ended", "dismissed"]);
+  });
+
+  it("a member sees no buttons for a series on an account they cannot edit", async () => {
+    setup([{ ...STREAMLY, open_events: 1 }, MAYBE, GYM, { ...CLOUD, status: "ended" }], {
+      session: { role: "member" },
+      events: [MISSED_EVENT],
+      handlers: { "GET /api/v1/accounts": READ_ONLY_ACCOUNTS },
+    });
+    const look = await screen.findByRole("region", { name: "Needs a look" });
+    expect(await within(look).findByText("Expected on Nov 10, 2026, not seen")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Active" })).getByRole("row", { name: /Gym Corner/ })).toHaveTextContent("Checking");
+    expect(within(look).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Confirm/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Not a subscription/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Got it/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^More for/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Reopen/ })).not.toBeInTheDocument();
+  });
+
+  it("says so when the changes cannot be read", async () => {
+    setup([{ ...STREAMLY, status: "confirmed", open_events: 1 }, CLOUD], {
+      handlers: {
+        "GET /api/v1/subscriptions/events": () => json({ type: "urn:perfin:problem:internal", title: "Server error", status: 500, detail: "Broken." }, 500),
+      },
+    });
+    const look = await screen.findByRole("region", { name: "Needs a look" });
+    expect(await within(look).findByText("Something changed")).toBeInTheDocument();
+    expect(await screen.findByText("Could not load what changed.")).toHaveAttribute("role", "alert");
+    // What changed is not at hand, so there is nothing to mark as seen.
+    expect(within(look).queryByRole("button", { name: /Got it/ })).not.toBeInTheDocument();
+  });
+
+  it("a price change seen on one charge only is not confirmed yet", async () => {
+    const change = { previous: money("-10.99"), current: money("-12.99"), on: "2026-11-10", pending: true };
+    setup([{ ...STREAMLY, open_events: 1, price_change: change }], {
+      events: [
+        { id: "e-3", schedule_id: "s-1", name: "Streamly", kind: "price_changed", state: "open", occurred_on: "2026-11-10", amount_before: money("-10.99"), amount_after: money("-12.99"), transaction_id: null },
+      ],
+    });
+    const look = await screen.findByRole("region", { name: "Needs a look" });
+    expect(await within(look).findByText("Price went from $10.99 to $12.99, not confirmed yet")).toBeInTheDocument();
   });
 
   it("the empty state", async () => {

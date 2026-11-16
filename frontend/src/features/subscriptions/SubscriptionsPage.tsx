@@ -2,8 +2,10 @@
 /**
  * Subscriptions and bills: what they cost, what needs a look, what is due in
  * the next 30 days, the active ones and, folded away, the ended and dismissed
- * ones. Every button is a person's decision (`POST /subscriptions/{id}/decision`)
- * or "seen" for a change; detection never undoes either.
+ * ones. Every button is a person's decision (`POST /subscriptions/{id}/decision`),
+ * their word on which of the two a series is (`PATCH /recurring/{id}` with the
+ * kind alone, which leaves the status as it is) or "seen" for a change;
+ * detection never undoes any of them.
  *
  * The sections are separate components fed by props, so the next stage can
  * rehouse them without touching the data layer. A series' name opens it up
@@ -26,6 +28,7 @@ import { useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts, type Account } from "../planning/queries";
 import { useAction } from "../planning/useAction";
+import { updateSchedule } from "../calendar/api";
 import {
   decide,
   listOpenEvents,
@@ -38,7 +41,7 @@ import {
   type SubscriptionEvent,
   type SubscriptionTotals,
 } from "./api";
-import { cadenceText, eventText, magnitude, statusText } from "./text";
+import { cadenceText, eventText, magnitude, statusText, unconfirmedNote } from "./text";
 import { useWide } from "./useWide";
 
 type TabKind = "subscription" | "bill";
@@ -88,6 +91,8 @@ function wordsFor(kind: TabKind): Words {
 }
 
 type Decide = (subscription: Subscription, body: SubscriptionDecision) => void;
+/** A person's word on which of the two a series is; its status stays as it is. */
+type SetKind = (subscription: Subscription, kind: TabKind) => void;
 
 function Cost({ money }: { money: { amount: string; currency: string } }) {
   return <MoneyText amount={magnitude(money.amount)} currency={money.currency} tone="none" />;
@@ -106,8 +111,23 @@ function dateText(iso: string | null): string {
   return iso === null ? "Not known" : (formatDate(iso) ?? iso);
 }
 
-/** The two figures and the count for one kind; series without a rate are named. */
-export function CostHeader({ kind, totals, asOf }: { kind: TabKind; totals: SubscriptionTotals; asOf: string }) {
+const UNLISTED = "one that is not listed here";
+
+/**
+ * The two figures and the count for one kind; series without a rate are named.
+ * `totals.unconverted` holds ids: `nameOf` turns one into the name of its series.
+ */
+export function CostHeader({
+  kind,
+  totals,
+  asOf,
+  nameOf,
+}: {
+  kind: TabKind;
+  totals: SubscriptionTotals;
+  asOf: string;
+  nameOf: (id: string) => string | undefined;
+}) {
   const words = wordsFor(kind);
   return (
     <div role="group" aria-label={`Cost of ${words.many}`} className="subs-cost">
@@ -126,19 +146,20 @@ export function CostHeader({ kind, totals, asOf }: { kind: TabKind; totals: Subs
         </div>
       </dl>
       <p className="subs-cost__count">{`${String(totals.count)} ${totals.count === 1 ? words.one : words.many}`}</p>
-      {totals.unconverted.map((name, index) => (
-        <p key={`${String(index)}:${name}`} className="muted subs-cost__note">{`Not included: ${name}`}</p>
+      {totals.unconverted.map((id) => (
+        <p key={id} className="muted subs-cost__note">{`Not included: ${nameOf(id) ?? UNLISTED}`}</p>
       ))}
       <p className="muted subs-cost__note">{`From statements up to ${dateText(asOf)}`}</p>
     </div>
   );
 }
 
-function changeLines(subscription: Subscription, events: readonly SubscriptionEvent[], eventsLoaded: boolean): string[] {
+/** What changed, in words; a change whose words are not at hand (or could not be read) is still said. */
+function changeLines(subscription: Subscription, events: readonly SubscriptionEvent[], eventsSettled: boolean): string[] {
   if (events.length > 0) {
-    return events.map(eventText);
+    return events.map((event) => `${eventText(event)}${unconfirmedNote(event, subscription.price_change)}`);
   }
-  return subscription.open_events > 0 && eventsLoaded ? ["Something changed"] : [];
+  return subscription.open_events > 0 && eventsSettled ? ["Something changed"] : [];
 }
 
 /** Suggested series and series with a change nobody has looked at. */
@@ -146,7 +167,7 @@ export function NeedsLook({
   kind,
   rows,
   eventsFor,
-  eventsLoaded,
+  eventsSettled,
   canDecide,
   onDecide,
   onSeen,
@@ -155,7 +176,7 @@ export function NeedsLook({
   kind: TabKind;
   rows: readonly Subscription[];
   eventsFor: (id: string) => readonly SubscriptionEvent[];
-  eventsLoaded: boolean;
+  eventsSettled: boolean;
   canDecide: (subscription: Subscription) => boolean;
   onDecide: Decide;
   onSeen: (ids: string[]) => void;
@@ -180,7 +201,7 @@ export function NeedsLook({
                   <Cost money={row.amount} />, {cadenceText(row.cadence, row.interval_count).toLowerCase()}
                 </span>
                 {suggested ? <Badge tone="info">{statusText(row.status, row.kind)}</Badge> : null}
-                {changeLines(row, events, eventsLoaded).map((line, index) => (
+                {changeLines(row, events, eventsSettled).map((line, index) => (
                   <p key={`${String(index)}:${line}`} className="subs-look__change">
                     {line}
                   </p>
@@ -236,7 +257,7 @@ export function Upcoming({ rows }: { rows: readonly Subscription[] }) {
   );
 }
 
-function RowMenu({ kind, row, onDecide, busy }: { kind: TabKind; row: Subscription; onDecide: Decide; busy: boolean }) {
+function RowMenu({ kind, row, onDecide, onKind, busy }: { kind: TabKind; row: Subscription; onDecide: Decide; onKind: SetKind; busy: boolean }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const words = wordsFor(kind);
@@ -264,8 +285,8 @@ function RowMenu({ kind, row, onDecide, busy }: { kind: TabKind; row: Subscripti
           <Button size="sm" disabled={busy} onClick={() => { choose({ decision: "end" }); }}>
             Ended
           </Button>
-          {/* Saying which of the two it is keeps a paused series paused; otherwise it is a person's yes. */}
-          <Button size="sm" disabled={busy} onClick={() => { choose({ decision: paused ? "pause" : "confirm", kind: words.other }); }}>
+          {/* Which of the two it is: the kind alone, so a series PerFin found is not confirmed by it. */}
+          <Button size="sm" disabled={busy} onClick={() => { setOpen(false); onKind(row, words.other); }}>
             {words.switchKind}
           </Button>
         </div>
@@ -286,6 +307,7 @@ export function ActiveTable({
   accountName,
   canDecide,
   onDecide,
+  onKind,
   busy,
 }: {
   kind: TabKind;
@@ -293,6 +315,7 @@ export function ActiveTable({
   accountName: (id: string) => string;
   canDecide: (subscription: Subscription) => boolean;
   onDecide: Decide;
+  onKind: SetKind;
   busy: boolean;
 }) {
   const [ascending, setAscending] = useState(false);
@@ -363,7 +386,7 @@ export function ActiveTable({
                   <Cost money={row.yearly_cost} />
                 </td>
                 {anyActions ? (
-                  <td className="subs-col-actions">{canDecide(row) ? <RowMenu kind={kind} row={row} onDecide={onDecide} busy={busy} /> : null}</td>
+                  <td className="subs-col-actions">{canDecide(row) ? <RowMenu kind={kind} row={row} onDecide={onDecide} onKind={onKind} busy={busy} /> : null}</td>
                 ) : null}
               </tr>
             ))}
@@ -436,6 +459,7 @@ export function SubscriptionsList() {
   const [tab, setTab] = useState<TabKind>("subscription");
   const decision = useAction((id: string, body: SubscriptionDecision) => decide(id, body), { invalidate: SUBSCRIPTION_FAMILIES });
   const seen = useAction(markEventsSeen, { invalidate: SUBSCRIPTION_FAMILIES });
+  const kindChange = useAction((id: string, kind: TabKind) => updateSchedule(id, { kind }), { invalidate: SUBSCRIPTION_FAMILIES });
 
   const role = session?.household?.role;
   const mayDecide = role !== undefined && role !== "viewer";
@@ -460,9 +484,13 @@ export function SubscriptionsList() {
   const onSeen = (ids: string[]): void => {
     void seen.run(ids);
   };
-  const busy = decision.busy || seen.busy;
+  const onKind: SetKind = (row, kind) => {
+    void kindChange.run(row.id, kind);
+  };
+  const busy = decision.busy || seen.busy || kindChange.busy;
   const today = todayIsoDate();
   const data = list.data;
+  const nameOf = (id: string): string | undefined => data?.items.find((row) => row.id === id)?.name;
 
   const panel = (kind: TabKind) => {
     const rows = (data?.items ?? []).filter((row) => row.kind === kind);
@@ -478,7 +506,7 @@ export function SubscriptionsList() {
           kind={kind}
           rows={rows.filter((row) => row.status === "suggested" || row.open_events > 0)}
           eventsFor={(id) => eventsBySeries.get(id) ?? []}
-          eventsLoaded={openEvents.isSuccess}
+          eventsSettled={!openEvents.isPending}
           canDecide={canDecide}
           onDecide={onDecide}
           onSeen={onSeen}
@@ -491,6 +519,7 @@ export function SubscriptionsList() {
           accountName={accountName}
           canDecide={canDecide}
           onDecide={onDecide}
+          onKind={onKind}
           busy={busy}
         />
         <Folded rows={rows.filter((row) => row.status === "ended" || row.status === "dismissed")} canDecide={canDecide} onDecide={onDecide} busy={busy} />
@@ -503,8 +532,9 @@ export function SubscriptionsList() {
       <QueryState loading={list.isPending} error={list.error} label="subscriptions">
         {data === undefined ? null : (
           <>
-            <CostHeader kind={tab} totals={tab === "bill" ? data.bills : data.subscriptions} asOf={data.as_of} />
-            <ErrorLine message={decision.error ?? seen.error} />
+            <CostHeader kind={tab} totals={tab === "bill" ? data.bills : data.subscriptions} asOf={data.as_of} nameOf={nameOf} />
+            <ErrorLine message={decision.error ?? seen.error ?? kindChange.error} />
+            <ErrorLine message={openEvents.isError ? "Could not load what changed." : null} />
             <Tabs
               label="Subscriptions and bills"
               selectedId={tab}

@@ -31,7 +31,11 @@ export const SUBSCRIPTION_FAMILIES = [queryRoots.subscriptions, queryRoots.recur
 
 const EVENTS_PAGE = 200;
 
-export const listSubscriptions = (): Promise<SubscriptionList> => unwrap(api.GET("/api/v1/subscriptions", {}));
+/** Left to itself the API leaves the dismissed series out; the folded section lists them, to be reopened. */
+const EVERY_STATUS: SubscriptionStatus[] = ["suggested", "active", "confirmed", "paused", "ended", "dismissed"];
+
+export const listSubscriptions = (): Promise<SubscriptionList> =>
+  unwrap(api.GET("/api/v1/subscriptions", { params: { query: { status: EVERY_STATUS } } }));
 
 /** One series with its linked charges and everything that changed about it. */
 export const getSubscription = (id: string): Promise<SubscriptionDetail> =>

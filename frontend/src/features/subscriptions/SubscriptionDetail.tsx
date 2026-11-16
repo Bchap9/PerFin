@@ -25,7 +25,7 @@ import { PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
 import { useRouteParam } from "../planning/useRouteParam";
 import { getSubscription, subscriptionKeys, type Subscription, type SubscriptionCharge, type SubscriptionEvent } from "./api";
-import { cadenceText, datedEventText, magnitude, priceLine, sourceText, statusText } from "./text";
+import { cadenceText, datedEventText, magnitude, priceLine, sourceText, statusText, unconfirmedNote } from "./text";
 import { useWide } from "./useWide";
 
 type Level = 2 | 3;
@@ -131,12 +131,20 @@ function Lines({ lines, empty }: { lines: readonly { id: string; text: string }[
   );
 }
 
-/** Every price change of the series as "<date>: <a> to <b>", newest first. */
-export function PriceHistory({ events, headingLevel }: { events: readonly SubscriptionEvent[]; headingLevel: Level }) {
+/** Every price change of the series as "<date>: <a> to <b>", newest first; one seen on a single charge says so. */
+export function PriceHistory({
+  events,
+  priceChange,
+  headingLevel,
+}: {
+  events: readonly SubscriptionEvent[];
+  priceChange: Subscription["price_change"];
+  headingLevel: Level;
+}) {
   const lines = newestFirst(
     events.filter((event) => event.kind === "price_changed"),
     (event) => event.occurred_on,
-  ).map((event) => ({ id: event.id, text: priceLine(event) }));
+  ).map((event) => ({ id: event.id, text: `${priceLine(event)}${unconfirmedNote(event, priceChange)}` }));
   return (
     <Card title="Price history" headingLevel={headingLevel}>
       <Lines lines={lines} empty="The price has not changed." />
@@ -181,7 +189,7 @@ export function SubscriptionDetail() {
         <div className="planning-stack">
           <SeriesFacts subscription={query.data.subscription} accountName={account === undefined ? "" : (account.nickname ?? account.name)} />
           <Charges id={query.data.subscription.id} charges={query.data.charges} headingLevel={headingLevel} />
-          <PriceHistory events={query.data.events} headingLevel={headingLevel} />
+          <PriceHistory events={query.data.events} priceChange={query.data.subscription.price_change} headingLevel={headingLevel} />
           <Changes events={query.data.events} headingLevel={headingLevel} />
         </div>
       )}
