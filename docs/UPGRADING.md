@@ -328,7 +328,7 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
   or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed
   before lose it in the refresh the hourly `categorise.dispatch` job
-  queues after the upgrade (clean-up version 3, merchant list version 12);
+  queues after the upgrade (clean-up version 4, merchant list version 12);
   nothing needs to be run by hand, and an admin's "Check again" (Settings,
   What PerFin learned) runs it at once. Categories on those rows stay;
   what was learned under such a key no longer answers, and the cash
@@ -350,6 +350,17 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   ended. A lesson school (`DANCE SCHOOL`, `MUSIC
   SCHOOL`, `KARATE`, `MARTIAL ARTS`, `SWIMMING SCHOOL`) is suggested as a
   hobby instead of education, so such a series is no longer called a bill.
+- **A credit union's withdrawal names who was paid.** A line such as
+  `Withdrawal ACH <company>`, `Withdrawal Debit Card <shop>`, `Withdrawal
+  POS #0042 <shop>` or `Withdrawal Bill Payment <company>` was keyed with
+  the bank's words in front, so the merchant list did not find the shop
+  and the word `WITHDRAWAL` suggested cash. Those words now leave the key;
+  `Withdrawal Home Banking Transfer To Share 0001` is a transfer, and
+  `Withdrawal by Check` and `Share Draft` lines are cheques. The same
+  refresh moves what was learned and any "Always use…" rule to the new
+  key. A cash suggestion already written on such a row is reconsidered;
+  one somebody accepted stays, so look in Inbox and Transactions for
+  "Cash and ATM" on these lines.
 - **An investment account's chart changes.** The balance history of a
   brokerage or retirement account (`GET /accounts/{id}/balances`, the
   account page's chart) is now cash plus holdings on each day, as the

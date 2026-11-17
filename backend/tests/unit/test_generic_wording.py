@@ -131,6 +131,15 @@ def test_wording_that_says_what_it_was_is_suggested(
         ("QUARRYVALE HOLDINGS DES:WAGES ID:%1 CO ID:0000000003 PPD", "out"),
         # Who an automatic withdrawal paid is not cash.
         ("AUTOMATIC WITHDRAWAL LANTERN ATHLETIC CLUB", "out"),
+        # Nor what a credit union's withdrawal paid by ACH, card or bill pay,
+        # moved to another account, or paid by share draft.
+        ("Withdrawal ACH QUARRYVALE MUTUAL", "out"),
+        ("Withdrawal Debit Card LANTERN ATHLETIC CLUB", "out"),
+        ("Withdrawal POS #0042 LANTERN ATHLETIC CLUB", "out"),
+        ("Withdrawal Bill Payment #0042 QUARRYVALE MUTUAL", "out"),
+        ("Withdrawal Home Banking Transfer To Share 0001", "out"),
+        ("Withdrawal by Check 0042", "out"),
+        ("Share Draft Withdrawal", "out"),
         # Money coming in is no withdrawal, money going out no deposit.
         ("WITHDRAWAL", "in"),
         ("CASH DEPOSIT", "out"),
@@ -161,6 +170,14 @@ def test_ambiguous_wording_answers_nothing_wrong(raw: str, direction: Direction)
         "income.interest",
         "transfers.cash",
     }, (raw, category)
+
+
+@pytest.mark.parametrize(
+    "raw", ["Withdrawal Debit Card NETFLIX.COM", "WITHDRAWAL POS #0042 NETFLIX.COM"]
+)
+def test_the_merchant_behind_a_credit_union_withdrawal_is_read(raw: str) -> None:
+    assert engine.identify(raw).key == "netflix"
+    assert _answer(raw, "out") == ("leisure.subscriptions", True)
 
 
 @pytest.mark.parametrize(

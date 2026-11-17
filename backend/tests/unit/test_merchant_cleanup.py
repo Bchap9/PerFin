@@ -309,7 +309,7 @@ def test_accented_letters_are_folded_not_dropped() -> None:
 def test_the_patterns_are_constants() -> None:
     for pattern, _kind, _signal in (*cleanup.KIND_LINES, *cleanup.KIND_PREFIXES):
         assert isinstance(pattern, re.Pattern)
-    assert cleanup.CLEANER_VERSION == 3
+    assert cleanup.CLEANER_VERSION == 4
 
 
 @pytest.mark.parametrize(
@@ -1118,5 +1118,38 @@ def test_a_shop_with_a_bank_s_word_is_still_a_shop(raw: str, kind: str, core: st
     ],
 )
 def test_an_automatic_withdrawal_is_a_debit(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        # A credit union writes WITHDRAWAL first and the way the money went next.
+        ("Withdrawal ACH QUARRYVALE MUTUAL", "ach_debit", "quarryvale mutual"),
+        ("WITHDRAWAL ACH NETFLIX.COM", "ach_debit", "netflix"),
+        ("Withdrawal Bill Payment #0042 ELKTON DENTAL", "ach_debit", "elkton dental"),
+        ("WITHDRAWAL BILLPAY LANTERN ELECTRIC", "ach_debit", "lantern electric"),
+        ("Withdrawal Debit Card PINEGATE GROCERY", "purchase", "pinegate grocery"),
+        ("WITHDRAWAL DEBIT CARD PURCHASE PINEGATE GROCERY", "purchase", "pinegate grocery"),
+        ("Withdrawal POS #0042 PINEGATE GROCERY", "purchase", "pinegate grocery"),
+        # A number without "#" may begin the name.
+        ("WITHDRAWAL POS 365 WILLOWMERE MARKET", "purchase", "365 willowmere market"),
+        # Between the household's own accounts.
+        ("Withdrawal Home Banking Transfer To Share 0001", "transfer", ""),
+        ("WITHDRAWAL HOME BANKING TRANSFER 0001", "transfer", ""),
+        ("WITHDRAWAL ACH TRANSFER TO SAVINGS 4410", "transfer", ""),
+        # A share draft is a credit union's cheque.
+        ("Withdrawal by Check 0042", "check", ""),
+        ("WITHDRAWAL BY CHECK", "check", ""),
+        ("Share Draft Withdrawal", "check", ""),
+        ("SHARE DRAFT #0042", "check", ""),
+        # Names that only begin with those letters.
+        ("WITHDRAWAL POSTERN BAKERY", "unknown", "withdrawal postern bakery"),
+        ("WITHDRAWAL ACHERLY TILE", "unknown", "withdrawal acherly tile"),
+        ("SHARE DRAFT HOUSE", "unknown", "share draft house"),
+    ],
+)
+def test_a_credit_union_withdrawal_says_how_the_money_went(raw: str, kind: str, core: str) -> None:
     cleaned = clean(raw)
     assert (cleaned.kind, cleaned.core) == (kind, core)
