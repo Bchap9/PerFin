@@ -307,6 +307,33 @@ def test_jwks_failures_never_keep_expired_keys(idp: FakeIdP) -> None:
     assert http.jwks_fetches == fetches + 1
 
 
+def test_jwks_expiry_refetches_at_once_when_the_last_fetch_succeeded(idp: FakeIdP) -> None:
+    """A max age shorter than the refresh interval never locks out a healthy IdP."""
+    http = _StubIdpHttp(idp)
+    t = [datetime(2026, 3, 1, tzinfo=UTC)]
+    cache = ProviderCache(
+        http,  # type: ignore[arg-type]
+        issuer=ISSUER,
+        auth_method="client_secret_basic",
+        max_age=timedelta(minutes=1),
+        jwks_min_refresh=timedelta(minutes=5),
+        now=lambda: t[0],
+    )
+    kid = idp.kid("rsa")
+    assert cache.signing_keys(kid, "RS256")
+    t[0] += timedelta(minutes=2)
+    assert cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == 2
+    # A failed refetch on expiry is still throttled by the refresh interval.
+    http.jwks_down = True
+    t[0] += timedelta(minutes=2)
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == 3
+
+
 # ---------------------------------------------------------------------------
 # Token validation without the HTTP layer
 # ---------------------------------------------------------------------------

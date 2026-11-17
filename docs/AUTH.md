@@ -320,7 +320,10 @@ Code: `app/auth/oidc/` (`client`, `discovery`, `tokens`, `provisioning`,
   `PERFIN_OIDC_JWKS_MIN_REFRESH_SECONDS` and is otherwise refused. The max
   age counts from the last successful JWKS fetch: a failed refetch does not
   extend it, and once the keys are older every token is refused until the
-  IdP answers again (retried at most once per minimum refresh interval).
+  IdP answers again (retried at most once per minimum refresh interval
+  after a failed fetch; keys that simply reached their max age are
+  refetched at once, so a max age shorter than the interval never refuses
+  tokens while the IdP is up).
 - **ID token.** `alg` must be `RS256` or `ES256` (checked on the raw
   header before any key is used, so `none` and `HS256` signed with the public
   key fail); `crit` is refused; embedded keys (`jwk`, `jku`, `x5u`, `x5c`)
