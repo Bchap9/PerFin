@@ -185,7 +185,8 @@ class ParsedStatement:
     #: Tables: the day whose end ``opening_balance`` is the balance at (a
     #: snapshot's meaning), the day before the opening row's own date, else
     #: before the first transaction: the row is the balance before that day's
-    #: rows, so a snapshot on its own day would leave them out.
+    #: rows, so a snapshot on its own day would leave them out. A statement's
+    #: (QIF, document parsers) is its ``opening_balance.as_of`` as read.
     opening_balance_date: date | None = None
     reconciliation: Reconciliation | None = None
     #: Which parser read it (``name/version``), for review items.
@@ -246,6 +247,7 @@ def from_statement(statement: Statement) -> ParsedStatement:
         date_order_assumed=statement.date_order == "mdy_assumed",
         truncated=statement.truncated,
         opening_balance=statement.opening_balance.amount if statement.opening_balance else None,
+        opening_balance_date=statement.opening_balance.as_of if statement.opening_balance else None,
         reconciliation=statement.reconciliation,
         parser=f"{parser.name}/{parser.version}" if parser is not None else None,
         period_confidence=statement.confidence.get("period"),

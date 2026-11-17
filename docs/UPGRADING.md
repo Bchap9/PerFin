@@ -315,12 +315,24 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   reads both differently (extractor `qif/2`), but only when a file is read
   again: nothing is backfilled. To find them, open Inbox › Documents and
   look for file names ending in `.qif`; open each one and choose "Process
-  again". The opening balance record then becomes the statement's opening
-  balance and its transaction is removed, unless somebody changed that
-  row: then it is kept and listed under "Rows from an earlier reading",
-  where it can be removed. A record of column names keeps its date and
-  amount and waits in the Inbox for review. A closing balance record is
-  left out and counted in the document's warnings.
+  again". The opening balance record then becomes the account's balance
+  at the end of the day before it (a statement balance), and its
+  transaction is removed, when the account has no balance and no
+  transaction on or before that day and nobody changed that row. Otherwise
+  the row stays as it was, so the balance is the same as before. A file
+  imported for the first time into an account that already has a balance
+  or transactions from before its opening record does not record the
+  figure: an Inbox item names it, to enter by hand if it is right. The
+  same holds for a CSV's opening balance row. A record of column names
+  keeps its date and amount and waits in the Inbox for review. A closing
+  balance record is left out and counted in the document's warnings.
+- **Net worth history is recalculated once.** Stored daily net worth
+  figures are now rewritten whenever an import adds, changes or removes
+  something on an earlier day, and the first daily net worth job after the
+  upgrade rewrites every stored day once (valuation version 2). This
+  corrects history inside an account's first brokerage statement period,
+  which counted the opening positions twice. Nothing needs to be run by
+  hand; a stored day keeps what it recorded for an account deleted since.
 - **Some merchant keys clear themselves.** A line that leaves fewer than
   three letters and digits (`E`, `XY #0042`) and bare cash wording
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
@@ -356,14 +368,16 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
 - **A credit union's withdrawal names who was paid.** A line such as
   `Withdrawal ACH <company>`, `Withdrawal Debit Card <shop>`, `Withdrawal
   POS #0042 <shop>` or `Withdrawal Bill Payment <company>` was keyed with
-  the bank's words in front, so the merchant list did not find the shop
-  and the word `WITHDRAWAL` suggested cash. Those words now leave the key;
+  the bank's words in front, so the merchant list did not find the shop.
+  Those words now leave the key, and the same refresh re-keys such rows;
   `Withdrawal Home Banking Transfer To Share 0001` is a transfer, and
-  `Withdrawal by Check` and `Share Draft` lines are cheques. The same
-  refresh moves what was learned and any "Always use…" rule to the new
-  key. A cash suggestion already written on such a row is reconsidered;
-  one somebody accepted stays, so look in Inbox and Transactions for
-  "Cash and ATM" on these lines.
+  `Withdrawal by Check` and `Share Draft` lines are cheques. What was
+  learned follows the rows to their new key. An "Always use…" rule follows
+  only when all the rows of its key went to one new key; where they went
+  to several (the old key held only the shop's first word, so different
+  shops shared it), the rule stays on the old key and stops applying:
+  look in Settings › Rules for a merchant rule whose name begins with
+  "Withdrawal" and make it again on the shop.
 - **An investment account's chart changes.** The balance history of a
   brokerage or retirement account (`GET /accounts/{id}/balances`, the
   account page's chart) is now cash plus holdings on each day, as the

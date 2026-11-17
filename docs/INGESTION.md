@@ -2813,8 +2813,16 @@ same database transaction.
   is a note, counted as `balance_rows`, and the first opening balance row
   gives the statement's opening balance (its balance cell when one is
   mapped and reads, else its amount), proposed for a new account as of the
-  day before the row's date so that transactions on that day still count;
-  a closing balance row is dropped and stays on record only in the count.
+  day before the row's date so that transactions on that day still count.
+  Imported into an existing account (as a QIF's `Opening Balance` record
+  is), it is that day's `statement` balance snapshot when the account has
+  no snapshot and no transaction on or before the day (the row a `qif/1`
+  reading made of it is then replaced, if nobody changed it, else kept
+  with no snapshot); otherwise nothing is written and a
+  `low_confidence_field` item (`opening_balance_not_recorded`: account,
+  currency, amount, `as_of`) names it, unless a reading's row stands in
+  for it or that very balance is already recorded for the day. Not with
+  `balance_mismatch` rows; a closing balance row is dropped and stays on record only in the count.
   `Opening balance fee`, or a memo of its own, is a transaction. A grouped
   (multi-account) file's header and balance rows that belong to no group
   are counted in its first group. At most five unreadable rows after the table's last readable
