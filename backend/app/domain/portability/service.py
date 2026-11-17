@@ -106,6 +106,10 @@ log = get_logger(__name__)
 
 #: Argon2id cost for export passphrases (tests lower it).
 EXPORT_KDF: KdfParams = DEFAULT_KDF
+#: The most an uploaded archive's header may ask the API to spend on Argon2id:
+#: the memory PerFin's exports use (a 1 GiB derivation inside the API
+#: container would exhaust it); the pass count keeps the format's ceiling.
+IMPORT_MAX_KDF: Final = KdfParams(MAX_KDF.opslimit, DEFAULT_KDF.memlimit)
 _ZIP_MAGIC: Final = (b"PK\x03\x04", b"PK\x05\x06")
 _KEY_PACK: Final = struct.Struct(">IQ")
 _ERROR_DETAIL_MAX: Final = 300
@@ -712,7 +716,7 @@ def store_import(
     keyring: Keyring,
     max_bytes: int,
     passphrase: str | None,
-    max_kdf: KdfParams = MAX_KDF,
+    max_kdf: KdfParams = IMPORT_MAX_KDF,
 ) -> StoredImport:
     """Stream an uploaded archive into the quarantine area (module doc)."""
     writer = EncryptingWriter(store, keyring, uuid7(), area=BlobArea.QUARANTINE)
@@ -838,7 +842,7 @@ def _load_upload(session: Session, archive: PortabilityArchive, deps: Portabilit
     out = bytearray()
     if archive.passphrase_protected:
         key, salt, kdf = open_passphrase_key(deps.keyring, archive)
-        reader = HeaderReader(MAX_KDF)
+        reader = HeaderReader(IMPORT_MAX_KDF)
         decryptor: ArchiveDecryptor | None = None
         for chunk in stream:
             rest = reader.feed(chunk)

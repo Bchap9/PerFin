@@ -174,7 +174,9 @@ memlimit), 32 bytes; PerFin writes libsodium's "moderate" cost (3 passes,
 256 MiB). The plaintext is split into 64 KiB chunks, each pushed with the
 61 header bytes as associated data; all but the last carry `TAG_MESSAGE`,
 the last (at most 64 KiB, possibly empty) `TAG_FINAL`. A reader refuses
-KDF parameters above 10 passes or 1 GiB before deriving anything, and any
+KDF parameters above 10 passes or 1 GiB before deriving anything (`POST
+/import` refuses more than 256 MiB, the memory PerFin's own exports use, so
+an uploaded header cannot make the API container derive with 1 GiB), and any
 authentication failure, a missing final chunk or data after it.
 Decrypting by hand (Python, PyNaCl): parse the header, derive the key with
 `nacl.pwhash.argon2id.kdf(32, passphrase, salt, opslimit=..., memlimit=...)`,

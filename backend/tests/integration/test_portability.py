@@ -26,7 +26,15 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core import clock
-from app.core.archive_crypto import decrypt_stream, is_encrypted_archive
+from app.core.archive_crypto import (
+    DEFAULT_KDF,
+    STREAM_HEADER_BYTES,
+    ArchiveHeader,
+    KdfParams,
+    decrypt_stream,
+    is_encrypted_archive,
+    new_salt,
+)
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
@@ -392,6 +400,29 @@ def test_passphrase_protected_round_trip(
                 )
             ).scalars()
             assert all(row.passphrase_key is None for row in rows)
+
+
+def test_an_archive_header_asking_for_more_memory_than_perfin_uses_is_refused(
+    actors: Actors, port_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crafted header cannot make the API derive a key with up to 1 GiB of memory."""
+
+    def no_derivation(*_: object, **__: object) -> bytes:
+        raise AssertionError("the key was derived")
+
+    monkeypatch.setattr(service, "derive_key", no_derivation)
+    greedy = KdfParams(DEFAULT_KDF.opslimit, DEFAULT_KDF.memlimit * 2)
+    header = ArchiveHeader(greedy, new_salt(), bytes(STREAM_HEADER_BYTES)).to_bytes()
+    owner = actors.new(role="owner")
+    response = owner.post(
+        IMPORT,
+        files={"file": ("export.pfarch", header + bytes(64), "application/octet-stream")},
+        headers={PASSPHRASE_HEADER: "correct horse battery staple"},
+    )
+    assert (response.status_code, problem_type(response)) == (415, "unsupported-archive")
+    assert files_in(port_settings.quarantine_dir) == []
+    # What PerFin itself writes stays importable.
+    assert DEFAULT_KDF.check(high=service.IMPORT_MAX_KDF) == DEFAULT_KDF
 
 
 def test_export_is_encrypted_at_rest_and_downloads_once(
