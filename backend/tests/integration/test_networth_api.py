@@ -38,9 +38,11 @@ from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
 from app.domain.accounts import service as accounts_service
-from app.domain.accounts.models import Account, AccountType
+from app.domain.accounts.models import Account, AccountType, BalanceSource
+from app.domain.investments.models import InvestmentTxnType, opening_import_hash
 from app.domain.loans import service as loans_service
 from app.domain.networth import service as networth_service
+from app.domain.networth.compute import NetWorthBook
 from app.domain.networth.models import NetWorthSnapshot
 from app.domain.reports import service as reports_service
 from app.workers.handlers import networth as networth_handler
@@ -336,6 +338,85 @@ def test_brokerage_statement_anchor_carries_the_market_move(world: World) -> Non
     body = _get(world.owner, f"{NW}/latest")
     entry = next(a for a in body["accounts"] if a["name"] == "Brokerage")
     assert entry["amount"]["amount"] == "1700.00"
+
+
+def _first_statement(
+    db: Session, household_id: uuid.UUID, account: Account, *, opening: str, hashed: str
+) -> None:
+    """An account's first statement for June, as the statement importer records it.
+
+    It opened with 1500.00 (10 units, held before June), recorded the day
+    before the period; the 10 units are a zero-amount transfer in dated on
+    the period's first day, costed at 80.00 a unit (the cost basis, not the
+    market price). On 06-10 750.00 is paid in and 5 more units are bought at
+    the market price of 150.00. ``opening`` is the stored close on 05-31
+    ("" for none); ``hashed``: ``opening`` (the importer's opening hash),
+    ``none`` (a transfer in a person added) or ``other`` (an imported row).
+    """
+    make_snapshot(
+        db,
+        account,
+        as_of_date=date(2026, 5, 31),
+        balance="1500.00",
+        source=BalanceSource.STATEMENT,
+    )
+    security = make_security(db, household_id)
+    if opening:
+        make_price(db, security, close=opening, price_date=date(2026, 5, 31))
+    digest = {
+        "opening": opening_import_hash(account.id, security.id, date(2026, 6, 1)),
+        "none": None,
+        "other": "e" * 64,
+    }[hashed]
+    make_investment_txn(
+        db,
+        account,
+        security=security,
+        type=InvestmentTxnType.TRANSFER_IN,
+        trade_date=date(2026, 6, 1),
+        quantity="10",
+        price="80",
+        amount="0",
+        memo="Opening position from statement",
+        import_hash=digest,
+    )
+    make_transaction(db, account, amount="750.00", posted_date=date(2026, 6, 10))
+    make_investment_txn(
+        db, account, security=security, trade_date=date(2026, 6, 10), quantity="5", price="150"
+    )
+
+
+def _values(world: World, account: Account, days: list[date]) -> list[Decimal]:
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        book = NetWorthBook.load(db, world.household_id, [account.id], target="USD", until=TODAY)
+        return [book.values_on(day)[account.id] for day in days]
+
+
+DAYS = [date(2026, 5, 31), date(2026, 6, 1), date(2026, 6, 5), date(2026, 6, 20)]
+
+
+def test_a_first_statement_s_opening_positions_are_held_on_its_opening_day(world: World) -> None:
+    # The opening value already holds the 10 units: they are not added to it
+    # on the period's first day. 06-20: 1500.00 + the 750.00 paid in.
+    account = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, account, opening="", hashed="opening")
+    assert _values(world, account, DAYS) == [D("1500"), D("1500"), D("1500"), D("2250")]
+    # With a close known on the opening day, the units' market move counts:
+    # 10 x (150.00 - 140.00) more by 06-20.
+    other = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, other, opening="140", hashed="opening")
+    assert _values(world, other, DAYS) == [D("1500"), D("1500"), D("1500"), D("2350")]
+
+
+@pytest.mark.parametrize("hashed", ["none", "other"])
+def test_a_transfer_in_after_an_anchor_still_adds_its_units(world: World, hashed: str) -> None:
+    # Units that really arrived on 06-01 (a person's row, or an imported
+    # transfer) are on top of what the account held: 10 x 80.00, then
+    # 15 x 150.00 + 750.00 - 750.00.
+    account = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, account, opening="", hashed=hashed)
+    assert _values(world, account, DAYS) == [D("1500"), D("2300"), D("2300"), D("3750")]
 
 
 def test_accounts_value_an_investment_account_as_net_worth_does(

@@ -304,6 +304,7 @@ from app.domain.imports.statement_records import (
     record_statement,
 )
 from app.domain.investments.models import (
+    IMPORT_HASH_VERSION,
     AssetClass,
     CostMethod,
     Holding,
@@ -312,6 +313,7 @@ from app.domain.investments.models import (
     Lot,
     Price,
     Security,
+    opening_import_hash,
     security_name_key,
 )
 from app.domain.investments.service import cost_method, replay_position
@@ -331,7 +333,7 @@ from app.ingestion.sandbox.protocol import (
     Statement,
 )
 
-HASH_VERSION: Final = "perfin-invest-v1"
+HASH_VERSION: Final = IMPORT_HASH_VERSION
 STATEMENT_PRICE_SOURCE: Final = "statement"
 #: Run warning: a security listed again for a day at another price (step 8).
 DUPLICATE_PRICE_IGNORED: Final = "duplicate_price_ignored"
@@ -1627,11 +1629,7 @@ def _openings(
                 cost = abs(held_at_end.cost_basis) / held_at_end.quantity
             else:
                 cost = held_at_end.price_per_unit or Decimal(0)
-        digest = hashlib.sha256(
-            _SEP.join(
-                (HASH_VERSION, str(account.id), "opening", str(security_id), opened_on.isoformat())
-            ).encode()
-        ).hexdigest()
+        digest = opening_import_hash(account.id, security_id, opened_on)
         if digest in existing:
             continue
         existing.add(digest)

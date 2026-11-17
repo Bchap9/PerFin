@@ -81,6 +81,7 @@ from app.domain.investments.statement_import import (
     clean_read,
 )
 from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
+from app.domain.networth.compute import NetWorthBook
 from app.domain.review import service as review_service
 from app.domain.review.schemas import (
     ResolveDuplicate,
@@ -911,6 +912,34 @@ def test_the_opening_value_is_recorded_once_where_nothing_earlier_is_known(env: 
         assert account is not None
         closing = {s.as_of_date: s.balance for s in env.snapshots(account)}[october.end]
         assert closing == synthetic.total_value
+
+
+def test_a_first_statement_values_its_period_from_the_value_it_opens_with(env: Env) -> None:
+    # The opening value already holds the positions the statement opens with
+    # (dated on its first day): no day of the period counts them twice.
+    stmt = fid.fidelity_statement(seed=91)
+    accounts = _fid_accounts(env, stmt)
+    env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    days = [stmt.start + timedelta(days=i) for i in range((stmt.end - stmt.start).days)]
+    for account, synthetic in zip(accounts, stmt.accounts, strict=True):
+        assert account is not None
+        with env.factories.transaction() as db:
+            apply_rls_context(db, env.principal())
+            book = NetWorthBook.load(
+                db, env.household_id, [account.id], target="USD", until=stmt.end
+            )
+            before = book.values_on(stmt.start - timedelta(days=1))[account.id]
+            values = [book.values_on(day)[account.id] for day in days]
+            closing = book.values_on(stmt.end)[account.id]
+        assert (before, closing) == (synthetic.begin_value, synthetic.total_value)
+        low = min(synthetic.begin_value, synthetic.total_value)
+        high = max(synthetic.begin_value, synthetic.total_value)
+        # Inside the period the account moves with its own activity, never
+        # far from where it opens and closes.
+        assert all(low * Decimal("0.9") <= v <= high * Decimal("1.1") for v in values), (
+            synthetic.title,
+            values,
+        )
 
 
 def test_the_summary_a_statement_prints_is_shown_per_account(env: Env) -> None:

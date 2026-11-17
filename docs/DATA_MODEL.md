@@ -757,10 +757,14 @@ the daily job, the backfill and recomputed views):
   look-ahead) and cash moves with ledger transactions and
   `investment_txn.amount`; a balance anchor (a statement's whole-account
   value) carries forward as `anchor + holdings(d) - holdings(anchor day) +
-  cash moves since`. Loan accounts use their `computed` snapshots (kept by
-  the loans service), falling back to `principal_original` minus paid
-  principal when there is no anchor yet. Everything else: the ledger
-  balance.
+  cash moves since`, where a statement's opening positions (units held
+  before its period, dated on its first day and known by their
+  `import_hash`) count as held on the anchor day, so a first statement's
+  opening value is not added to them; their own price (the cost basis)
+  values units only where no stored price or trade does. Loan accounts use
+  their `computed` snapshots (kept by the loans service), falling back to
+  `principal_original` minus paid principal when there is no anchor yet.
+  Everything else: the ledger balance.
 - Positive values are assets, negative ones liabilities (by sign, not by
   account type), converted to the base currency on that day; an account
   whose currency has no rate is listed as unconverted and left out.
