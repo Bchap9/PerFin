@@ -77,7 +77,8 @@ Stage 4 of four on the way to 1.0.0: the release review.
   A read-only member was sent to an uploader that only said so.
 - **Answering an Inbox card keeps your place.** The pressed button went
   away with the question and focus fell to the page body; focus now moves
-  to the card.
+  to the card. Only an answer given on the page moves it: a card that
+  changes by itself (an upload finishing) leaves focus where it is.
 - **A failed bulk delete says why in its dialog.** The error was only a
   toast behind the open dialog, dimmed and not announced.
 - **The step-up dialog's "Security" link closes it.** Followed by someone

@@ -10,7 +10,7 @@ import "./review.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useId, useState, type ReactNode } from "react";
+import { useContext, useId, useState, type ReactNode } from "react";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -68,6 +68,7 @@ import {
 import { ReconcileView } from "./ReconcileView";
 import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
 import {
+  AnsweredContext,
   CostBasisTools,
   HeldLines,
   LowConfidenceTools,
@@ -866,9 +867,11 @@ function ReprocessControl({ item, actionable, trailing }: ControlProps) {
 
 function useDismiss(item: ReviewItem, onError: (message: string | null) => void) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   return useMutation({
     mutationFn: () => dismissItem(item.id),
     onSuccess: () => {
+      answered();
       onError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });

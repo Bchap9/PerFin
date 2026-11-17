@@ -1884,6 +1884,26 @@ describe("review cards", () => {
     expect(screen.queryByText("Nothing to review")).not.toBeInTheDocument();
   });
 
+  it("a reload the person did not ask for leaves focus where it is", async () => {
+    const ranked = accountItem([0.85, 0.15]);
+    const api = reviewApi([ranked], "member", {
+      "GET /api/v1/review/:id": () => json(ranked),
+    });
+    const view = renderApp("/inbox");
+    const button = await screen.findByRole("button", { name: "Use this account" });
+    button.focus();
+    button.blur();
+    expect(document.body).toHaveFocus();
+    // The card leaves the list by itself (an upload finishing, another tab):
+    // nobody answered here, so focus is not moved onto the card.
+    api.on("GET /api/v1/review/cards", () => json({ cards: [], loose: [], next_cursor: null }));
+    await view.queryClient.invalidateQueries({ queryKey: ["review"] });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Use this account" })).not.toBeInTheDocument();
+    });
+    expect(document.body).toHaveFocus();
+  });
+
   it("says where the rows went on a card left with only a notice", async () => {
     const ranked = accountItem([0.85, 0.15]);
     const notice = item(
