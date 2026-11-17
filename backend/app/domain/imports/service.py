@@ -276,7 +276,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import ColumnElement, delete, or_, select
+from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -290,7 +290,13 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
+from app.domain.accounts.models import (
+    LIABILITY_TYPES,
+    Account,
+    AccountType,
+    BalanceSnapshot,
+    BalanceSource,
+)
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.categorisation import engine
 from app.domain.documents import repo as documents_repo
@@ -351,8 +357,10 @@ from app.domain.imports.statement_records import (
     table_facts,
     withdraw_snapshot,
 )
+from app.domain.investments.models import InvestmentTxn
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.loans.models import LoanPayment
+from app.domain.networth import service as networth
 from app.domain.review import repo as review_repo
 from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
 from app.domain.transactions import repo as transactions_repo
@@ -3303,6 +3311,7 @@ def import_extraction(
     transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
+    earlier = _earliest_recorded(db, document)
     # A PDF/image no parser read: its page table goes through the saved
     # column mappings like a CSV (app.domain.review.layout), unless no
     # table on its pages has a dated row.
@@ -3406,6 +3415,7 @@ def import_extraction(
         if account is not None and account.institution_id is not None:
             document.institution_id = account.institution_id
     db.flush()
+    _recompute_net_worth(db, document, earlier)
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     summary = run.summary()
     if investments is not None:
@@ -3416,6 +3426,36 @@ def import_extraction(
 # ---------------------------------------------------------------------------
 # Re-running an import (POST /imports/{document_id}/apply-mapping)
 # ---------------------------------------------------------------------------
+
+
+def _earliest_recorded(db: Session, document: Document) -> date | None:
+    """The first day a ledger row, balance or investment row of ``document`` is on."""
+    days = [
+        db.execute(
+            select(func.min(column)).where(
+                model.household_id == document.household_id, owner == document.id
+            )
+        ).scalar_one_or_none()
+        for model, column, owner in (
+            (Transaction, Transaction.posted_date, Transaction.source_document_id),
+            (BalanceSnapshot, BalanceSnapshot.as_of_date, BalanceSnapshot.source_document_id),
+            (InvestmentTxn, InvestmentTxn.trade_date, InvestmentTxn.source_document_id),
+        )
+    ]
+    found = [d for d in days if d is not None]
+    return min(found) if found else None
+
+
+def _recompute_net_worth(db: Session, document: Document, earlier: date | None) -> None:
+    """Have the stored net worth rewritten from the first day this run could have changed.
+
+    What the document holds now and what it held before the run (an
+    earlier reading's rows, removed or replaced): a stored day from then on
+    no longer says what the ledger does (``networth.request_recompute``).
+    """
+    found = [d for d in (earlier, _earliest_recorded(db, document)) if d is not None]
+    if found:
+        networth.request_recompute(db, document.household_id, min(found))
 
 
 def _importable(document: Document) -> ExtractResult:

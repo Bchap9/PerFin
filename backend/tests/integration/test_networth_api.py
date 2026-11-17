@@ -30,7 +30,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth.models import GrantLevel
@@ -551,6 +551,134 @@ def test_household_job_writes_the_snapshot(world: World) -> None:
         )
         count = db.execute(select(func.count()).select_from(NetWorthSnapshot)).scalar_one()
     assert count == (TODAY - date(2024, 3, 1)).days + 1
+
+
+def _run_job(world: World, household_id: uuid.UUID) -> None:
+    """Run every queued ``networth.snapshot`` job of ``household_id``, as the worker would."""
+    with world.factories.transaction() as db:
+        set_context(db, household_id)
+        jobs = list(
+            db.execute(
+                select(Job).where(
+                    Job.type == networth_handler.SNAPSHOT_JOB_TYPE, Job.state == "queued"
+                )
+            ).scalars()
+        )
+        for job in jobs:
+            ctx = JobContext(
+                job_id=job.id,
+                job_type=job.type,
+                attempt=1,
+                max_attempts=1,
+                household_id=job.household_id,
+                session=db,
+                deadline=datetime.max.replace(tzinfo=UTC),
+            )
+            networth_handler.snapshot_household(
+                ctx, networth_handler.HouseholdSnapshotPayload.model_validate(job.payload)
+            )
+            db.delete(job)
+
+
+def _stored(world: World) -> dict[date, Decimal]:
+    return {row.as_of_date: row.net for row in _snapshots(world)}
+
+
+def test_a_backdated_import_rewrites_the_stored_days_from_its_first_day(
+    world: World, actors: Actors
+) -> None:
+    _snapshot(world)
+    before = _stored(world)
+    # A statement of June, imported today: 400.00 paid on 06-12.
+    world.ledger.transaction(
+        world.accounts["checking"], amount="-400.00", posted_date=date(2026, 6, 12)
+    )
+    # The daily job alone rewrites today and keeps what was known on each
+    # earlier day.
+    _snapshot(world)
+    assert {d: n for d, n in _stored(world).items() if d < TODAY} == {
+        d: n for d, n in before.items() if d < TODAY
+    }
+    # Another household with stored days of its own, and a job queued for each.
+    stranger = actors.new(role="owner")
+    other = stranger.record.household
+    assert other is not None
+    ledger = world.ledger
+    theirs = ledger.account(other.id, type=AccountType.CHECKING)
+    ledger.transaction(theirs, amount="70.00", posted_date=date(2026, 6, 1))
+    with world.factories.transaction() as db:
+        set_context(db, other.id)
+        networth_service.snapshot_household(db, other.id, TODAY)
+    for household_id in (world.household_id, other.id):
+        with world.factories.transaction() as db:
+            set_context(db, household_id)
+            networth_service.request_recompute(db, household_id, date(2026, 6, 12))
+    _run_job(world, world.household_id)
+    stored = _stored(world)
+    assert stored == {
+        day: net - (D("400.00") if day >= date(2026, 6, 12) else 0) for day, net in before.items()
+    }
+    assert stored[TODAY] == D("161200.00")
+    # The other household's job has not run: its rows are its own and as they were.
+    with world.factories.transaction() as db:
+        set_context(db, other.id)
+        rows = list(db.execute(select(NetWorthSnapshot)).scalars())
+        queued = db.execute(
+            select(func.count()).select_from(Job).where(Job.household_id == other.id)
+        ).scalar_one()
+    assert {r.household_id for r in rows} == {other.id}
+    assert {r.net for r in rows} == {D("70.00")}
+    assert queued == 1
+
+
+def test_stored_days_valued_by_older_rules_are_rewritten(world: World) -> None:
+    # A row from before this version (no "valuation" in its breakdown) and
+    # one from it: the job rewrites from the older one on.
+    _snapshot(world)
+    before = _stored(world)
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        for row in db.execute(select(NetWorthSnapshot)).scalars():
+            if row.as_of_date >= date(2026, 6, 1):
+                row.net = D("1.00")
+                row.assets = D("1.00")
+                row.liabilities = D("0")
+                if row.as_of_date == date(2026, 6, 20):
+                    row.breakdown = {"version": 1, "accounts": []}
+    written = _snapshot(world)
+    assert written == (TODAY - date(2026, 6, 20)).days + 1
+    stored = _stored(world)
+    assert stored[date(2026, 6, 19)] == D("1.00")
+    assert all(stored[day] == before[day] for day in before if day >= date(2026, 6, 20))
+    # Rewritten with this version: nothing left to rewrite.
+    assert _snapshot(world) == 1
+
+
+def test_a_rewritten_day_keeps_what_it_recorded_for_a_deleted_account(world: World) -> None:
+    _snapshot(world)
+    before = _stored(world)
+    hidden = world.hidden
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        db.execute(
+            delete(Account).where(
+                Account.household_id == world.household_id, Account.id == hidden.id
+            )
+        )
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        networth_service.snapshot_household(db, world.household_id, TODAY, since=date(2026, 6, 1))
+    rows = {row.as_of_date: row for row in _snapshots(world)}
+    # Still counted as it was recorded (5000.00 from 06-01), listed once;
+    # its live figures are gone.
+    assert {day: row.net for day, row in rows.items()} == before
+    assert _amount(_get(world.owner, f"{NW}/latest")["net"]) == D("156600.00")
+    accounts = [a["account_id"] for a in rows[TODAY].breakdown["accounts"]]
+    assert accounts.count(str(hidden.id)) == 1
+    # A day it had nothing on records nothing for it.
+    assert str(hidden.id) not in [
+        a["account_id"] for a in rows[date(2026, 5, 31)].breakdown["accounts"]
+    ]
 
 
 def test_other_household_sees_none_of_it(world: World, actors: Actors) -> None:

@@ -89,6 +89,11 @@ from app.domain.transactions.models import Transaction
 ZERO: Final = Decimal(0)
 #: Version of the ``breakdown`` JSON written to ``net_worth_snapshot``.
 BREAKDOWN_VERSION: Final = 1
+#: Version of how a day is valued, stored as ``breakdown["valuation"]``: a
+#: stored row with a lower one (or none) was valued by older rules and is
+#: rewritten by the next snapshot job (``app.domain.networth.service``).
+#: 2: a statement's opening positions count in its opening value.
+VALUATION_VERSION: Final = 2
 
 Side = Literal["asset", "liability"]
 
@@ -277,6 +282,7 @@ class NetWorthPoint:
         classes = self.by_class()
         return {
             "version": BREAKDOWN_VERSION,
+            "valuation": VALUATION_VERSION,
             "by_class": {
                 "assets": {k: text(v) for k, v in classes["asset"].items()},
                 "liabilities": {k: text(v) for k, v in classes["liability"].items()},
@@ -580,6 +586,10 @@ class NetWorthBook:
             if entry.loan_origination is not None:
                 days.append(entry.loan_origination)
         return min(days) if days else None
+
+    def to_target(self, amount: Decimal, currency: str, day: date) -> Decimal | None:
+        """``amount`` in the target currency on ``day`` (None: no rate)."""
+        return self._to_target.try_convert(amount, currency, day)
 
     def _converter(self, currency: str) -> FxConverter:
         found = self._to_account.get(currency)

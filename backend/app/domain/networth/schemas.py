@@ -30,6 +30,19 @@ Scope = Literal["household", "visible_accounts"]
 PointSource = Literal["snapshot", "computed"]
 
 
+#: The household job that writes stored snapshots (``app.workers.handlers.networth``).
+SNAPSHOT_JOB_TYPE: Final = "networth.snapshot"
+
+
+class HouseholdSnapshotPayload(BaseModel):
+    """``networth.snapshot``: the day to write and, from an import, the first day to rewrite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    as_of: date
+    since: date | None = None
+
+
 class Granularity(enum.StrEnum):
     DAY = "day"
     WEEK = "week"

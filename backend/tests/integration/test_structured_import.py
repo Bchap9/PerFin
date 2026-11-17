@@ -589,6 +589,46 @@ def test_reading_a_qif_again_removes_the_opening_balance_row_of_qif_1(env: Env) 
     ]
 
 
+def _net_worth_since(env: Env) -> list[str | None]:
+    """The ``since`` of each queued net worth job of the household, oldest first."""
+    for db in env.db():
+        jobs = db.execute(
+            select(Job)
+            .where(Job.type == "networth.snapshot", Job.household_id == env.household_id)
+            .order_by(Job.created_at, Job.id)
+        ).scalars()
+        return [job.payload.get("since") for job in jobs]
+    raise AssertionError  # pragma: no cover
+
+
+def test_an_import_has_net_worth_rewritten_from_its_first_day(env: Env) -> None:
+    """Stored net worth days from the import's first row on no longer hold: rewritten."""
+    account = env.ledger.account(env.household_id)
+    rows = (
+        "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+    )
+    data = f"!Type:Bank\nD03/01/2026\nT-5.00\nPCorner Cafe\n^\n{rows}".encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+    assert _net_worth_since(env) == ["2026-03-01"]
+    # Read again without its first row: that row goes, so its day is rewritten.
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        current = ExtractResult.model_validate(document.extraction)
+        (statement,) = current.statements
+        shorter = current.model_copy(
+            update={
+                "statements": [
+                    statement.model_copy(update={"transactions": statement.transactions[1:]})
+                ]
+            }
+        )
+        imports_service.import_extraction(db, document, shorter)
+    assert len(env.transactions(account)) == 2
+    assert _net_worth_since(env) == ["2026-03-01", "2026-03-01"]
+
+
 def test_qif_record_made_of_column_names_waits_for_review(env: Env) -> None:
     """A record whose text is the header's words keeps its money, pending."""
     account = env.ledger.account(env.household_id)  # QIF names no account number

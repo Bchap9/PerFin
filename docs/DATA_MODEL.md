@@ -768,7 +768,7 @@ the daily job, the backfill and recomputed views):
 - Positive values are assets, negative ones liabilities (by sign, not by
   account type), converted to the base currency on that day; an account
   whose currency has no rate is listed as unconverted and left out.
-- `breakdown` (version 1): `{"version", "by_class": {"assets": {class:
+- `breakdown` (version 1): `{"version", "valuation", "by_class": {"assets": {class:
   amount}, "liabilities": {...}}, "by_type": {account_type: signed amount},
   "accounts": [{"account_id", "type", "class", "side", "amount", "currency",
   "amount_base"}], "unconverted": [{"account_id", "amount", "currency"}],
@@ -776,7 +776,12 @@ the daily job, the backfill and recomputed views):
   amounts only: no names or free text.
 - The daily `networth.snapshot` job upserts the day's row and backfills the
   days missing since the last snapshot (from the first data on a first run,
-  at most ten years).
+  at most ten years). Statements arrive backdated, so every import queues
+  the job to **rewrite** the stored days from the first day it wrote or
+  removed a row, balance or investment row on; the job also rewrites from
+  the first stored day valued by older rules (`breakdown.valuation`, the
+  valuation version, below the current one; 2 since 1.0.0). A rewritten day
+  keeps the entries it recorded for accounts deleted since.
 
 Recurring detection (`app/domain/recurring/`) feeds `scheduled_transaction`
 with `origin = detected`: transactions of the last 1100 days (transfers
