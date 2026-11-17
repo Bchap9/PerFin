@@ -7,7 +7,9 @@ All notable changes to PerFin are recorded here. The format follows
 ## Status
 
 The current release candidate is `v1.0.0-rc.11`; the final `v1.0.0` follows the
-external security review. Every phase (0-7) is implemented. Alembic head is
+internal release review (Stage 4). No external security review or
+penetration test has been done: run PerFin on a private network only
+(SECURITY.md). Every phase (0-7) is implemented. Alembic head is
 `0014`. On 2026-11-16: SPDX;
 backend ruff, ruff format, mypy --strict (806 source files), bandit, OpenAPI
 drift and 11916 pytest tests with `-n 4` (one worker crashed under load and
@@ -23,8 +25,9 @@ fs`, and the shipped image built and passing `trivy image` with an SBOM).
 
 What remains (details in docs/ROADMAP.md):
 
-- An external security review or penetration test before the tag. An
-  internal review was done every phase (docs/security/CONTROLS.md).
+- The Stage 4 release review, then `v1.0.0`. An internal security review
+  was done every phase (docs/security/CONTROLS.md); by the owner's
+  decision no external review is a gate for 1.0.
 - The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
   #8). `v1.0.0-rc.3` also publishes the new `perfin-ml` image.
 - Not exercised: the optional local-model containers (`ml`/`ml-cuda`

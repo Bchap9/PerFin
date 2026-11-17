@@ -300,6 +300,14 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ### 1.0.0 (not released yet)
 
+The release review. No migration (Alembic head stays `0014`), no new
+setting, no new container, no new outbound connection, and no response of
+the API changed shape. From rc.10 or rc.11 upgrade in the ordinary order,
+with no stop needed; from rc.9 or earlier follow the rc.10 note first.
+
+- **Going back to rc.11** needs no restore: set `PERFIN_VERSION` back (or
+  `helm rollback`). The older worker then re-keys merchant names under its
+  own clean-up version in its next hourly refresh, which is harmless.
 - **QIF files imported before are not changed by the upgrade.** A QIF
   file's own `Opening Balance` record (or `Balance brought forward` and the
   like) was imported as a transaction, and a record made only of column

@@ -383,8 +383,8 @@ premises. See AI_ACCESS.md.
       (`.github/workflows/release.yml` builds amd64/arm64 images, gates them
       on Trivy, signs them with cosign, attaches CycloneDX/SPDX SBOMs and
       SLSA provenance, and publishes the signed chart and a GitHub release;
-      `backend/tests/unit/test_release_workflow.py` checks it statically and
-      `scripts/release_notes.py check v1.0.0` passes. Every release
+      `backend/tests/unit/test_release_workflow.py` checks it statically, and
+      its first job runs `scripts/release_notes.py check` on the tag. Every release
       candidate since rc.2 has run it: `v1.0.0-rc.11` published signed
       images, sigstore-signed CycloneDX and SPDX SBOMs and the signed chart)
 
@@ -412,7 +412,7 @@ The road from the release candidates to `v1.0.0` (owner's decision,
       statements inside the repository. Not built, by decision: a category
       model, merchants outside the United States, merchant category codes,
       automatic payees, logos, a merchant editor, guesses for split lines.
-- [ ] Stage 3, the UI redesign (`v1.0.0-rc.11`; [USING.md](USING.md)):
+- [x] Stage 3, the UI redesign (`v1.0.0-rc.11`; [USING.md](USING.md)):
       six sections and Settings (Home, Inbox, Transactions, Accounts,
       Plan, Reports), each piece of data with one home and every old
       address redirecting to it (`frontend/src/app/routeMap.ts`); the
@@ -428,10 +428,7 @@ The road from the release candidates to `v1.0.0` (owner's decision,
       command palette (Ctrl+K or Cmd+K); new tokens in light and dark
       checked for contrast, self-hosted fonts, no `style` attribute
       (ESLint), axe in every page test and a route audit; pages loaded on
-      demand under a bundle budget (`npm run check:bundle`). Not ticked:
-      the changelog, the upgrade note and the full gates (`make check`,
-      `mkdocs build --strict`) and the visual check against the approved
-      mock-up are still to run, and rc.11 is not tagged. Not built, by
+      demand under a bundle budget (`npm run check:bundle`). Not built, by
       decision: a customisable Home, a search of transactions in the
       palette, the page and row a transaction came from, per-document row
       counts in lists, a duplicate-charge alert, assigning Inbox items to a
@@ -445,7 +442,7 @@ The road from the release candidates to `v1.0.0` (owner's decision,
       categorise").
 - [ ] Stage 4, the release review.
 
-Release verification for v1.0.0 (2026-11-04): the ten steps in
+Release verification before rc.1 (2026-11-04): the ten steps in
 `docs/RELEASE_CHECKLIST.md` (image build, bootstrap, MFA and step-up,
 statement imports, drop folder, MCP with the identity denylist, Compose
 backup and restore into a fresh stack, container hardening, config check)

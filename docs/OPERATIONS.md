@@ -150,7 +150,7 @@ docker compose exec db psql -U postgres -d perfin -c \
 
 Most user-visible work has its own state too: a document that cannot be
 processed shows `failed` or `needs_review` in the web app, with a
-**Reprocess** action, so check there before the queue.
+**Process again** action, so check there before the queue.
 
 ## Common failure modes
 
@@ -308,7 +308,7 @@ referenced by the database). Alert at 85 % used.
 - Drop-folder files never taken: the inbox must be readable by UID 10001;
   see the drop-folder section of [DEPLOYMENT.md](DEPLOYMENT.md) and
   `perfin config check`.
-- A dead job that you fixed: requeue it as shown above, or use **Reprocess**
+- A dead job that you fixed: requeue it as shown above, or use **Process again**
   on the document.
 
 ### Other quick checks

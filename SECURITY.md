@@ -40,7 +40,7 @@ mail provider, a price API) unless PerFin's integration with them is at fault.
 
 ## Supported versions
 
-Until 1.0, only the latest release receives security fixes.
+Only the latest release receives security fixes.
 
 ## Hardening guidance
 

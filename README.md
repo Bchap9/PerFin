@@ -29,7 +29,7 @@ email, and PerFin works out what it is looking at and files it away.
 > IMAPS mailbox, parsed in a sandboxed subprocess and sent to a review queue
 > when unsure; investments, loans, manual assets and net worth; a tax vault;
 > a read-only MCP server for AI assistants behind an identity denylist;
-> notification channels, a configurable dashboard, a PWA, encrypted
+> notification channels, a Home overview, a PWA, encrypted
 > backup/restore, master-key rotation and a Helm chart. The `v1.0.0` gate is
 > an internal release review; no external security review or penetration
 > test has been done, so run it on a private network only (see
