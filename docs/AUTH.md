@@ -392,7 +392,11 @@ Code: `app/auth/oidc/` (`client`, `discovery`, `tokens`, `provisioning`,
   each due live session: `invalid_grant` revokes the session; a new ID token
   (same `iss`/`sub`) re-applies the group mapping, revoking the session when
   `PERFIN_OIDC_REQUIRE_GROUP` finds no mapped group or the account is
-  inactive; a rotated refresh token is stored. The hourly `oidc_prune` job
+  inactive; a rotated refresh token is stored. The token calls are made
+  with no row locked (a request or logout on those sessions never waits for
+  the IdP); each answer is then applied under a short lock only if the
+  session is still live and still holds the token that was sent, and one
+  run at a time (advisory lock). The hourly `oidc_prune` job
   drops `oidc_session` rows of ended sessions and expired `oidc_used_state`
   rows.
 - **OIDC-only mode.** `perfin config check` refuses

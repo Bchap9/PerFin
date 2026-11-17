@@ -13,24 +13,38 @@ claims are older than that interval is refreshed at the token endpoint:
   the household role (never instance admin, B6);
 * a rotated refresh token replaces the stored one;
 * the IdP being unreachable changes nothing (retried on the next run).
+
+**No row locks across the IdP.** A run first reads the due sessions without
+locking them and makes every token call (and validates every ID token)
+with nothing locked, so a request touching one of those sessions, or a
+logout, never waits for the IdP. Then each outcome is applied under a
+short row lock, and only if the session is still live and its stored
+refresh token is still the one the IdP was given (otherwise the row is
+skipped: a newer token or a logout wins). One run at a time
+(:func:`take_run_lock`, a transaction-level advisory lock) so a refresh
+token is never sent twice. Each row is applied in a savepoint: a lock
+conflict there skips that row, not the run.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Final, Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.auth.local import audit_auth
 from app.auth.models import User, UserSession
-from app.auth.oidc.client import OidcClient, TokenEndpointError
+from app.auth.oidc.client import OidcClient, TokenEndpointError, TokenResponse
 from app.auth.oidc.discovery import DiscoveryError
 from app.auth.oidc.logout import decrypt_refresh_token, refresh_token_ad
 from app.auth.oidc.models import OidcSession
 from app.auth.oidc.provisioning import map_groups, sync_membership
-from app.auth.oidc.tokens import TokenValidationError, validate_id_token
+from app.auth.oidc.tokens import TokenValidationError, ValidatedToken, validate_id_token
 from app.auth.sessions import revoke
 from app.core import clock
 from app.core.audit import RequestMeta
@@ -41,6 +55,8 @@ from app.core.settings import Settings
 log = get_logger(__name__)
 
 BATCH_SIZE = 100
+# Namespace and key for pg_try_advisory_xact_lock(int4, int4): one run at a time.
+_RUN_LOCK: Final = text("SELECT pg_try_advisory_xact_lock(1347766866, 1)")  # "PFOR", 1
 
 
 @dataclass
@@ -48,6 +64,25 @@ class RefreshStats:
     refreshed: int = 0
     revoked: int = 0
     skipped: int = 0
+
+
+@dataclass
+class _Outcome:
+    """What the IdP said about one session, decided without any row lock."""
+
+    oidc_id: uuid.UUID
+    session_id: uuid.UUID
+    #: The stored ciphertext the decision was made for (applied only if unchanged).
+    token_seen: bytes | None
+    action: Literal["revoke", "apply"]
+    reason: str = ""
+    response: TokenResponse | None = None
+    validated: ValidatedToken | None = None
+
+
+def take_run_lock(db: Session) -> bool:
+    """Claim the run for this transaction; ``False`` while another run holds it."""
+    return bool(db.execute(_RUN_LOCK).scalar_one())
 
 
 def _revoke(db: Session, oidc: OidcSession, session_row: UserSession, reason: str) -> None:
@@ -64,6 +99,121 @@ def _revoke(db: Session, oidc: OidcSession, session_row: UserSession, reason: st
     db.delete(oidc)
 
 
+def _ask_idp(
+    oidc: OidcSession, client: OidcClient, keyring: Keyring
+) -> _Outcome | Literal["skip", "unavailable"]:
+    """The token call and ID token checks for one session (no database writes)."""
+    seen = oidc.refresh_token_encrypted
+
+    def outcome(
+        action: Literal["revoke", "apply"],
+        reason: str = "",
+        response: TokenResponse | None = None,
+        validated: ValidatedToken | None = None,
+    ) -> _Outcome:
+        return _Outcome(oidc.id, oidc.session_id, seen, action, reason, response, validated)
+
+    refresh_token = decrypt_refresh_token(keyring, oidc)
+    if refresh_token is None:
+        return outcome("revoke", "idp_refresh_unavailable")
+    try:
+        response = client.refresh(refresh_token)
+    except DiscoveryError:
+        return "unavailable"
+    except TokenEndpointError as exc:
+        return outcome("revoke", "idp_refresh_denied") if exc.invalid_grant else "skip"
+    validated: ValidatedToken | None = None
+    if response.id_token is not None:
+        try:
+            validated = validate_id_token(
+                response.id_token,
+                issuer=client.issuer,
+                client_id=client.client_id,
+                keys=client.keys,
+                nonce=None,
+                access_token=response.access_token,
+            )
+        except TokenValidationError as exc:
+            return outcome("revoke", f"idp_refresh_invalid:{exc.reason}")
+        if validated.subject != oidc.subject:
+            return outcome("revoke", "idp_refresh_subject_changed")
+    return outcome("apply", response=response, validated=validated)
+
+
+def _lock_current(
+    db: Session, outcome: _Outcome, now: datetime
+) -> tuple[OidcSession, UserSession] | None:
+    """The rows under lock, if the session is live and its token is the one sent."""
+    row = db.execute(
+        select(OidcSession, UserSession)
+        .join(UserSession, UserSession.id == OidcSession.session_id)
+        .where(OidcSession.id == outcome.oidc_id, UserSession.id == outcome.session_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if row is None:
+        return None
+    oidc, session_row = row
+    if (
+        session_row.revoked_at is not None
+        or session_row.idle_expires_at <= now
+        or session_row.absolute_expires_at <= now
+        or oidc.refresh_token_encrypted != outcome.token_seen
+    ):
+        return None
+    return oidc, session_row
+
+
+def _apply(
+    db: Session,
+    outcome: _Outcome,
+    oidc: OidcSession,
+    session_row: UserSession,
+    keyring: Keyring,
+    settings: Settings,
+    now: datetime,
+) -> bool:
+    """Apply one outcome to the locked rows; ``True`` when the session was revoked."""
+    if outcome.action == "revoke":
+        _revoke(db, oidc, session_row, outcome.reason)
+        return True
+    validated = outcome.validated
+    if validated is not None:
+        user = db.get(User, oidc.user_id)
+        role = map_groups(validated.groups, settings)
+        if user is None or not user.is_active:
+            _revoke(db, oidc, session_row, "account_disabled")
+            return True
+        if role is None and settings.oidc_require_group:
+            _revoke(db, oidc, session_row, "not_in_group")
+            return True
+        change = sync_membership(db, oidc.user_id, role, settings)
+        if change is not None:
+            audit_auth(
+                db,
+                action="household.member_role_synced",
+                user_id=oidc.user_id,
+                meta=RequestMeta(),
+                target_type="household",
+                target_id=change.household_id,
+                after={
+                    "source": "oidc_claim_refresh",
+                    "before": change.before.value if change.before else None,
+                    "after": change.after.value,
+                },
+            )
+        if validated.sid is not None:
+            oidc.sid = validated.sid
+    response = outcome.response
+    if response is not None and response.refresh_token is not None:
+        oidc.refresh_token_encrypted = keyring.encrypt_str(
+            response.refresh_token, ad=refresh_token_ad(oidc.id)
+        )
+    oidc.claims_refreshed_at = now
+    oidc.updated_at = now
+    return False
+
+
 def refresh_claims(
     db: Session,
     client: OidcClient,
@@ -77,92 +227,58 @@ def refresh_claims(
     stats = RefreshStats()
     if settings.oidc_claim_refresh_minutes <= 0:
         return stats
+    if not take_run_lock(db):
+        log.info("OIDC claim refresh skipped: another run is active")
+        return stats
     now = now or clock.utcnow()
     due = now - timedelta(minutes=settings.oidc_claim_refresh_minutes)
-    rows = db.execute(
-        select(OidcSession, UserSession)
-        .join(UserSession, UserSession.id == OidcSession.session_id)
-        .where(
-            OidcSession.refresh_token_encrypted.is_not(None),
-            or_(OidcSession.claims_refreshed_at.is_(None), OidcSession.claims_refreshed_at <= due),
-            UserSession.revoked_at.is_(None),
-            UserSession.idle_expires_at > now,
-            UserSession.absolute_expires_at > now,
-        )
-        .order_by(OidcSession.claims_refreshed_at.nulls_first())
-        .limit(batch_size)
-        .with_for_update(skip_locked=True)
-    ).all()
-    for oidc, session_row in rows:
-        refresh_token = decrypt_refresh_token(keyring, oidc)
-        if refresh_token is None:
-            _revoke(db, oidc, session_row, "idp_refresh_unavailable")
-            stats.revoked += 1
-            continue
-        try:
-            response = client.refresh(refresh_token)
-        except DiscoveryError:
-            log.warning("OIDC claim refresh skipped: provider unavailable")
-            stats.skipped += len(rows) - stats.refreshed - stats.revoked
-            break
-        except TokenEndpointError as exc:
-            if exc.invalid_grant:
-                _revoke(db, oidc, session_row, "idp_refresh_denied")
-                stats.revoked += 1
-            else:
-                stats.skipped += 1
-            continue
-        if response.id_token is not None:
-            try:
-                validated = validate_id_token(
-                    response.id_token,
-                    issuer=client.issuer,
-                    client_id=client.client_id,
-                    keys=client.keys,
-                    nonce=None,
-                    access_token=response.access_token,
-                )
-            except TokenValidationError as exc:
-                _revoke(db, oidc, session_row, f"idp_refresh_invalid:{exc.reason}")
-                stats.revoked += 1
-                continue
-            if validated.subject != oidc.subject:
-                _revoke(db, oidc, session_row, "idp_refresh_subject_changed")
-                stats.revoked += 1
-                continue
-            user = db.get(User, oidc.user_id)
-            role = map_groups(validated.groups, settings)
-            if user is None or not user.is_active:
-                _revoke(db, oidc, session_row, "account_disabled")
-                stats.revoked += 1
-                continue
-            if role is None and settings.oidc_require_group:
-                _revoke(db, oidc, session_row, "not_in_group")
-                stats.revoked += 1
-                continue
-            change = sync_membership(db, oidc.user_id, role, settings)
-            if change is not None:
-                audit_auth(
-                    db,
-                    action="household.member_role_synced",
-                    user_id=oidc.user_id,
-                    meta=RequestMeta(),
-                    target_type="household",
-                    target_id=change.household_id,
-                    after={
-                        "source": "oidc_claim_refresh",
-                        "before": change.before.value if change.before else None,
-                        "after": change.after.value,
-                    },
-                )
-            if validated.sid is not None:
-                oidc.sid = validated.sid
-        if response.refresh_token is not None:
-            oidc.refresh_token_encrypted = keyring.encrypt_str(
-                response.refresh_token, ad=refresh_token_ad(oidc.id)
+    candidates = list(
+        db.execute(
+            select(OidcSession)
+            .join(UserSession, UserSession.id == OidcSession.session_id)
+            .where(
+                OidcSession.refresh_token_encrypted.is_not(None),
+                or_(
+                    OidcSession.claims_refreshed_at.is_(None),
+                    OidcSession.claims_refreshed_at <= due,
+                ),
+                UserSession.revoked_at.is_(None),
+                UserSession.idle_expires_at > now,
+                UserSession.absolute_expires_at > now,
             )
-        oidc.claims_refreshed_at = now
-        oidc.updated_at = now
-        stats.refreshed += 1
+            .order_by(OidcSession.claims_refreshed_at.nulls_first())
+            .limit(batch_size)
+        ).scalars()
+    )
+    # Phase 1: every IdP call with no row locked.
+    outcomes: list[_Outcome] = []
+    for index, oidc in enumerate(candidates):
+        result = _ask_idp(oidc, client, keyring)
+        if result == "unavailable":
+            log.warning("OIDC claim refresh skipped: provider unavailable")
+            stats.skipped += len(candidates) - index
+            break
+        if result == "skip":
+            stats.skipped += 1
+            continue
+        outcomes.append(result)
+    # Phase 2: apply each under a short lock, if nothing changed meanwhile.
+    for outcome in outcomes:
+        try:
+            with db.begin_nested():
+                locked = _lock_current(db, outcome, now)
+                if locked is None:
+                    stats.skipped += 1
+                    continue
+                if _apply(db, outcome, *locked, keyring, settings, now):
+                    stats.revoked += 1
+                else:
+                    stats.refreshed += 1
+                db.flush()
+        except DBAPIError as exc:
+            log.warning(
+                "OIDC claim refresh row skipped", extra={"error_class": type(exc.orig).__name__}
+            )
+            stats.skipped += 1
     db.flush()
     return stats

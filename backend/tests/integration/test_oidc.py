@@ -622,6 +622,110 @@ def test_claim_refresh_updates_roles_and_revokes_on_invalid_grant(
     assert revoked.revoked_reason == "idp_refresh_denied"
 
 
+class _ProbingClient:
+    """An OidcClient whose token call first runs ``probe`` on another connection."""
+
+    def __init__(self, inner: OidcClient, probe: Callable[[], None]) -> None:
+        self.inner = inner
+        self.probe = probe
+        self.calls = 0
+
+    def refresh(self, refresh_token: str) -> Any:
+        self.calls += 1
+        self.probe()
+        return self.inner.refresh(refresh_token)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+def _probed_refresh(
+    env: OidcEnv, app_engine: Engine, minutes: int, probe: Callable[[], None]
+) -> tuple[Any, _ProbingClient]:
+    client = _ProbingClient(OidcClient(env.settings, resolver=resolver()), probe)
+    try:
+        with sessionmaker(app_engine)() as db, db.begin():
+            stats = refresh_claims(
+                db,
+                client,  # type: ignore[arg-type]
+                Keyring.from_settings(env.settings),
+                env.settings,
+                now=clock.utcnow() + timedelta(minutes=minutes),
+            )
+        return stats, client
+    finally:
+        client.inner.close()
+
+
+def test_claim_refresh_holds_no_row_locks_while_calling_the_idp(
+    oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine, admin_engine: Engine
+) -> None:
+    env = oidc(oidc_claim_refresh_minutes=5)
+    with browser(env.app) as web:
+        login_via_idp(web, idp, claims(new_sub(), GROUP_MEMBER))
+        row = session_row(admin_engine, web)
+
+        def probe() -> None:
+            # A request touching the session (or a logout) must not wait for the IdP.
+            with admin_engine.begin() as conn:
+                conn.execute(text("SET LOCAL lock_timeout = '1s'"))
+                conn.execute(
+                    text("SELECT 1 FROM user_session WHERE id = :i FOR UPDATE NOWAIT"),
+                    {"i": row.id},
+                )
+                conn.execute(
+                    text("SELECT 1 FROM oidc_session WHERE session_id = :i FOR UPDATE NOWAIT"),
+                    {"i": row.id},
+                )
+
+        stats, client = _probed_refresh(env, app_engine, 6, probe)
+        assert client.calls == 1
+        assert (stats.refreshed, stats.revoked) == (1, 0)
+        assert web.get(SESSION_URL).status_code == 200
+
+
+def test_claim_refresh_does_not_act_on_a_token_replaced_meanwhile(
+    oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine, admin_engine: Engine
+) -> None:
+    """The IdP's answer applies only to the token it was given."""
+    env = oidc(oidc_claim_refresh_minutes=5)
+    with browser(env.app) as web:
+        login_via_idp(web, idp, claims(new_sub(), GROUP_MEMBER))
+        row = session_row(admin_engine, web)
+        (issued,) = idp.refresh_tokens
+        idp.refresh_tokens[issued].revoked = True
+
+        def replace_token() -> None:
+            with admin_engine.begin() as conn:
+                conn.execute(text("SET LOCAL lock_timeout = '1s'"))
+                conn.execute(
+                    text(
+                        "UPDATE oidc_session SET refresh_token_encrypted = :t WHERE session_id = :i"
+                    ),
+                    {"t": b"another writer's token", "i": row.id},
+                )
+
+        stats, _ = _probed_refresh(env, app_engine, 6, replace_token)
+        assert (stats.refreshed, stats.revoked, stats.skipped) == (0, 0, 1)
+        assert web.get(SESSION_URL).status_code == 200
+
+
+def test_claim_refresh_runs_once_at_a_time(
+    oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine
+) -> None:
+    from app.auth.oidc import refresh as refresh_module
+
+    env = oidc(oidc_claim_refresh_minutes=5)
+    with browser(env.app) as web:
+        login_via_idp(web, idp, claims(new_sub(), GROUP_MEMBER))
+        with sessionmaker(app_engine)() as other, other.begin():
+            assert refresh_module.take_run_lock(other)
+            stats, client = _probed_refresh(env, app_engine, 6, lambda: None)
+        assert client.calls == 0
+        assert stats.refreshed == 0
+        assert _refresh(env, app_engine, 6).refreshed == 1
+
+
 def test_claim_refresh_revokes_when_the_group_is_gone(
     oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine
 ) -> None:
