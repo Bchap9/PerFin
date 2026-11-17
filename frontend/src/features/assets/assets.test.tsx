@@ -125,6 +125,41 @@ describe("assets", () => {
     await vi.waitFor(() => { expect(screen.getByRole("region", { name: "Valuation history" })).toHaveFocus(); });
   });
 
+  it("moves focus to the history only once the confirm is closed", async () => {
+    // A modal dialog makes the page inert: focus moved while the confirm is
+    // still open is lost. jsdom has no showModal, so stand one in.
+    const proto = HTMLDialogElement.prototype as unknown as Record<string, unknown>;
+    const saved = { showModal: proto["showModal"], close: proto["close"] };
+    proto["showModal"] = function (this: HTMLDialogElement) { this.setAttribute("open", ""); };
+    proto["close"] = function (this: HTMLDialogElement) { this.removeAttribute("open"); };
+    try {
+      const api = mockApi({
+        ...ownerSession(),
+        ...referenceHandlers(),
+        "GET /api/v1/accounts": page([HOME]),
+        "GET /api/v1/accounts/:id": () => json(HOME),
+        "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+        "GET /api/v1/assets/:id": () => json(asset),
+        "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
+        "DELETE /api/v1/assets/:id/valuations/:vid": () => new Response(null, { status: 204 }),
+      });
+      renderApp(`${HUB}?tab=valuations`);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("button", { name: "Delete the value of 2025-06-01" }));
+      const dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+      const region = screen.getByRole("region", { name: "Valuation history" });
+      const openAtFocus: boolean[] = [];
+      region.addEventListener("focus", () => { openAtFocus.push(document.querySelector("dialog[open]") !== null); });
+      api.on("GET /api/v1/assets/:id/valuations", () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }));
+      await user.click(within(dialog).getByRole("button", { name: "Delete value" }));
+      await vi.waitFor(() => { expect(region).toHaveFocus(); });
+      expect(openAtFocus).toEqual([false]);
+    } finally {
+      proto["showModal"] = saved.showModal;
+      proto["close"] = saved.close;
+    }
+  });
+
   it("offers Add valuation, not Add transaction, as an asset account's main action", async () => {
     mockApi({
       ...ownerSession(),

@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState } from "react";
-
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { ErrorLine } from "./PlanningPage";
@@ -8,7 +6,8 @@ import { ErrorLine } from "./PlanningPage";
 /**
  * Asks before a row is deleted. `confirm` deletes (a `useAction` run); the
  * dialog closes once it has, and shows a refusal otherwise. The row's own
- * button, which would take focus back, is then gone: its table takes it.
+ * button, which would take focus back, is then gone: Dialog gives focus to
+ * its table instead.
  */
 export function ConfirmDelete({
   title,
@@ -25,7 +24,6 @@ export function ConfirmDelete({
   confirm: () => Promise<unknown>;
   onClose: () => void;
 }) {
-  const [region] = useState(() => document.activeElement?.closest<HTMLElement>("[role=region]"));
   return (
     <Dialog
       open
@@ -43,7 +41,6 @@ export function ConfirmDelete({
               void confirm().then((done) => {
                 if (done !== undefined) {
                   onClose();
-                  setTimeout(() => region?.focus());
                 }
               });
             }}
