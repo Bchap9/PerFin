@@ -33,7 +33,6 @@ import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, isIsoDate } from "../../lib/dates";
 import { formatMoney } from "../../lib/money";
-import { TABLE_CARDS_MAX, useMediaQuery } from "../../lib/useMediaQuery";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
 import { AlwaysCategoriseDialog } from "./AlwaysCategoriseDialog";
 import { RuleSavedNotice, type SavedRule } from "./AlwaysSection";
@@ -128,7 +127,6 @@ export function TransactionsPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const canWrite = useCanWrite();
-  const cards = useMediaQuery(`(max-width: ${String(TABLE_CARDS_MAX)}px)`);
   const accounts = useAccounts();
   const categories = useCategories();
   const payees = usePayees();
@@ -372,10 +370,13 @@ export function TransactionsPage() {
             className: "tx-col-select",
             header: (
               <Checkbox
-                label={<span className="visually-hidden">Select all loaded transactions</span>}
-                // Where the table is cards its header is clipped to nothing:
-                // no focus stop there; screen readers still reach it.
-                tabIndex={cards ? -1 : undefined}
+                // "Select all" shows where the table is cards (transactions.css).
+                label={
+                  <>
+                    <span className="tx-select-all">Select all</span>
+                    <span className="visually-hidden"> loaded transactions</span>
+                  </>
+                }
                 checked={allSelected}
                 onChange={(event) => {
                   setSelected(event.target.checked ? new Set(selectableRows.map((row) => row.id)) : new Set());

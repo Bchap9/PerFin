@@ -97,10 +97,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
   Inbox's suggested categories, such a row stands alone; its line and its
   Accept button now give its date and amount, so several of them no longer
   read the same.
-- **No invisible focus stop on a phone's transaction list.** Under 720px
-  wide (a phone, or high zoom) the clipped "Select all" checkbox took focus
-  with nothing to show; it is now out of the tab order there, and screen
-  readers still reach it.
+- **A phone's transaction list shows "Select all".** Under 720px wide (a
+  phone, or high zoom) the header's checkbox was clipped to nothing yet
+  still took focus, so there was no way to see it or select every row; it
+  now shows above the cards, labelled "Select all".
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.
