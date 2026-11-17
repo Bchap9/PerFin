@@ -223,7 +223,13 @@ describe("one subscription up close", () => {
     await user.type(within(form).getByLabelText(/Name/), "Streamly Plus");
     await user.type(within(form).getByLabelText(/Highest amount/), "19.99");
     await user.selectOptions(within(form).getByLabelText(/Period/), "quarterly");
-    await user.click(within(form).getByRole("button", { name: "Save" }));
+    // Enter in a field saves: Save is the submit button of the fields' form
+    // (user-event only presses a submit button inside the form).
+    const save = within(form).getByRole<HTMLButtonElement>("button", { name: "Save" });
+    expect(save.type).toBe("submit");
+    expect(save.form).not.toBeNull();
+    expect(save.form).toBe(within(form).getByLabelText<HTMLInputElement>(/Name/).form);
+    await user.click(save);
 
     await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
     const call = api.callsTo("PATCH", "/api/v1/recurring/:id")[0];

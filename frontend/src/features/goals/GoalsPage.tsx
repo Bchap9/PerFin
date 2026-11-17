@@ -24,7 +24,7 @@ import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
 import { useCanWrite } from "../accounts/api";
 import { useHouseholdCurrency } from "../planning/currency";
-import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { ErrorLine, PlanForm, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import {
@@ -112,13 +112,13 @@ function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void 
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
+          <Button variant="primary" type="submit" form="goal-form" loading={save.busy}>
             Save goal
           </Button>
         </>
       }
     >
-      <div className="planning-form">
+      <PlanForm id="goal-form" submit={submit}>
         <Field label="Name" error={problems["name"]} required>
           <Input value={name} onChange={(event) => { setName(event.target.value); }} />
         </Field>
@@ -143,7 +143,7 @@ function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void 
           ))}
         </fieldset>
         <ErrorLine message={save.error} />
-      </div>
+      </PlanForm>
     </Dialog>
   );
 }

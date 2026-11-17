@@ -72,7 +72,13 @@ describe("goals page", () => {
     await user.type(within(dialog).getByLabelText(/^Name/), "Holiday");
     await user.type(within(dialog).getByLabelText(/^Target amount/), "2400.50");
     await user.click(await within(dialog).findByRole("checkbox", { name: "Checking" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save goal" }));
+    // Enter in a field saves: the footer button is the submit button of the
+    // fields' form (user-event only presses a submit button inside the form).
+    const save = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Save goal" });
+    expect(save.type).toBe("submit");
+    expect(save.form).not.toBeNull();
+    expect(save.form).toBe(within(dialog).getByLabelText<HTMLInputElement>(/^Name/).form);
+    await user.click(save);
     await vi.waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/goals")).toHaveLength(1);
     });

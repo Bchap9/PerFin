@@ -83,6 +83,8 @@ Stage 4 of four on the way to 1.0.0: the release review.
 - **The step-up dialog's "Security" link closes it.** Followed by someone
   with no second factor, the link changed the page but left the dialog open
   over it.
+- **Enter saves the goal, budget and recurring item dialogs.** Their fields
+  were not a form, so Enter in a field did nothing.
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.

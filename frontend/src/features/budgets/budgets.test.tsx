@@ -304,7 +304,13 @@ describe("budget list", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create budget" }));
     expect(await within(dialog).findByText("Enter a name.")).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText(/^Name/), "Household");
-    await user.click(within(dialog).getByRole("button", { name: "Create budget" }));
+    // Enter in a field creates it: the footer button is the submit button of
+    // the fields' form (user-event only presses a submit button inside the form).
+    const create = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Create budget" });
+    expect(create.type).toBe("submit");
+    expect(create.form).not.toBeNull();
+    expect(create.form).toBe(within(dialog).getByLabelText<HTMLInputElement>(/^Name/).form);
+    await user.click(create);
     await vi.waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/budgets")).toHaveLength(1);
     });

@@ -75,3 +75,24 @@ export function ErrorLine({ message }: { message: string | null }) {
     </p>
   );
 }
+
+/**
+ * A planning dialog's fields as a form, so Enter in a field saves: the
+ * dialog's footer button is `type="submit" form={id}`. `submit` checks the
+ * fields itself (`noValidate`).
+ */
+export function PlanForm({ id, submit, children }: { id: string; submit: () => Promise<void>; children: ReactNode }) {
+  return (
+    <form
+      id={id}
+      className="planning-form"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      {children}
+    </form>
+  );
+}
