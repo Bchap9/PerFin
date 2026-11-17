@@ -3778,11 +3778,18 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
   recorded something. A second copy of an accepted message (or an
   identical copy of a rejected one) is moved without being imported or
   evaluated again. Servers without `MOVE`
-  get `COPY`, `\Deleted` and `UID EXPUNGE`.
+  get `UID COPY`, `\Deleted` and `UID EXPUNGE`; a server that lacks
+  `UIDPLUS` as well gets no expunge at all (a bare `EXPUNGE` would also
+  remove other mail flagged `\Deleted`), so the original stays flagged in
+  the inbox until the user's client expunges it, and runs search only
+  `UNDELETED` mail. Capabilities are read again after login.
 - **Caps.** Per run `PERFIN_EMAIL_INTAKE_MAX_MESSAGES_PER_RUN` new
   messages (50), `PERFIN_EMAIL_INTAKE_MAX_MB_PER_RUN` (200) fetched;
   messages over `PERFIN_EMAIL_INTAKE_MAX_MESSAGE_MB` (25, and never over
-  the upload cap) are rejected from their declared size. Polls run every 5
+  the upload cap) are rejected from their declared size, and the body is
+  fetched as `BODY.PEEK[]<0.cap+1>` so a server that understated the size
+  is asked for at most one byte more (the message is then `too_large`).
+  Polls run every 5
   minutes (`poll_mailboxes` dispatches `poll_mailbox` per enabled
   household).
 - **Digest.** Rejections add to one open `rejected_email` review item per
