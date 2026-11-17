@@ -60,11 +60,36 @@ describe("calendar", () => {
     });
     renderApp("/plan/upcoming");
     const table = await screen.findByRole("table", { name: "Upcoming days" });
-    // The page is named after its tab.
-    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+    // The page keeps its h2 for screen readers; the Plan tab already shows
+    // its name, so it is not repeated as a visible heading.
+    expect(screen.getByRole("heading", { level: 2, name: "Upcoming" })).toHaveClass("visually-hidden");
     expect(within(table).getAllByRole("row")).toHaveLength(2);
     expect(within(table).getByText("Streaming")).toBeInTheDocument();
     expect(within(table).getByText("$1,184.51")).toBeInTheDocument();
+  });
+
+  it("the look-ahead is a compact control on the tab row, for the calendar only", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    const user = userEvent.setup();
+    const ahead = screen.getByRole("combobox", { name: "Look ahead" });
+    // On the tab row, outside the panel, so it is not as wide as the content.
+    expect(ahead.closest(".tabs__aside")).not.toBeNull();
+    expect(within(screen.getByRole("tabpanel")).queryByRole("combobox", { name: "Look ahead" })).not.toBeInTheDocument();
+    expect(within(ahead).getByRole("option", { name: "Next 90 days" })).toBeInTheDocument();
+    await user.selectOptions(ahead, "90");
+    await vi.waitFor(() => {
+      expect(api.calls.some((call) => call.path === "/api/v1/cashflow/calendar" && call.search.includes("90"))).toBe(true);
+    });
+    await user.click(screen.getByRole("tab", { name: "Recurring items" }));
+    await screen.findByRole("table", { name: "Recurring items" });
+    expect(screen.queryByRole("combobox", { name: "Look ahead" })).not.toBeInTheDocument();
   });
 
   it("the figures for the period are a description list", async () => {
@@ -94,6 +119,24 @@ describe("calendar", () => {
     expect(await screen.findByRole("table", { name: "Recurring items" })).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Cash-flow calendar" }));
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/upcoming"); });
+  });
+
+  it("keeps keyboard focus on the tab chosen with the arrow keys", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming");
+    const user = userEvent.setup();
+    (await screen.findByRole("tab", { name: "Cash-flow calendar", selected: true })).focus();
+    await user.keyboard("{ArrowRight}");
+    await screen.findByRole("table", { name: "Recurring items" });
+    expect(screen.getByRole("tab", { name: "Recurring items", selected: true })).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    expect(screen.getByRole("tab", { name: "Cash-flow calendar", selected: true })).toHaveFocus();
   });
 
   it("opens on the recurring items when the address asks for them", async () => {
@@ -251,5 +294,13 @@ describe("calendar", () => {
     await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
     expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.path).toBe("/api/v1/recurring/s-4");
     expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.body).toEqual({ active: true });
+
+    // One the person added is deleted only once they say so.
+    await user.click(within(within(table).getByRole("row", { name: /Garden Club/ })).getByRole("button", { name: "Delete Garden Club" }));
+    const confirm = await screen.findByRole("dialog", { name: "Delete Garden Club?" });
+    expect(api.callsTo("DELETE", "/api/v1/recurring/:id")).toHaveLength(1);
+    await user.click(within(confirm).getByRole("button", { name: "Delete item" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/recurring/:id")).toHaveLength(2); });
+    expect(api.callsTo("DELETE", "/api/v1/recurring/:id")[1]?.path).toBe("/api/v1/recurring/s-6");
   });
 });

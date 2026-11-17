@@ -271,12 +271,12 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date
+from datetime import UTC, date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import ColumnElement, delete, or_, select
+from sqlalchemy import ColumnElement, delete, func, or_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -290,7 +290,14 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
+from app.domain.accounts.balances import balance_as_of
+from app.domain.accounts.models import (
+    LIABILITY_TYPES,
+    Account,
+    AccountType,
+    BalanceSnapshot,
+    BalanceSource,
+)
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.categorisation import engine
 from app.domain.documents import repo as documents_repo
@@ -351,8 +358,10 @@ from app.domain.imports.statement_records import (
     table_facts,
     withdraw_snapshot,
 )
+from app.domain.investments.models import InvestmentTxn
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.loans.models import LoanPayment
+from app.domain.networth import service as networth
 from app.domain.review import repo as review_repo
 from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
 from app.domain.transactions import repo as transactions_repo
@@ -413,6 +422,12 @@ if TYPE_CHECKING:
 
 #: Most row numbers / ids copied into one review item, audit row or event.
 IDS_MAX: Final = 50
+#: Formats whose opening balance record is the balance before their first
+#: row, a transaction until 1.0.0-rc.11 (:func:`_settle_openings`).
+OPENING_FORMATS: Final = frozenset({"qif", "csv"})
+#: Review reason: a QIF's or table's opening balance was not recorded, as
+#: the account already has a balance or rows on or before its day.
+OPENING_BALANCE_NOT_RECORDED: Final = "opening_balance_not_recorded"
 #: Review kinds a re-run answers (resolved when the re-run goes through).
 RERUN_ANSWERS: Final = frozenset({ReviewKind.UNPARSED, ReviewKind.UNKNOWN_ACCOUNT})
 #: ``unparsed`` reasons a re-run does not answer: the pipeline raised them
@@ -852,6 +867,15 @@ class ImportResult:
     summary: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _Opening:
+    """A QIF's or table's opening balance, settled when the run ends (:func:`_settle_openings`)."""
+
+    as_of: date
+    amount: Decimal
+    statement_index: int | None
+
+
 @dataclass
 class _NearGroup:
     """The near duplicates of one committed statement, held back to the end of the run."""
@@ -910,6 +934,11 @@ class _Run:
     #: rows the bank had not booked yet (``Pending``): counted, never reported.
     footer_rows: int = 0
     pending_rows: int = 0
+    #: Table rows that repeat the header, and rows that only print a balance
+    #: (an opening one gives the statement's opening balance): counted, never
+    #: imported or reported.
+    header_rows: int = 0
+    balance_rows: int = 0
     skipped_currency: int = 0
     snapshots: int = 0
     #: Rows a rule categorised, and rows that took their payee's default
@@ -992,6 +1021,9 @@ class _Run:
     #: Statements a person accepted or balanced, by account, until the run
     #: knows whether it changed a row (:func:`_settle_standing`).
     standing: dict[uuid.UUID, list[_Standing]] = field(default_factory=dict)
+    #: The opening balances of the QIF sections and tables this run
+    #: committed, by account (:func:`_settle_openings`).
+    openings: dict[uuid.UUID, list[_Opening]] = field(default_factory=dict)
     _payees: PayeeMatcher | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
@@ -1040,6 +1072,8 @@ class _Run:
             "skipped_rows": self.skipped_rows,
             "footer_rows": self.footer_rows,
             "pending_rows": self.pending_rows,
+            "header_rows": self.header_rows,
+            "balance_rows": self.balance_rows,
             "skipped_currency": self.skipped_currency,
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
@@ -1248,6 +1282,8 @@ def _row_problems(
     # asked about again is decided when the run ends (:func:`_settle_standing`).
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
+    run.header_rows += len(parsed.header_rows)
+    run.balance_rows += len(parsed.balance_rows)
     if parsed.skipped_rows:
         run.skipped_rows += len(parsed.skipped_rows)
         run.review(
@@ -1612,8 +1648,27 @@ def _commit_statement(
     )
     # An accepted statement whose reading adds up is checked against the
     # ledger first (:func:`_settle_standing`): its rows may have been edited.
-    if parsed.reconciled and not (standing is not None and standing.vouched):
+    # A table whose own running balance does not follow from its amounts
+    # vouches for no balance (its ``balance_mismatch`` item says so).
+    if (
+        parsed.reconciled
+        and not parsed.balance_mismatches
+        and not (standing is not None and standing.vouched)
+    ):
         _write_snapshot(run, parsed, account)
+    if (
+        parsed.source_format in OPENING_FORMATS
+        and parsed.opening_balance is not None
+        and parsed.opening_balance_date is not None
+        and not parsed.balance_mismatches
+    ):
+        run.openings.setdefault(account.id, []).append(
+            _Opening(
+                parsed.opening_balance_date,
+                to_storage(parsed.opening_balance),
+                statement_index,
+            )
+        )
     if created:
         run.changed.add(account.id)
         ids = [row.id for row, _ in created]
@@ -2998,17 +3053,30 @@ def _supersede(run: _Run, answered: Callable[[ReviewItem], bool]) -> int:
     return len(found)
 
 
-def _answered_before(run: _Run, finding: Mapping[str, Any]) -> bool:
-    """A resolved finding of the document says exactly what ``finding`` says."""
-    resolved = run.db.execute(
-        select(ReviewItem.payload).where(
+def _answered_before(run: _Run, finding: Mapping[str, Any], *, dismissed: bool = False) -> bool:
+    """A resolved finding of the document says exactly what ``finding`` says.
+
+    With ``dismissed``, one a person dismissed counts too (not one a run or
+    "Process again" superseded), and the statement reference is not compared
+    (:func:`_comparable`).
+    """
+    states = [ReviewItemState.RESOLVED] + ([ReviewItemState.DISMISSED] if dismissed else [])
+    answered = run.db.execute(
+        select(ReviewItem.payload, ReviewItem.resolution).where(
             ReviewItem.household_id == run.household_id,
             ReviewItem.document_id == run.document.id,
-            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.state.in_(states),
             ReviewItem.kind == ReviewKind.LOW_CONFIDENCE_FIELD,
         )
-    ).scalars()
-    return any(payload == finding for payload in resolved)
+    ).all()
+    if not dismissed:
+        return any(payload == finding for payload, _ in answered)
+    wanted = _comparable(finding)
+    return any(
+        _comparable(payload or {}) == wanted
+        and (resolution or {}).get("action") != _SUPERSEDED["action"]
+        for payload, resolution in answered
+    )
 
 
 def _person_linked(run: _Run, ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
@@ -3201,6 +3269,7 @@ def _finish_reading(run: _Run) -> None:
             continue
         removed: set[uuid.UUID] = set()
         settled = account_id not in run.waiting and account_id not in run.incomplete
+        _settle_openings(run, account, settled=not run.unplaced and settled)
         if not run.unplaced and settled:
             removed = _replace_earlier(run, account)
             if account_id in run.periods:
@@ -3208,6 +3277,126 @@ def _finish_reading(run: _Run) -> None:
         _settle_near(run, account, removed)
         _settle_standing(run, account)
     _settle_moved(run)
+
+
+def _settle_openings(run: _Run, account: Account, *, settled: bool) -> None:
+    """Record the opening balances of the run's QIF sections and tables on ``account``.
+
+    Such a figure was a transaction until 1.0.0-rc.11 (its date, its
+    amount); now it is the balance at the end of the day before
+    (``opening.as_of``). It is recorded as a ``statement`` snapshot on that
+    day when the account has nothing on or before it: no snapshot (but
+    this document's own) and no transaction (but the opening row an
+    earlier reading of this document wrote: that amount, on that day or
+    the next).
+    That row then goes as an earlier reading's (:func:`_replace_earlier`),
+    so it is only replaced when this run settles the account and nobody
+    touched it; otherwise it stays as it was and no snapshot is written,
+    so the opening is counted once either way. With something already on
+    or before the day, nothing is written: the row of an earlier reading
+    stays, and without one an item names the figure
+    (:data:`OPENING_BALANCE_NOT_RECORDED`), unless the account's balance
+    that day already is the figure (an account created from the document's
+    proposal, the previous statement's closing balance) or a person already
+    resolved or dismissed that very item (:func:`_answered_before`).
+    """
+    openings = run.openings.pop(account.id, [])
+    if not openings:
+        return
+    db = run.db
+    read = run.read.setdefault(account.id, set())
+    wanted: list[dict[str, Any]] = []
+    for opening in openings:
+        old = list(
+            db.execute(
+                select(Transaction).where(
+                    Transaction.household_id == run.household_id,
+                    Transaction.account_id == account.id,
+                    Transaction.source_document_id == run.document.id,
+                    Transaction.amount == opening.amount,
+                    Transaction.posted_date.in_([opening.as_of, opening.as_of + timedelta(days=1)]),
+                    Transaction.import_hash.is_not(None),
+                )
+            ).scalars()
+        )
+        old = [row for row in old if row.import_hash not in read]
+        old_ids = [row.id for row in old]
+        snapshots = accounts_repo.list_snapshots(db, account, date.min, opening.as_of)
+        others = [
+            s
+            for s in snapshots
+            if not (
+                s.as_of_date == opening.as_of
+                and s.source is BalanceSource.STATEMENT
+                and s.source_document_id == run.document.id
+            )
+        ]
+        earlier_row = db.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.household_id == run.household_id,
+                Transaction.account_id == account.id,
+                Transaction.posted_date <= opening.as_of,
+                Transaction.id.not_in(old_ids) if old_ids else true(),
+            )
+            .limit(1)
+        ).first()
+        if not others and earlier_row is None:
+            attached = _person_linked(run, old_ids)
+            untouched = all(
+                row.updated_at == row.created_at
+                and row.transfer_group_id is None
+                and row.id not in attached
+                for row in old
+            )
+            if not old or (settled and untouched):
+                accounts_repo.upsert_snapshot(
+                    db,
+                    account,
+                    opening.as_of,
+                    opening.amount,
+                    BalanceSource.STATEMENT,
+                    source_document_id=run.document.id,
+                )
+                run.snapshots += 1
+                emit(db, run.household_id, "balance.updated", {"account_id": str(account.id)})
+                continue
+        if old:
+            # The earlier reading's row stands in for the figure: kept.
+            read.update(row.import_hash for row in old if row.import_hash is not None)
+            continue
+        # The ledger already says so (the balance a proposal recorded, the
+        # previous statement's closing balance): nothing to ask.
+        if balance_as_of(db, account, opening.as_of) == opening.amount:
+            continue
+        wanted.append(
+            {
+                "reason": OPENING_BALANCE_NOT_RECORDED,
+                "field": "opening_balance",
+                "account_id": str(account.id),
+                "statement": opening.statement_index,
+                "currency": account.currency,
+                "amount": _decimal_text(opening.amount),
+                "as_of": opening.as_of.isoformat(),
+            }
+        )
+    still = [_comparable(payload) for payload in wanted]
+
+    def answered(item: ReviewItem) -> bool:
+        # An earlier run's item this run no longer raises (recorded, or the
+        # row of an earlier reading stands in for it).
+        payload = item.payload or {}
+        return (
+            payload.get("reason") == OPENING_BALANCE_NOT_RECORDED
+            and payload.get("account_id") == str(account.id)
+            and _comparable(payload) not in still
+        )
+
+    _supersede(run, answered)
+    for payload in wanted:
+        if not _answered_before(run, payload, dismissed=True):
+            # A person who resolved or dismissed it is not asked on every run.
+            run.review(ReviewKind.LOW_CONFIDENCE_FIELD, payload)
 
 
 def _settle_moved(run: _Run) -> None:
@@ -3262,6 +3451,15 @@ def _settle_moved(run: _Run) -> None:
         ).first()
         if left is None:
             drop_stale_records(db, run.document, account, ())
+            # The balances the statement recorded there went with it.
+            db.execute(
+                delete(BalanceSnapshot).where(
+                    BalanceSnapshot.household_id == run.household_id,
+                    BalanceSnapshot.account_id == account.id,
+                    BalanceSnapshot.source_document_id == run.document.id,
+                    BalanceSnapshot.source == BalanceSource.STATEMENT,
+                )
+            )
 
 
 def _open_items(db: Session, document: Document) -> int:
@@ -3294,6 +3492,7 @@ def import_extraction(
     transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
+    earlier = _earliest_recorded(db, document)
     # A PDF/image no parser read: its page table goes through the saved
     # column mappings like a CSV (app.domain.review.layout), unless no
     # table on its pages has a dated row.
@@ -3359,6 +3558,7 @@ def import_extraction(
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
     _report_skipped(run, result)
     investments: dict[str, Any] | None = None
+    first_price: date | None = None
     if statements:
         # Brokerage statements (app.domain.investments.statement_import);
         # their cash deposits/withdrawals are ledger rows committed here.
@@ -3386,6 +3586,7 @@ def import_extraction(
             if investment_account not in run.accounts:
                 run.accounts.append(investment_account)
         investments = done.summary()
+        first_price = done.first_price
         # Brokerage cash rows are written from the lines a statement's own
         # checks let through: what an earlier reading wrote is left alone.
         run.unplaced = True
@@ -3397,6 +3598,7 @@ def import_extraction(
         if account is not None and account.institution_id is not None:
             document.institution_id = account.institution_id
     db.flush()
+    _recompute_net_worth(db, document, earlier, first_price)
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     summary = run.summary()
     if investments is not None:
@@ -3407,6 +3609,41 @@ def import_extraction(
 # ---------------------------------------------------------------------------
 # Re-running an import (POST /imports/{document_id}/apply-mapping)
 # ---------------------------------------------------------------------------
+
+
+def _earliest_recorded(db: Session, document: Document) -> date | None:
+    """The first day a ledger row, balance or investment row of ``document`` is on."""
+    days = [
+        db.execute(
+            select(func.min(column)).where(
+                model.household_id == document.household_id, owner == document.id
+            )
+        ).scalar_one_or_none()
+        for model, column, owner in (
+            (Transaction, Transaction.posted_date, Transaction.source_document_id),
+            (BalanceSnapshot, BalanceSnapshot.as_of_date, BalanceSnapshot.source_document_id),
+            (InvestmentTxn, InvestmentTxn.trade_date, InvestmentTxn.source_document_id),
+        )
+    ]
+    found = [d for d in days if d is not None]
+    return min(found) if found else None
+
+
+def _recompute_net_worth(
+    db: Session, document: Document, earlier: date | None, first_price: date | None = None
+) -> None:
+    """Have the stored net worth rewritten from the first day this run could have changed.
+
+    What the document holds now and what it held before the run (an
+    earlier reading's rows, removed or replaced), and the first price its
+    brokerage statements wrote (a price names no document): a stored day
+    from then on no longer says what the ledger does
+    (``networth.request_recompute``).
+    """
+    days = (earlier, _earliest_recorded(db, document), first_price)
+    found = [d for d in days if d is not None]
+    if found:
+        networth.request_recompute(db, document.household_id, min(found))
 
 
 def _importable(document: Document) -> ExtractResult:

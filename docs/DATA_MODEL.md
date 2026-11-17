@@ -338,8 +338,14 @@ What the columns and the two tables mean to a person is in
   `app.domain.categorisation.engine.identify`: the bundled dictionary's key
   on a hit, else the first four tokens of what clean-up left; for a payment
   between people the service (`zelle`), never the other person; NULL when
-  the line names nobody (a transfer, a card payment, cash, a cheque, a fee,
-  interest, a deposit). `raw_payee` itself is never changed. The descriptor
+  the line names nobody (a transfer, a card payment, cash, a cheque in any
+  spelling clean-up reads, `CHECK 0042`, `CHEQUE #0042`, `CHQ 0042` or the
+  word alone, a fee, interest, a deposit; also a line of bare cash wording such as
+  `WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, `OVER THE COUNTER
+  WITHDRAWAL` or one that starts with `ATM`, `engine.CASH_WORDS` and
+  `engine.CASH_FILLER_WORDS`), or when those tokens hold fewer than three letters
+  and digits (`engine.KEY_CHARS_MIN`; a dictionary key is never held to
+  this). `raw_payee` itself is never changed. The descriptor
   kind and the display name are not stored: both are recomputed when
   needed. Partial index `(household_id, merchant_key)`. The key is derived
   from statement text and is `classification: denied` for AI access; it is
@@ -752,22 +758,47 @@ the daily job, the backfill and recomputed views):
   look-ahead) and cash moves with ledger transactions and
   `investment_txn.amount`; a balance anchor (a statement's whole-account
   value) carries forward as `anchor + holdings(d) - holdings(anchor day) +
-  cash moves since`. Loan accounts use their `computed` snapshots (kept by
-  the loans service), falling back to `principal_original` minus paid
-  principal when there is no anchor yet. Everything else: the ledger
-  balance.
+  cash moves since`, where a statement's opening positions (units held
+  before its period, dated on its first day and known by their
+  `import_hash`) count as held on the anchor day, so a first statement's
+  opening value is not added to them; their own price (the cost basis)
+  values units only where no stored price or trade does. Loan accounts use
+  their `computed` snapshots (kept by the loans service), falling back to
+  `principal_original` minus paid principal when there is no anchor yet.
+  Everything else: the ledger balance.
 - Positive values are assets, negative ones liabilities (by sign, not by
   account type), converted to the base currency on that day; an account
   whose currency has no rate is listed as unconverted and left out.
-- `breakdown` (version 1): `{"version", "by_class": {"assets": {class:
+- `breakdown` (version 1): `{"version", "valuation", "by_class": {"assets": {class:
   amount}, "liabilities": {...}}, "by_type": {account_type: signed amount},
   "accounts": [{"account_id", "type", "class", "side", "amount", "currency",
   "amount_base"}], "unconverted": [{"account_id", "amount", "currency"}],
   "unpriced_security_ids"}`; amounts are decimal strings. Ids, types and
   amounts only: no names or free text.
-- The daily `networth.snapshot` job upserts the day's row and backfills the
-  days missing since the last snapshot (from the first data on a first run,
-  at most ten years).
+- The daily `networth.snapshot` job upserts the day's row, rewrites the
+  last stored day and backfills the days missing since (from the first data
+  on a first run, at most ten years); one run of a household at a time.
+  Statements arrive backdated, so every import queues the job to
+  **rewrite** the stored days from the first day it wrote or removed a
+  row, balance, price or investment row on. So do these writes on a day
+  before today (`app/domain/networth/recompute.py`): a manual
+  transaction added, deleted or changed in amount or date, a manual
+  balance (also an account's opening balance), an asset valuation, an
+  investment transaction, a manual price, a loan payment or a loan
+  statement (from the first day the loan's computed balance changed), a
+  statement confirmed or accepted in the reconcile view and a row put back
+  there, a held statement accepted in the review queue, and a document
+  deleted with its data. Not (yet): closing or reopening an account,
+  changing its opening date or `include_in_net_worth`, exchange rates and
+  the daily price refresh, which change past days only from the next
+  rewrite on. One rewrite waits per household, from the earliest day asked
+  for. The job also rewrites from the first stored day
+  valued by older rules (`breakdown.valuation`, the valuation version,
+  below the current one; 2 since 1.0.0). A rewritten day
+  holds only the accounts that exist: deleting an account queues the
+  rewrite of every stored day that names it, so it leaves the history
+  (closing it keeps it there); a day stored in a former base currency, or
+  older than the ten-year window, is left as recorded.
 
 Recurring detection (`app/domain/recurring/`) feeds `scheduled_transaction`
 with `origin = detected`: transactions of the last 1100 days (transfers
@@ -985,7 +1016,7 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `spec_digest`), `possible_duplicate` (`near_match`:
   `transaction_id`, `candidates`), `low_confidence_field` (`rows_skipped`,
   `balance_mismatch`, `date_order_assumed`, `currency_mismatch`,
-  `truncated`). The latest import's counts are the `log` of the document's
+  `truncated`, `opening_balance_not_recorded`). The latest import's counts are the `log` of the document's
   last finished `parse` `ingest_job`.
 - PDF and image statements (document parsers, Phases 3-4; INGESTION.md
   "Parse"): the parsed statements are `extraction.statements` with

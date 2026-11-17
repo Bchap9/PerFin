@@ -21,15 +21,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
+from app.core.money import MoneyIn
 from app.core.settings import Settings
 from app.db.models import AuditLog, Event, Household, Job
 from app.db.rls import set_context
+from app.domain.accounts.balances import balance_as_of
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
 from app.domain.accounts.schemas import AccountCreate
 from app.domain.documents.blobstore import LocalFSBlobStore
@@ -53,12 +55,13 @@ from app.domain.imports.schemas import (
     DocumentAccountsApply,
     MappingSpec,
 )
+from app.domain.review import service as review_service
 from app.domain.transactions.models import ReviewState, Transaction, TransactionSplit
 from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
 from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.intake.upload import receive_upload
-from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractOptions, ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_csv_layouts as layouts
 from tests.fixtures import synth_ofx_variants as ofx_variants
@@ -522,6 +525,411 @@ def test_qif_with_a_record_without_an_amount_raises_lines_skipped(env: Env) -> N
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     (item,) = env.open_reviews(document_id)
     assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
+
+
+_QIF_OPENING = (
+    "!Type:Bank\n"
+    "D03/01/2026\nT500.00\nPOpening Balance\nL[Everyday]\n^\n"
+    "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+    "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+).encode("ascii")
+_OPENED = date(2026, 2, 28)  # the opening balance: the end of the day before its record
+
+
+def _balance(env: Env, account: Account) -> Decimal:
+    for db in env.db():
+        row = db.get(Account, account.id)
+        assert row is not None
+        return balance_as_of(db, row, date(2026, 3, 31))
+    raise AssertionError  # pragma: no cover
+
+
+def _opening_items(env: Env, document_id: uuid.UUID) -> list[ReviewItem]:
+    return [
+        r
+        for r in env.open_reviews(document_id)
+        if r.payload.get("reason") == "opening_balance_not_recorded"
+    ]
+
+
+def test_qif_opening_balance_record_is_no_transaction(env: Env) -> None:
+    """Quicken's own ``Opening Balance`` record is the account's balance the day before."""
+    account = env.ledger.account(env.household_id)  # QIF names no account number
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+
+    assert sorted(t.raw_payee or "" for t in env.transactions(account)) == [
+        "Harbor Lane Bakery",
+        "Northfield Payroll",
+    ]
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    # Nothing was known of the account before: the figure is its balance then.
+    assert [(s.as_of_date, s.balance, s.source) for s in env.snapshots(account)] == [
+        (_OPENED, Decimal("500.00"), BalanceSource.STATEMENT)
+    ]
+    assert _balance(env, account) == Decimal("787.60")
+
+
+def test_a_qif_opening_balance_is_not_written_over_what_the_account_knows(env: Env) -> None:
+    """A balance already on or before the day stays; an item names the figure."""
+    account = env.ledger.account(env.household_id)
+    env.ledger.snapshot(account, as_of_date=date(2026, 2, 1), balance="450.00")
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == [
+        (date(2026, 2, 1), Decimal("450.00"))
+    ]
+    assert _balance(env, account) == Decimal("737.60")
+    (item,) = _opening_items(env, document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload == {
+        "reason": "opening_balance_not_recorded",
+        "field": "opening_balance",
+        "account_id": str(account.id),
+        "statement": 0,
+        "currency": "USD",
+        "amount": "500.000000",
+        "as_of": _OPENED.isoformat(),
+    }
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize("answer", ["dismiss", "resolve"])
+def test_an_answered_opening_balance_item_is_not_asked_again(env: Env, answer: str) -> None:
+    """A person who dismissed or resolved the item is not asked on every "Process again"."""
+    account = env.ledger.account(env.household_id)
+    env.ledger.snapshot(account, as_of_date=date(2026, 2, 1), balance="450.00")
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+    (item,) = _opening_items(env, document_id)
+    for db in env.db():
+        principal = env.principal()
+        if answer == "dismiss":
+            review_service.dismiss(db, principal, item.id, request=None)
+        else:
+            found = db.get(ReviewItem, item.id)
+            assert found is not None
+            review_service.close_item(db, principal, found, {"action": "keep"}, request=None)
+    current = env.document(document_id)
+    result = ExtractResult.model_validate(current.extraction)
+    _read_again(env, document_id, result)
+    assert _opening_items(env, document_id) == []
+    # Another figure is another question.
+    (statement,) = result.statements
+    assert statement.opening_balance is not None
+    other = result.model_copy(
+        update={
+            "statements": [
+                statement.model_copy(
+                    update={
+                        "opening_balance": statement.opening_balance.model_copy(
+                            update={"amount": Decimal("510.00")}
+                        )
+                    }
+                )
+            ]
+        }
+    )
+    _read_again(env, document_id, other)
+    (asked,) = _opening_items(env, document_id)
+    assert asked.payload["amount"] == "510.000000"
+    # An item "Process again" closed (superseded) was never answered: asked again.
+    for db in env.db():
+        found = db.get(ReviewItem, asked.id)
+        assert found is not None
+        found.state = ReviewItemState.DISMISSED
+        found.resolution = {"action": "superseded", "by": "document.reprocess"}
+        found.resolved_at = datetime.now(UTC)
+    _read_again(env, document_id, other)
+    (again,) = _opening_items(env, document_id)
+    assert again.payload["amount"] == "510.000000"
+
+
+def test_a_csv_opening_balance_row_is_the_balance_of_an_existing_account(env: Env) -> None:
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    data = (
+        "Date,Description,Amount,Balance\n"
+        "2026-03-01,Opening Balance,,500.00\n"
+        "2026-03-04,Harbor Lane Bakery,-12.40,487.60\n"
+        "2026-03-19,Northfield Payroll,300.00,787.60\n"
+    )
+    document_id = env.ingest(data.encode("ascii"), account=account, name="march.csv")
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert sorted((s.as_of_date, s.balance) for s in env.snapshots(account)) == [
+        (_OPENED, Decimal("500.00")),
+        (date(2026, 3, 19), Decimal("787.60")),
+    ]
+    assert _balance(env, account) == Decimal("787.60")
+
+
+def test_a_csv_opening_balance_the_ledger_already_has_raises_nothing(env: Env) -> None:
+    """The next month opens with the balance the last one closed with: agreed, not asked."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    march = (
+        "Date,Description,Amount,Balance\n"
+        "2026-03-01,Opening Balance,,500.00\n"
+        "2026-03-04,Harbor Lane Bakery,-12.40,487.60\n"
+        "2026-03-19,Northfield Payroll,300.00,787.60\n"
+    )
+    april = (
+        "Date,Description,Amount,Balance\n"
+        "2026-04-01,Opening Balance,,787.60\n"
+        "2026-04-06,Corner Cafe,-7.60,780.00\n"
+    )
+    env.ingest(march.encode("ascii"), account=account, name="march.csv")
+    document_id = env.ingest(april.encode("ascii"), account=account, name="april.csv")
+    assert _opening_items(env, document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+
+
+def test_a_qif_moved_to_another_account_takes_its_opening_balance_along(env: Env) -> None:
+    first = env.ledger.account(env.household_id)
+    second = env.ledger.account(env.household_id)
+    document_id = env.ingest(_QIF_OPENING, account=first, name="export.qif")
+    assert len(env.snapshots(first)) == 1
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        imports_service.import_extraction(db, document, result, account_id=second.id)
+    assert env.transactions(first) == []
+    assert env.snapshots(first) == []
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(second)] == [
+        (_OPENED, Decimal("500.00"))
+    ]
+    assert _balance(env, second) == Decimal("787.60")
+
+
+def _accounts(env: Env) -> list[Account]:
+    for db in env.db():
+        rows = list(db.execute(select(Account)).scalars())
+        db.expunge_all()
+        return rows
+    raise AssertionError  # pragma: no cover
+
+
+def test_a_qif_account_set_up_from_its_proposal_counts_its_opening_once(env: Env) -> None:
+    document_id = env.ingest(_QIF_OPENING, name="export.qif")
+    (found,) = _detected(env, document_id)
+    proposal = found.proposal
+    assert proposal is not None
+    assert (proposal.opening_balance, proposal.opening_balance_date) == ("500.00", _OPENED)
+    choice = AccountChoice(
+        target=found.target,
+        index=found.index,
+        create=AccountCreate(
+            type=AccountType.CHECKING,
+            name=proposal.name,
+            currency="USD",
+            opening_balance=MoneyIn.model_validate(
+                {"amount": proposal.opening_balance, "currency": "USD"}
+            ),
+            opening_balance_date=proposal.opening_balance_date,
+        ),
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        (created,) = proposals.apply_accounts(
+            db, env.principal(), document_id, DocumentAccountsApply(items=[choice]), request=None
+        ).created
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    account = next(a for a in _accounts(env) if a.id == created)
+    snapshots = env.snapshots(account)
+    assert [(s.as_of_date, s.balance, s.source) for s in snapshots] == [
+        (_OPENED, Decimal("500.00"), BalanceSource.MANUAL)
+    ]
+    assert _balance(env, account) == Decimal("787.60")
+    assert _opening_items(env, document_id) == []
+
+
+def _qif_1(env: Env, document_id: uuid.UUID, *, posted: date | None = None) -> ExtractResult:
+    """Import ``document_id`` as ``qif/1`` read it (the opening balance a transaction).
+
+    Returns the current reading. ``posted``: the row's date (the record's
+    own, else the day before as the current reading dates the balance).
+    """
+    found: ExtractResult | None = None
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        current = ExtractResult.model_validate(document.extraction)
+        (statement,) = current.statements
+        opening = statement.opening_balance
+        assert opening is not None
+        assert opening.as_of is not None
+        row = ExtractedTransaction(
+            posted=posted or opening.as_of, amount=opening.amount, payee="Opening Balance"
+        )
+        earlier = current.model_copy(
+            update={
+                "statements": [
+                    statement.model_copy(
+                        update={
+                            "opening_balance": None,
+                            "transactions": [row, *statement.transactions],
+                        }
+                    )
+                ]
+            }
+        )
+        # The snapshot the current reading wrote on upload is not qif/1's.
+        db.execute(delete(BalanceSnapshot).where(BalanceSnapshot.source_document_id == document_id))
+        imports_service.import_extraction(db, document, earlier)
+        found = current
+    assert found is not None
+    return found
+
+
+def _read_again(env: Env, document_id: uuid.UUID, result: ExtractResult) -> None:
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        imports_service.import_extraction(db, document, result)
+
+
+@pytest.mark.parametrize("posted", [None, date(2026, 3, 1)])
+def test_reading_a_qif_again_replaces_the_opening_balance_row_of_qif_1(
+    env: Env, posted: date | None
+) -> None:
+    """``qif/1``'s opening balance row becomes the snapshot on "Process again", once."""
+    account = env.ledger.account(env.household_id)
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+    current = _qif_1(env, document_id, posted=posted)
+    assert len(env.transactions(account)) == 3
+    assert _balance(env, account) == Decimal("787.60")
+    for _ in range(2):
+        _read_again(env, document_id, current)
+        assert sorted(t.raw_payee or "" for t in env.transactions(account)) == [
+            "Harbor Lane Bakery",
+            "Northfield Payroll",
+        ]
+        assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == [
+            (_OPENED, Decimal("500.00"))
+        ]
+        assert _balance(env, account) == Decimal("787.60")
+        assert _opening_items(env, document_id) == []
+
+
+def test_a_qif_1_opening_row_stays_where_no_snapshot_can_replace_it(env: Env) -> None:
+    """Touched, or with a balance known before it: the row stays and counts once."""
+    account = env.ledger.account(env.household_id)
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+    current = _qif_1(env, document_id, posted=date(2026, 3, 1))
+    for db in env.db():
+        row = db.execute(
+            select(Transaction).where(
+                Transaction.account_id == account.id, Transaction.raw_payee == "Opening Balance"
+            )
+        ).scalar_one()
+        row.memo = "carried over from the old ledger"
+    _read_again(env, document_id, current)
+    assert len(env.transactions(account)) == 3
+    assert env.snapshots(account) == []
+    assert _balance(env, account) == Decimal("787.60")
+    assert _opening_items(env, document_id) == []
+    # Another account with a balance from before: the untouched row stays too.
+    other = env.ledger.account(env.household_id)
+    env.ledger.snapshot(other, as_of_date=date(2026, 2, 1), balance="0.00")
+    data = _QIF_OPENING.replace(b"Northfield Payroll", b"Northfield Payroll Co")
+    second = env.ingest(data, account=other, name="export-2.qif")
+    again = _qif_1(env, second, posted=date(2026, 3, 1))
+    _read_again(env, second, again)
+    assert len(env.transactions(other)) == 3
+    assert _balance(env, other) == Decimal("787.60")
+    assert _opening_items(env, second) == []
+
+
+def _net_worth_since(env: Env) -> list[str | None]:
+    """The ``since`` of each queued net worth job of the household, oldest first."""
+    for db in env.db():
+        jobs = db.execute(
+            select(Job)
+            .where(Job.type == "networth.snapshot", Job.household_id == env.household_id)
+            .order_by(Job.created_at, Job.id)
+        ).scalars()
+        return [job.payload.get("since") for job in jobs]
+    raise AssertionError  # pragma: no cover
+
+
+def test_an_import_has_net_worth_rewritten_from_its_first_day(env: Env) -> None:
+    """Stored net worth days from the import's first row on no longer hold: rewritten."""
+    account = env.ledger.account(env.household_id)
+    rows = (
+        "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+    )
+    data = f"!Type:Bank\nD03/01/2026\nT-5.00\nPCorner Cafe\n^\n{rows}".encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+    assert _net_worth_since(env) == ["2026-03-01"]
+    # That job ran (one waiting would already cover the same days).
+    for db in env.db():
+        db.execute(
+            delete(Job).where(Job.type == "networth.snapshot", Job.household_id == env.household_id)
+        )
+    # Read again without its first row: that row goes, so its day is rewritten.
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        current = ExtractResult.model_validate(document.extraction)
+        (statement,) = current.statements
+        shorter = current.model_copy(
+            update={
+                "statements": [
+                    statement.model_copy(update={"transactions": statement.transactions[1:]})
+                ]
+            }
+        )
+        imports_service.import_extraction(db, document, shorter)
+    assert len(env.transactions(account)) == 2
+    assert _net_worth_since(env) == ["2026-03-01"]
+
+
+_RUNNING = (
+    "Date,Description,Amount,Balance\n"
+    "2026-07-01,Willow Court Rent,-1210.00,1630.00\n"
+    "2026-07-03,Harbor Lane Grocery,-74.60,1555.40\n"
+    "2026-07-08,Northgate Fuel Stop,-45.10,1510.30\n"
+    "2026-07-15,Marlow Design Payroll,2840.00,4350.30\n"
+)
+
+
+def test_a_csv_whose_running_balance_does_not_add_up_records_no_balance(env: Env) -> None:
+    """The last balance printed is the account's only when every one before it follows."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    good = env.ingest(_RUNNING.encode("ascii"), account=account, name="july.csv")
+    assert env.document(good).status is DocumentStatus.PROCESSED, env.open_reviews(good)
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == [
+        (date(2026, 7, 15), Decimal("4350.30"))
+    ]
+    other = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    broken = _RUNNING.replace("4350.30", "4300.30") + "2026-07-19,Tin Roof Diner,-33.25,4317.05\n"
+    document_id = env.ingest(broken.encode("ascii"), account=other, name="july.csv")
+    reasons = {i.payload.get("reason") for i in env.open_reviews(document_id)}
+    assert "balance_mismatch" in reasons
+    assert env.snapshots(other) == []
+
+
+def test_qif_record_made_of_column_names_waits_for_review(env: Env) -> None:
+    """A record whose text is the header's words keeps its money, pending."""
+    account = env.ledger.account(env.household_id)  # QIF names no account number
+    data = (
+        "!Type:Bank\n"
+        "D03/14/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/21/2026\nT-40.00\nPDescription\nMReference\nLDebit\n^\n"
+    ).encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+
+    states = {t.raw_payee: t.review_state for t in env.transactions(account)}
+    assert states == {"Harbor Lane Bakery": ReviewState.NONE, "Description": ReviewState.PENDING}
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload["reason"] == "low_confidence"
+    assert item.payload["fields"] == ["payee"]
+    assert item.payload["count"] == 1
 
 
 def test_rerunning_a_statement_that_lost_records_does_not_repeat_the_item(env: Env) -> None:

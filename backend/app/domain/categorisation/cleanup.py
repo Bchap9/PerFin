@@ -75,9 +75,13 @@ from typing import Final, Literal
 
 from app.domain.transactions.models import PAYEE_MAX
 
-#: Bumped when clean-up changes what it returns; a household whose rows were
-#: keyed with an older version is refreshed.
-CLEANER_VERSION: Final = 2
+#: Bumped when clean-up changes what it returns, or the merchant key the
+#: engine makes of it (3: no key of fewer than three letters and digits, nor
+#: of bare cash wording; the CHEQUE and CHQ spellings are a cheque; 4: a
+#: credit union's WITHDRAWAL in front of ACH, a card, bill pay, a transfer or
+#: a cheque, and no key of a teller's cash wording, ``engine.CASH_FILLER_WORDS``);
+#: a household whose rows were keyed with an older version is refreshed.
+CLEANER_VERSION: Final = 4
 
 DescriptorKind = Literal[
     "purchase",
@@ -129,6 +133,7 @@ _FEE_WORDS: Final = (
     "MONTHLY|ANNUAL|MAINTENANCE|SERVICE|OVERDRAFT|ITEM|NON-[A-Z]+|ATM|FOREIGN|INTERNATIONAL"
     "|DOMESTIC|TRANSACTION|WIRE|TRANSFER|LATE|PAYMENT|MEMBERSHIP|RETURNED|NSF|PAPER|STATEMENT"
     "|CASH|ADVANCE|ACCOUNT|INSUFFICIENT|FUNDS|STOP|BALANCE|MINIMUM|OUTGOING|INCOMING|PROTECTION"
+    "|BANK|CHECK|OVERLIMIT|OVER-LIMIT|OVER|LIMIT"
 )
 
 #: The reference some banks print between "PAYMENT" and "TO".
@@ -136,8 +141,9 @@ _REFERENCE_TO: Final = r"(?: #?\d{4,17}(?= TO ))?"
 
 #: What a bank puts in front of TRANSFER; by itself none makes a line a transfer.
 _TRANSFER_LEAD: Final = (
-    "ONLINE|MOBILE|INTERNET|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL|AUTOMATIC|SCHEDULED"
-    "|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO|OVERDRAFT PROTECTION"
+    "ONLINE|MOBILE|INTERNET|HOME(?= BANKING)|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL"
+    "|AUTOMATIC|SCHEDULED|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO"
+    "|OVERDRAFT PROTECTION"
 )
 _TRANSFER_WORD: Final = r"(?:BANKING )?(?:TRANSFER|XFER)(?: (?:DEBIT|CREDIT|OUTGOING|INCOMING))?"
 #: A transfer the bank calls a wire: WIRE among the words in front of TRANSFER.
@@ -181,8 +187,8 @@ KIND_LINES: Final[tuple[KindPattern, ...]] = (
     _p(rf"(?:(?:{_FEE_WORDS}) ){{1,5}}FEES?(?:$|(?=[ -]))", "fee"),
     _p(rf"(?:MONTHLY )?SERVICE CHARGE{_END}", "fee"),
     _p(
-        r"(?:(?:MONTHLY|MINIMUM|PURCHASE|PURCHASES|CASH ADVANCE) )?"
-        rf"INTEREST (?:PAYMENT|PAID|EARNED|CREDIT|CHARGED?){_END}",
+        r"(?:(?:MONTHLY|MINIMUM|PURCHASE|PURCHASES|CASH ADVANCE|SAVINGS|CHECKING) )?"
+        rf"INTEREST (?:PAYMENT|PAID|EARNED|CREDIT|CHARGED?|FEE){_END}",
         "interest",
     ),
     _p(r"INTEREST$", "interest"),
@@ -256,6 +262,16 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
         rf"(?:(?:{_TRANSFER_LEAD}) ){{1,3}}{_TRANSFER_WORD}(?: {_ACCOUNT_NUMBER}){{0,3}}$",
         "transfer",
     ),
+    # The bank's word for a debit it was told to make; who was paid follows.
+    # After the transfers: "AUTOMATIC WITHDRAWAL TRANSFER TO SAVINGS" is one.
+    _p(rf"(?:AUTOMATIC|AUTO) WITHDRAWAL{_END}", "ach_debit"),
+    # A credit union writes WITHDRAWAL first and the way the money went next;
+    # a number behind it goes only with its "#" ("WITHDRAWAL POS 365 MARKET").
+    _p(rf"WITHDRAWAL (?:ACH|BILL ?PAY(?:MENT)?)(?: #\d{{1,12}})?{_END}", "ach_debit"),
+    _p(
+        rf"WITHDRAWAL (?:DEBIT CARD|POS)(?: PURCHASE| PUR| DEBIT)?(?: #\d{{1,12}})?{_END}",
+        "purchase",
+    ),
     # Between people: the service is the only name the line may keep (:data:`_P2P`).
     _p(rf"ZELLE{_END}", "p2p"),
     _p(rf"VENMO{_END}", "p2p"),
@@ -270,7 +286,20 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
     _p(rf"E-?DEPOSIT{_END}", "deposit"),
     _p(rf"COUNTER CREDIT{_END}", "deposit"),
     _p(r"DEPOSIT(?:$| ID NUMBER(?![A-Z])| ?#)", "deposit"),
-    _p(r"(?:CHECK|CHK|DRAFT)(?: PAID| NUMBER| NO)? ?#? ?\d{1,12}(?: PAID)?$", "check"),
+    # The CHEQUE and CHQ spellings too, a teller's cheque, and the word alone.
+    _p(
+        r"(?:(?:TELLER |COUNTER |OFFICIAL )?(?:CHECK|CHEQUE)|CHK|CHQ|DRAFT)"
+        r"(?: PAID| NUMBER| NO)? ?#? ?\d{1,12}(?: PAID)?$",
+        "check",
+    ),
+    _p(rf"(?:CHECK|CHK|CHEQUE|CHQ) (?:WITHDRAWAL|WITHDRWL|W/D){_END}", "check"),
+    _p(r"(?:CHECK|CHK|CHEQUE|CHQ)$", "check"),
+    # A credit union's cheque is a share draft.
+    _p(
+        r"(?:WITHDRAWAL BY (?:CHECK|CHK|CHEQUE|CHQ)|SHARE DRAFT(?: WITHDRAWAL)?)"
+        r"(?: ?#? ?\d{1,12})?$",
+        "check",
+    ),
     # Payroll. "DIRECT DEPOSIT" alone says only that money arrived (a tax
     # refund comes the same way); the word PAYROLL makes it pay (_PAYROLL_WORD).
     _p(rf"PAYROLL(?: DEPOSIT)?{_END}", "payroll"),

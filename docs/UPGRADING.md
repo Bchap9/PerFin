@@ -160,11 +160,15 @@ schema; the api and worker connect as `perfin_app`, which cannot.
 - Until the database is at the migration head, the api answers `/readyz`
   with 503 and is not sent traffic.
 
-During a Helm rolling upgrade the old pods keep serving for a short while
-against the migrated schema. A release whose migration makes that unsafe says
-so in its notes; for such a release, or if you want no overlap at all, scale
-the api and worker to zero before `helm upgrade` (Compose always stops the old
-containers before it starts the new ones).
+During an upgrade the old release keeps serving for a short while against
+the migrated schema. With Helm, the old pods run until the rollout replaces
+them. With Compose, the old `api`, `worker` and `mcp` containers keep running
+while `migrate` runs and until `docker compose up -d` recreates them, usually
+seconds. A release whose migration makes that overlap unsafe says so in its
+notes. For such a release, or if you want no overlap at all, stop the old
+release first: with Compose, run `docker compose stop api worker mcp` before
+`docker compose up -d`; with Helm, scale the api, worker and MCP deployments
+to zero before `helm upgrade`.
 
 **Downgrades are not supported.** `perfin migrate` only moves forward, and an
 older api reports not ready against a newer schema (`/readyz` stays at 503). To go
@@ -294,6 +298,105 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0 (not released yet)
+
+The release review. No migration (Alembic head stays `0014`), no new
+setting, no new container, no new outbound connection, and no response of
+the API changed shape. From rc.10 or rc.11 upgrade in the ordinary order,
+with no stop needed; from rc.9 or earlier follow the rc.10 note first.
+
+- **Going back to rc.11** needs no restore: set `PERFIN_VERSION` back (or
+  `helm rollback`). The older worker then re-keys merchant names under its
+  own clean-up version in its next hourly refresh, which is harmless. Do
+  not choose "Process again" there on a QIF file whose opening balance
+  1.0.0 recorded as a balance: rc.11 reads the file again with its own
+  reader, which imports the `Opening Balance` record as a transaction
+  again, and the balance 1.0.0 recorded stays, so the account counts the
+  opening amount twice. If it happened, delete that transaction.
+- **QIF files imported before are not changed by the upgrade.** A QIF
+  file's own `Opening Balance` record (or `Balance brought forward` and the
+  like) was imported as a transaction, and a record made only of column
+  names (`Description`, `Reference`, `Debit`) was posted quietly. 1.0.0
+  reads both differently (extractor `qif/2`), but only when a file is read
+  again: nothing is backfilled. To find them, open Inbox › Documents and
+  look for file names ending in `.qif`; open each one and choose "Process
+  again". The opening balance record then becomes the account's balance
+  at the end of the day before it (a statement balance), and its
+  transaction is removed, when the account has no balance and no
+  transaction on or before that day and nobody changed that row. Otherwise
+  the row stays as it was, so the balance is the same as before. A file
+  imported for the first time into an account that already has a balance
+  or transactions from before its opening record does not record the
+  figure unless the account's balance that day already is it: an Inbox
+  item ("Opening balance not recorded", with the amount and the day) then
+  holds the document, and the figure can be entered by hand as a balance
+  if it is right. The same holds for a CSV's opening balance row. A record of column names
+  keeps its date and amount and waits in the Inbox for review. A closing
+  balance record is left out and counted in the document's warnings.
+- **Net worth history is recalculated once.** Stored daily net worth
+  figures are now rewritten whenever an import or an edit adds, changes or
+  removes something on an earlier day, and the first daily net worth job
+  after the upgrade rewrites every stored day of the last ten years once
+  (valuation version 2; older days stay as they were). This corrects
+  history inside an account's first brokerage statement period, which
+  counted the opening positions twice. Nothing needs to be run by hand.
+  An account deleted before the upgrade leaves the rewritten days
+  (deleting an account now takes it out of the history; closing it keeps
+  it there), and a day stored in a former base currency is left as it is.
+  A daily job still queued when going back to rc.11 runs there as before;
+  a rewrite an import or an edit queued is refused by the rc.11 worker,
+  which is harmless.
+- **Some merchant keys clear themselves.** A line that leaves fewer than
+  three letters and digits (`E`, `XY #0042`) and bare cash wording
+  (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
+  `ATM`, and a teller's withdrawal such as `WITHDRAWAL MADE IN THE
+  STORE`, `CUSTOMER WITHDRAWAL IMAGE` or `OVER THE COUNTER
+  WITHDRAWAL`) no longer have a merchant key, nor a cheque written with the
+  `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
+  or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed
+  before lose it in the refresh the hourly `categorise.dispatch` job
+  queues after the upgrade (clean-up version 4, merchant list version 12);
+  nothing needs to be run by hand, and an admin's "Check again" (Settings,
+  What PerFin learned) runs it at once. Categories on those rows stay;
+  what was learned under such a key no longer answers, and the cash
+  suggestion of a withdrawal or a cash deposit stays. A merchant rule
+  ("Always use…") on such a key stops applying, since no row carries the
+  key any more: look in Settings › Rules for a merchant rule of a
+  withdrawal, a cash deposit, a cheque or a name of one or two letters, and
+  replace it with a rule on the payee text if it is still wanted. A
+  recurring series of such rows loses its key too, and a dismissed one
+  stays dismissed as long as detection can tell it is the same: by its
+  name (an ATM series named after its old key, `Atm`, included) or payee
+  and an amount in its range (a dismissed series that was
+  renamed may come back once as a suggestion). Detection no longer finds
+  a series of cheques. The same refresh suggests rent, water, a sewer
+  district and tuition for more lines, and the next daily detection then
+  shows a recurring series of such rows as a bill instead of "other",
+  unless somebody set its kind. Detection no longer finds a new running
+  series of the same withdrawal, cash deposit or ATM line every month,
+  only a suggested one; one already running stays as it is until dismissed
+  or ended. A lesson school (`DANCE SCHOOL`, `MUSIC
+  SCHOOL`, `KARATE`, `MARTIAL ARTS`, `SWIMMING SCHOOL`) is suggested as a
+  hobby instead of education, so such a series is no longer called a bill.
+- **A credit union's withdrawal names who was paid.** A line such as
+  `Withdrawal ACH <company>`, `Withdrawal Debit Card <shop>`, `Withdrawal
+  POS #0042 <shop>` or `Withdrawal Bill Payment <company>` was keyed with
+  the bank's words in front, so the merchant list did not find the shop.
+  Those words now leave the key, and the same refresh re-keys such rows;
+  `Withdrawal Home Banking Transfer To Share 0001` is a transfer, and
+  `Withdrawal by Check` and `Share Draft` lines are cheques. What was
+  learned follows the rows to their new key. An "Always use…" rule follows
+  only when all the rows of its key went to one new key; where they went
+  to several (the old key held only the shop's first word, so different
+  shops shared it), the rule stays on the old key and stops applying:
+  look in Settings › Rules for a merchant rule whose name begins with
+  "Withdrawal" and make it again on the shop.
+- **An investment account's chart changes.** The balance history of a
+  brokerage or retirement account (`GET /accounts/{id}/balances`, the
+  account page's chart) is now cash plus holdings on each day, as the
+  account's balance and net worth already were; the response shape is the
+  same.
+
 ### 1.0.0-rc.11
 
 The redesign: six sections and Settings, one Inbox, a drawer per
@@ -365,11 +468,27 @@ No new setting, no new container, no new outbound connection.
   has a category or a split and to every recurring item (one pass each, in
   plain SQL, which does not move `updated_at`), so on a large ledger it
   takes longer than the earlier revisions; take the backup first, as
-  always. The new columns are nullable or have defaults, but a check now
-  ties `scheduled_transaction.active` to the new `status` column: finish
-  the migration before the new pods take traffic, and do not leave pods of
-  rc.9 running against the migrated database longer than the rollout
-  needs.
+  always. The new columns are nullable or have defaults, but two new checks
+  refuse some writes of rc.9 and earlier: one ties
+  `scheduled_transaction.active` to the new `status` column, the other
+  allows a suggested category only on a row without a category.
+- **Rolling upgrade from rc.9 or earlier: stop, then migrate.** While pods
+  of rc.9 or earlier still run against the migrated database, switching a
+  recurring item on or off, adding one switched off, or setting the
+  category of a transaction that the new release has already given a
+  suggestion fails with an error (nothing is half-written; the person
+  tries again once the new pods serve). Adding transactions, categories
+  and recurring items that are on, and categorising a row without a
+  suggestion, keep working. With Compose, the old `api`, `worker` and
+  `mcp` containers keep running while `migrate` runs and until
+  `docker compose up -d` recreates them, usually seconds; for no window at
+  all, run `docker compose stop api worker mcp` before
+  `docker compose up -d`. With Helm, scale the api, worker and MCP
+  deployments to zero before `helm upgrade` (see "Database migrations");
+  otherwise the window lasts until the old api pods fail `/readyz` (it
+  answers 503 once the database is past their head) and the rollout
+  replaces them. An upgrade from rc.10 or later adds no revision and has
+  no such window.
 - **Your existing categories are kept, and never guessed over.** Every
   transaction that already had a category or a split is marked as
   categorised "before this version" (`legacy`). No merchant list, keyword

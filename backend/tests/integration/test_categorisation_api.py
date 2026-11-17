@@ -852,6 +852,53 @@ def test_a_dismissed_series_whose_own_rows_split_keeps_new_plans_from_returning(
     assert sorted(tombstone.split_keys) == sorted([RENAMED.key, GROCER.key])
 
 
+@pytest.mark.parametrize(
+    ("raw", "old", "name"),
+    [
+        ("WITHDRAWAL", "withdrawal", "Withdrawal"),
+        # The old key was only the start of the line's text: a key is at
+        # most four words (and real clean-up drops a town as well).
+        ("ATM CASH 0042 ELKTON PARK", "atm cash 0042 elkton", "Atm Cash 0042 Elkton"),
+        ("WITHDRAWAL MADE IN THE STORE", "withdrawal made in the", "Withdrawal Made In The"),
+    ],
+)
+def test_a_dismissed_cash_series_stays_dismissed_when_its_rows_lose_the_key(
+    db: Session,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+    old: str,
+    name: str,
+) -> None:
+    # An older clean-up keyed bare cash wording ("withdrawal"); today's gives
+    # those rows no key, and detection puts them together by their text.
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    _monthly_charges(home, raw, old)
+    dismissed = _series(db, home, old, "dismissed")
+    dismissed.name = name  # as detection named it (the key in title case)
+    db.flush()
+
+    monkeypatch.setattr(cleanup, "CLEANER_VERSION", cleanup.CLEANER_VERSION + 1)
+    service.refresh(db, hh)
+    for _ in range(2):
+        counts, _ = recurring.persist(db, hh, [home.account.id], date(2026, 4, 10))
+
+        # The person's "not a subscription" still stands: nothing comes back.
+        [kept] = _series_of(db, home.account.id)
+        assert kept.id == dismissed.id
+        assert (kept.merchant_key, kept.status, kept.status_source, kept.active) == (
+            None,
+            "dismissed",
+            "person",
+            False,
+        )
+        assert (counts.created, counts.skipped_dismissed) == (0, 1)
+    [entry] = _audits(db, hh, "categorise.refresh")
+    assert entry.after is not None
+    assert entry.after["series_moved"] == 1
+
+
 def test_dispatch_queues_only_households_behind(db: Session) -> None:
     behind = make_household(db).id
     current = make_household(db).id

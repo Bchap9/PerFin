@@ -162,3 +162,40 @@
 .imported-check {
   margin-top: var(--space-4);
 }
+
+/* A document's details: label and value side by side, as the transaction
+   panel's facts; one column on a phone. */
+.doc-facts {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+.doc-facts dt {
+  color: var(--color-text-muted);
+}
+
+.doc-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.doc-facts dd:not(.imported-into) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+@media (max-width: 30rem) {
+  .doc-facts {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .doc-facts dd {
+    margin-bottom: var(--space-2);
+  }
+}

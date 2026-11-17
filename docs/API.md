@@ -1337,9 +1337,14 @@ returns `{"account_id", "currency", "start", "end", "items": [{"date",
 "balance"}], "snapshots": [{"id", "as_of_date", "balance", "source",
 ...}]}`: end-of-day balances (DATA_MODEL.md "Balances"), default the 90 days
 up to today, at most 3660 days (`422 range-too-long`, `422 invalid-range`).
+A brokerage or retirement account's points are valued as `GET /accounts`
+and net worth value it, cash plus holdings at each day's latest close (or
+trade price), so the last point is the balance the account shows; other
+accounts' points are the ledger balance. The response shape is the same.
 `POST /accounts/{id}/balances` (`{"as_of_date", "balance": {"amount",
 "currency"}}`, `Idempotency-Key` honoured) records or replaces the manual
-balance of that date (`422 balance-in-future`). `number_last4` is returned
+balance of that date (`422 balance-in-future` after tomorrow, UTC: a day
+of slack for a browser east of UTC). `number_last4` is returned
 to callers who may see the account but never written to the audit trail or
 events. Events: `account.created|updated|closed|reopened|deleted`,
 `account.balance_recorded`, with ids only.

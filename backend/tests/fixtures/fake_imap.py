@@ -3,9 +3,14 @@
 
 :class:`FakeImapServer` speaks just enough IMAP4rev1 over **implicit TLS**
 for ``imaplib.IMAP4_SSL``: ``CAPABILITY``, ``LOGIN``, ``SELECT``/``EXAMINE``,
-``CREATE``, ``UID SEARCH ALL``, ``UID FETCH`` (``RFC822.SIZE``,
-``BODY.PEEK[HEADER]<0.n>``, ``BODY.PEEK[]``), ``UID MOVE``, ``UID COPY``,
-``UID STORE``, ``UID EXPUNGE``, ``EXPUNGE``, ``NOOP`` and ``LOGOUT``.
+``CREATE``, ``UID SEARCH ALL|UNDELETED`` (``ALL`` includes messages flagged
+``\\Deleted``, as real servers do), ``UID FETCH`` (``RFC822.SIZE``,
+``BODY.PEEK[HEADER]<0.n>``, ``BODY.PEEK[]`` and ``BODY.PEEK[]<0.n>``),
+``UID MOVE``, ``UID COPY``, ``UID STORE``, ``UID EXPUNGE``, ``EXPUNGE``,
+``NOOP`` and ``LOGOUT``. Knobs: ``move`` and ``uidplus`` (advertised
+extensions), ``caps_after_login`` (``MOVE``/``UIDPLUS`` listed only once
+logged in, like Dovecot) and :attr:`Message.declared_size` (a server that
+understates ``RFC822.SIZE``).
 ``STARTTLS`` is refused (and recorded). Every command line is recorded
 (:attr:`FakeImapServer.commands`, the ``LOGIN`` password masked) so tests
 can check what the client asked for, e.g. that a rejected message's body
@@ -189,6 +194,8 @@ class Message:
     uid: int
     data: bytes
     deleted: bool = False
+    #: ``RFC822.SIZE`` to report instead of the real size (a lying server).
+    declared_size: int | None = None
 
     @property
     def header(self) -> bytes:
@@ -237,10 +244,17 @@ class FakeImapServer:
         username: str = USERNAME,
         password: str = PASSWORD,
         move: bool = True,
+        uidplus: bool = True,
+        caps_after_login: bool = False,
     ) -> None:
         self.username = username
         self.password = password
-        self.capabilities = ["IMAP4rev1", "UIDPLUS", "AUTH=PLAIN"] + (["MOVE"] if move else [])
+        self.capabilities = (
+            ["IMAP4rev1", "AUTH=PLAIN"]
+            + (["UIDPLUS"] if uidplus else [])
+            + (["MOVE"] if move else [])
+        )
+        self.caps_after_login = caps_after_login
         self.folders: dict[str, Folder] = {"INBOX": Folder()}
         self.commands: list[str] = []
         self.handshake_failures = 0
@@ -344,7 +358,10 @@ class _Session:
     def dispatch(self, tag: str, command: str, args: list[str]) -> bool:
         server = self.server
         if command == "CAPABILITY":
-            self.line("* CAPABILITY " + " ".join(server.capabilities))
+            caps = server.capabilities
+            if server.caps_after_login and not self.authed:
+                caps = [c for c in caps if c not in ("MOVE", "UIDPLUS")]
+            self.line("* CAPABILITY " + " ".join(caps))
             self.line(f"{tag} OK done")
         elif command == "NOOP":
             self.line(f"{tag} OK done")
@@ -408,8 +425,9 @@ class _Session:
             return
         server = self.server
         if sub == "SEARCH":
+            undeleted = bool(args) and args[0].upper() == "UNDELETED"
             with server._lock:
-                uids = [str(m.uid) for m in self._box().messages if not m.deleted]
+                uids = [str(m.uid) for m in self._box().messages if not (undeleted and m.deleted)]
             self.line("* SEARCH " + " ".join(uids))
             self.line(f"{tag} OK done")
             return
@@ -427,9 +445,14 @@ class _Session:
             return
         if sub == "FETCH":
             items = args[1].upper() if len(args) > 1 else ""
+            size = len(message.data) if message.declared_size is None else message.declared_size
+            partial = re.search(r"<0\.(\d+)>", items)
             if "HEADER" in items:
                 data = message.header
-                head = f"* {seq} FETCH (UID {uid} RFC822.SIZE {len(message.data)} BODY[HEADER]<0>"
+                head = f"* {seq} FETCH (UID {uid} RFC822.SIZE {size} BODY[HEADER]<0>"
+            elif partial is not None:
+                data = message.data[: int(partial.group(1))]
+                head = f"* {seq} FETCH (UID {uid} BODY[]<0>"
             else:
                 data = message.data
                 head = f"* {seq} FETCH (UID {uid} BODY[]"

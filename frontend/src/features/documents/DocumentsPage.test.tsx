@@ -187,6 +187,8 @@ describe("document library", () => {
     renderApp("/inbox/documents");
     expect(await screen.findByText("march.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete march.pdf" })).not.toBeInTheDocument();
+    // A viewer's Inbox has no uploader, so the link would lead nowhere.
+    expect(screen.queryByRole("link", { name: "Upload files" })).not.toBeInTheDocument();
   });
 
   it("the library sits in the Inbox and links each file to its page there", async () => {
@@ -198,6 +200,10 @@ describe("document library", () => {
     expect(await screen.findByRole("link", { name: "march.pdf" })).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(screen.getByRole("link", { name: "Upload files" })).toHaveAttribute("href", "/inbox#inbox-add-documents");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // Under the Inbox heading and its Documents tab the library shows no
+    // second title or breadcrumbs; its heading stays for screen readers.
+    expect(screen.getByRole("heading", { level: 2, name: "Document library" })).toHaveClass("visually-hidden");
+    expect(screen.queryByRole("navigation", { name: "Breadcrumbs" })).not.toBeInTheDocument();
   });
 
   it("has no axe violations", async () => {

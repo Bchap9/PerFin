@@ -78,12 +78,8 @@ export function DocumentsPage() {
   const [deleting, setDeleting] = useState<DocumentRow | null>(null);
   return (
     <div className="ledger-stack">
-      <PageHeader
-        title="Document library"
-        description="Every file PerFin has received, with the words it read."
-        breadcrumbs={[{ to: "/inbox", label: "Inbox" }, { label: "Documents" }]}
-        actions={<Link to="/inbox" hash="inbox-add-documents">Upload files</Link>}
-      />
+      {/* The Inbox heading and its Documents tab already name the page. */}
+      <PageHeader title="Document library" titleHidden />
       <form
         className="ledger-filters"
         role="search"
@@ -145,7 +141,17 @@ export function DocumentsPage() {
           </Button>
         </div>
       </form>
-      <Card title={searching ? "Search results" : "Documents"}>
+      <Card
+        title={searching ? "Search results" : "Documents"}
+        // A viewer's Inbox has no uploader, so the action would lead nowhere.
+        {...(canWrite && {
+          actions: (
+            <Link to="/inbox" hash="inbox-add-documents">
+              Upload files
+            </Link>
+          ),
+        })}
+      >
         {query.isPending ? <Spinner label="Loading documents" /> : null}
         {query.isError ? (
           <p role="alert" className="ledger-error">

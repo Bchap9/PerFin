@@ -35,13 +35,34 @@ def candidate_files(root: Path) -> list[str]:
     git = shutil.which("git")
     if git is None:
         raise SystemExit("check_spdx: git not found on PATH")
-    # Fixed argv, no shell: the only variable is the resolved git binary.
+    top = root.resolve()
+    # A bind-mounted checkout (the dev container's /work) can report an owner
+    # other than the user running this, and git then refuses the repository
+    # ("dubious ownership"). Trust only this one directory, for this one
+    # read-only command, and switch off fsmonitor, the repository setting
+    # that would otherwise run a command. No global config is written.
+    # Fixed argv, no shell: the variables are the git binary and the root.
     result = subprocess.run(  # noqa: S603  # nosec B603
-        [git, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        cwd=root,
-        check=True,
+        [
+            git,
+            "-c",
+            f"safe.directory={top}",
+            "-c",
+            "core.fsmonitor=false",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        cwd=top,
+        check=False,
         capture_output=True,
     )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        reason = detail[0] if detail else f"exit status {result.returncode}"
+        raise SystemExit(f"check_spdx: git ls-files failed in {top}: {reason}")
     paths = {p for p in result.stdout.decode("utf-8").split("\0") if p}
     return sorted(paths)
 

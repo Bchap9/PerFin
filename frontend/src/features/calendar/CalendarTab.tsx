@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
-import { Field } from "../../components/Field";
 import { MoneyText } from "../../components/MoneyText";
-import { Select } from "../../components/Select";
 import { Stat, StatGroup } from "../../components/Stat";
 import { Table, type TableColumn } from "../../components/Table";
 import { formatDate } from "../../lib/dates";
@@ -19,8 +16,11 @@ export function eventDays(days: readonly CalendarDay[]): CalendarDay[] {
   return days.filter((day) => day.events.length > 0);
 }
 
-export function CalendarTab() {
-  const [days, setDays] = useState(30);
+/** How far ahead the calendar can look, in days. */
+export const LOOK_AHEAD_DAYS = [30, 60, 90, 180, 365] as const;
+
+/** The calendar for the next `days` days; the page holds the look-ahead control on its tab row. */
+export function CalendarTab({ days }: { days: number }) {
   const query = useQuery({ queryKey: recurringKeys.calendar(days), queryFn: () => getCalendar(days) });
   const accounts = useAccounts();
   const accountName = nameLookup(accounts.data);
@@ -50,9 +50,6 @@ export function CalendarTab() {
 
   return (
     <div className="planning-stack">
-      <Field label="Look ahead">
-        <Select value={String(days)} onChange={(event) => { setDays(Number(event.target.value)); }} options={[30, 60, 90, 180, 365].map((value) => ({ value: String(value), label: `${String(value)} days` }))} />
-      </Field>
       <QueryState loading={query.isPending} error={query.error} label="the calendar">
         {data === undefined ? null : (
           <>

@@ -23,6 +23,24 @@
   "mdy_assumed"`` and a warning). Four-digit first components are
   year-month-day. Two-digit years: ``'`` (Quicken's 2000s marker) or a year
   below 70 is 20xx, otherwise 19xx.
+* **Balance records are not transactions** (``app.ingestion.balance_lines``):
+  a record whose payee is a balance phrase (``Opening Balance``, ``Balance
+  brought forward``...) and that says nothing else (no split, no check
+  number, no memo but a balance phrase, no category but an account in
+  brackets, as Quicken writes its own opening balance ``L[Account]``) is the
+  section's ``opening_balance`` when it is of an opening kind and no
+  transaction was read before it. Its date starts the period; the balance
+  is ``as_of`` the day before (the end of that day, as a balance snapshot
+  means), since it is the balance before that day's other records.
+  Any other such record (a closing balance, an opening one further down) is
+  left out and counted in one ``balance_record_skipped:<n>`` warning for the
+  file: a figure, not money that moved, and not a record the file lost.
+* **A record made of column names is in doubt**: its payee and every other
+  text field it has (memo, category, check number) are names of statement
+  columns (``Description``, ``Reference``, ``Debit``: a converter that
+  wrote the header into the rows). Its date and amount may still be money
+  that moved, so it is kept, with ``low_confidence = ["payee"]``: the
+  importer brings it in pending, with a ``low_confidence_field`` item.
 * Text fields are whitespace-collapsed, cut and formula-neutralised (C7).
 """
 
@@ -30,16 +48,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Final, Literal
 
+from app.ingestion.balance_lines import balance_line, column_name
 from app.ingestion.extract.common import ExtractFailure, clean_text, decode_text, parse_amount
 from app.ingestion.extract.ofx import skipped_warnings
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
     MAX_STATEMENTS,
     WARNINGS_MAX,
+    Balance,
     ExtractedTransaction,
     ExtractOptions,
     ExtractResult,
@@ -48,7 +68,7 @@ from app.ingestion.sandbox.protocol import (
     StatementAccount,
 )
 
-VERSION: Final = "qif/1"
+VERSION: Final = "qif/2"
 TRANSACTION_TYPES: Final = {
     "bank": "bank",
     "cash": "cash",
@@ -209,6 +229,27 @@ def _sections(text: str, options: ExtractOptions, warnings: set[str]) -> list[_S
     return sections
 
 
+def _balance_record(record: _Record) -> str | None:
+    """``opening``/``closing`` for a record that only prints a balance (module doc)."""
+    end = balance_line(record.payee)
+    if end is None or record.splits or (record.number or "").strip():
+        return None
+    if (record.memo or "").strip() and balance_line(record.memo) is None:
+        return None
+    category = (record.category or "").strip()
+    if category and not (category.startswith("[") and category.endswith("]")):
+        return None
+    return end
+
+
+def _column_names(record: _Record) -> bool:
+    """Whether the record's text is only names of statement columns (module doc)."""
+    if not column_name(record.payee):
+        return False
+    others = (record.memo, record.category, record.number)
+    return all(column_name(text) for text in others if (text or "").strip())
+
+
 def _splits(raw: list[dict[str, str]], warnings: set[str]) -> list[SplitLine]:
     lines: list[SplitLine] = []
     for item in raw[:1000]:
@@ -244,8 +285,12 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     statements: list[Statement] = []
     #: Records not read, per section (a set would merge two equal counts).
     skipped: list[int] = []
+    balances_skipped = 0
     for section in sections:
         transactions: list[ExtractedTransaction] = []
+        opening: Balance | None = None
+        #: The opening record's own date (the balance is as of the day before).
+        opened: date | None = None
         unread = section.unread
         for record in section.records:
             parts = _date_parts(record.date_raw or "")
@@ -253,6 +298,14 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
             amount = parse_amount(record.amount_raw)
             if posted is None or amount is None:
                 unread += 1
+                continue
+            end = _balance_record(record)
+            if end == "opening" and opening is None and not transactions:
+                opening = Balance(amount=amount, as_of=posted - timedelta(days=1))
+                opened = posted
+                continue
+            if end is not None:
+                balances_skipped += 1
                 continue
             splits = _splits(record.splits, warnings)
             if splits and sum((s.amount for s in splits), Decimal(0)) != amount:
@@ -267,12 +320,15 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
                     check_number=clean_text(record.number, limit=64),
                     cleared=_CLEARED.get(record.cleared or ""),
                     splits=splits,
+                    low_confidence=["payee"] if _column_names(record) else [],
                 )
             )
         if section.truncated:
             warnings.add(f"transactions_truncated:{options.max_transactions}")
         skipped.append(unread)
         dates = [t.posted for t in transactions]
+        if opened is not None:
+            dates.append(opened)
         statements.append(
             Statement(
                 source_format="qif",
@@ -284,8 +340,11 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
                 transactions=transactions,
                 date_order=order,
                 truncated=section.truncated,
+                opening_balance=opening,
             )
         )
+    if balances_skipped:
+        warnings.add(f"balance_record_skipped:{balances_skipped}")
     return ExtractResult(
         kind=kind,
         ok=True,

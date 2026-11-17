@@ -22,6 +22,24 @@
   align-items: end;
 }
 
+/* A field or checkbox in a row of controls lines up with the buttons beside
+   it: the gap a stacked form leaves under each field would lift it out of
+   line. A checkbox takes an input's height so it centres on the row. */
+.ledger-filters > .field,
+.ledger-toolbar > .field,
+.ledger-toolbar > .checkbox {
+  margin-bottom: 0;
+}
+
+.ledger-toolbar > .checkbox {
+  min-height: 2.5rem;
+}
+
+/* A toolbar above a table in the same panel keeps a gap from it. */
+.card__body > .ledger-toolbar:not(:last-child) {
+  margin-bottom: var(--space-4);
+}
+
 .ledger-actions {
   display: flex;
   flex-wrap: wrap;

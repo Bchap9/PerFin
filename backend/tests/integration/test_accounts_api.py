@@ -357,6 +357,18 @@ def test_balance_validation(actors: Actors, ledger: LedgerFactories) -> None:
         url, json={"as_of_date": future, "balance": {"amount": "1", "currency": "USD"}}
     )
     assert problem_type(ahead) == "balance-in-future"
+    # A day ahead of UTC is someone's today east of it (a browser's local
+    # date); two days ahead is nobody's.
+    tomorrow = (clock.utcnow().date() + timedelta(days=1)).isoformat()
+    local = owner.post(
+        url, json={"as_of_date": tomorrow, "balance": {"amount": "1", "currency": "USD"}}
+    )
+    assert local.status_code == 201, local.text
+    later = (clock.utcnow().date() + timedelta(days=2)).isoformat()
+    beyond = owner.post(
+        url, json={"as_of_date": later, "balance": {"amount": "1", "currency": "USD"}}
+    )
+    assert problem_type(beyond) == "balance-in-future"
     too_long = owner.get(url, params={"start": "2000-01-01", "end": "2026-01-01"})
     assert (too_long.status_code, problem_type(too_long)) == (422, "range-too-long")
     backwards = owner.get(url, params={"start": "2026-02-01", "end": "2026-01-01"})

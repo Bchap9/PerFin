@@ -50,11 +50,14 @@ describe("app shell", () => {
     });
     expect(within(rail).getByRole("link", { name: "Reports" })).toHaveAttribute("aria-current", "page");
     expect(within(rail).getByRole("link", { name: "Home" })).not.toHaveAttribute("aria-current");
+    // The document title follows the page, so a tab or history entry says where it is.
+    expect(document.title).toBe("Tax · PerFin");
 
     await user.click(within(rail).getByRole("link", { name: "Plan" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
     expect(within(rail).getByRole("link", { name: "Plan" })).toHaveAttribute("aria-current", "page");
     expect(within(rail).getByRole("link", { name: "Reports" })).not.toHaveAttribute("aria-current");
+    expect(document.title).toBe("Subscriptions · PerFin");
 
     await user.click(within(rail).getByRole("link", { name: "Settings" }));
     await waitFor(() => {
@@ -90,6 +93,7 @@ describe("app shell", () => {
     renderAt("/login");
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Sections" })).not.toBeInTheDocument();
+    expect(document.title).toBe("Sign in · PerFin");
   });
 
   it("the skip link targets main", async () => {

@@ -14,12 +14,13 @@ It is replayed twice, and both runs are gates:
   this run, one test per row of its table.
 - **unfiled**: nobody files anything, which is what a household sees right
   after its first import. Every bar is the same but one: the kind of a
-  series is held at the figure reached (:data:`KIND_RIGHT_UNFILED_MIN`), not
-  at the target. Rent, a loan, water and a local gym at merchants no
-  dictionary knows are kind ``other`` until somebody files a row, so the 90%
-  target is **not met** on this run. Whether it has to be is the owner's
-  decision (``docs/CATEGORISATION.md``); the gate keeps the run from getting
-  worse meanwhile.
+  series is held at the figure reached (:data:`KIND_RIGHT_UNFILED_MIN`).
+  Rent, water, a sewer and tuition at businesses no dictionary knows are
+  bills by the category the engine suggests for their rows (the owner's
+  decision for 1.0.0); a car loan whose entry says only ``RETAIL PMT``, a
+  local climbing gym and a swim school suggest nothing that says a kind and
+  stay ``other`` until somebody files a row. The 90% target is met on this
+  run too.
 
 A failing target prints the series behind it.
 
@@ -54,9 +55,9 @@ KIND_RIGHT_MIN = 0.90
 PRICE_CHANGES_FALSE_MAX = 0
 ENDED_WRONG_MAX = 0
 
-#: Series kind right when nobody files anything: 33 of the 40 planted series,
-#: under the 90% target (module doc). Raised when the figure rises; never lowered.
-KIND_RIGHT_UNFILED_MIN = 0.825
+#: Series kind right when nobody files anything: 37 of the 40 planted series
+#: (module doc). Raised when the figure rises; never lowered.
+KIND_RIGHT_UNFILED_MIN = 0.925
 
 _measured: dict[bool, SubscriptionMetrics] = {}
 

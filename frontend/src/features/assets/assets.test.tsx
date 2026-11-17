@@ -95,6 +95,139 @@ describe("assets", () => {
     expect(api.callsTo("POST", "/api/v1/assets/:id/valuations")[0]?.body).toMatchObject({ value: { amount: "335000", currency: "USD" } });
   });
 
+  it("asks before deleting a value", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
+      "DELETE /api/v1/assets/:id/valuations/:vid": () => new Response(null, { status: 204 }),
+    });
+    renderApp(`${HUB}?tab=valuations`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete the value of 2025-06-01" }));
+    let dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Delete this value?" })).not.toBeInTheDocument();
+    expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Delete the value of 2025-06-01" }));
+    dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+    api.on("GET /api/v1/assets/:id/valuations", () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete value" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")).toHaveLength(1); });
+    expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")[0]?.path).toBe(`/api/v1/assets/${ASSET}/valuations/v1`);
+    await vi.waitFor(() => { expect(screen.queryByRole("dialog", { name: "Delete this value?" })).not.toBeInTheDocument(); });
+    // The row and its button are gone: focus goes to the history table, not the page body.
+    await vi.waitFor(() => { expect(screen.queryByRole("button", { name: "Delete the value of 2025-06-01" })).not.toBeInTheDocument(); });
+    await vi.waitFor(() => { expect(screen.getByRole("region", { name: "Valuation history" })).toHaveFocus(); });
+  });
+
+  it("moves focus to the history only once the confirm is closed", async () => {
+    // A modal dialog makes the page inert: focus moved while the confirm is
+    // still open is lost. jsdom has no showModal, so stand one in.
+    const proto = HTMLDialogElement.prototype as unknown as Record<string, unknown>;
+    const saved = { showModal: proto["showModal"], close: proto["close"] };
+    proto["showModal"] = function (this: HTMLDialogElement) { this.setAttribute("open", ""); };
+    proto["close"] = function (this: HTMLDialogElement) { this.removeAttribute("open"); };
+    try {
+      const api = mockApi({
+        ...ownerSession(),
+        ...referenceHandlers(),
+        "GET /api/v1/accounts": page([HOME]),
+        "GET /api/v1/accounts/:id": () => json(HOME),
+        "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+        "GET /api/v1/assets/:id": () => json(asset),
+        "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
+        "DELETE /api/v1/assets/:id/valuations/:vid": () => new Response(null, { status: 204 }),
+      });
+      renderApp(`${HUB}?tab=valuations`);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("button", { name: "Delete the value of 2025-06-01" }));
+      const dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+      const region = screen.getByRole("region", { name: "Valuation history" });
+      const openAtFocus: boolean[] = [];
+      region.addEventListener("focus", () => { openAtFocus.push(document.querySelector("dialog[open]") !== null); });
+      api.on("GET /api/v1/assets/:id/valuations", () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }));
+      await user.click(within(dialog).getByRole("button", { name: "Delete value" }));
+      await vi.waitFor(() => { expect(region).toHaveFocus(); });
+      expect(openAtFocus).toEqual([false]);
+    } finally {
+      proto["showModal"] = saved.showModal;
+      proto["close"] = saved.close;
+    }
+  });
+
+  it("offers Add valuation, not Add transaction, as an asset account's main action", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    const { router } = renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    expect(screen.queryByRole("button", { name: "Add transaction" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
+    expect(currentHref(router)).toBe(`${HUB}?tab=valuations`);
+    const form = await screen.findByRole("form", { name: "Add a value" });
+    await vi.waitFor(() => { expect(within(form).getByLabelText(/^Value/)).toHaveFocus(); });
+    // A transaction can still be added, from the account's menu.
+    await user.click(screen.getByRole("button", { name: "Actions for Family home" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Family home" })).getByRole("menuitem", { name: "Add transaction" }));
+    expect(await screen.findByRole("dialog", { name: "Add transaction" })).toBeInTheDocument();
+  });
+
+  it("Add valuation focuses the value field once, not again when history returns to Valuations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    const { router } = renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    const form = await screen.findByRole("form", { name: "Add a value" });
+    await vi.waitFor(() => { expect(within(form).getByLabelText(/^Value/)).toHaveFocus(); });
+    // Leave Valuations without the tab control (a pushed entry), then come back with Back.
+    router.history.push(HUB);
+    expect(await screen.findByRole("tab", { name: "Overview", selected: true })).toBeInTheDocument();
+    router.history.back();
+    const again = await screen.findByRole("form", { name: "Add a value" });
+    expect(screen.getByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
+    // Give a stray effect the chance to run before checking.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(within(again).getByLabelText(/^Value/)).not.toHaveFocus();
+  });
+
+  it("Add valuation on an asset account without details asks for them with a first value", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [], next_cursor: null }),
+    });
+    renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    const dialog = await screen.findByRole("dialog", { name: "Asset details for Family home" });
+    expect(within(dialog).getByLabelText(/^First value/)).toBeInTheDocument();
+  });
+
   it("deleting the asset details keeps the account", async () => {
     const state = { items: [asset] };
     const api = mockApi({

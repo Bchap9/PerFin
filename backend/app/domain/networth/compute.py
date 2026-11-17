@@ -23,7 +23,13 @@ Value of an account at the end of day ``d``, in its own currency:
   Cash moves with ledger transactions and ``investment_txn.amount``. With a
   balance anchor ``A`` (a statement's or a person's figure for the whole
   account) on or before ``d``: ``anchor + H(d) - H(A.date) + cash moves in
-  (A.date, d]``; without one: ``H(d) + every cash move up to d``.
+  (A.date, d]``; without one: ``H(d) + every cash move up to d``. A
+  statement's opening positions (units held before its period, dated on its
+  first day: ``opening_import_hash``) dated after ``A.date`` count in
+  ``H(A.date)``, valued at the close then (else the one used on ``d``): the
+  anchor already holds them, so the period does not count them twice. An
+  opening's own price is its cost basis, so it prices the units only where
+  no stored price or trade does.
 * **Loan** accounts (loan, mortgage, line of credit) are kept as computed
   balance snapshots by ``app.domain.loans.service.sync_balance``; a loan
   account with no anchor yet on ``d`` falls back to ``principal_original``
@@ -69,7 +75,13 @@ from app.domain.assets.models import AssetValuation, ValuationSource
 from app.domain.fx.service import FxConverter
 from app.domain.investments import lots as engine
 from app.domain.investments import service as investments
-from app.domain.investments.models import InvestmentTxn, Lot, Security
+from app.domain.investments.models import (
+    InvestmentTxn,
+    InvestmentTxnType,
+    Lot,
+    Security,
+    opening_import_hash,
+)
 from app.domain.investments.valuation import PriceBook
 from app.domain.loans.models import Loan, LoanPayment
 from app.domain.transactions.models import Transaction
@@ -77,6 +89,11 @@ from app.domain.transactions.models import Transaction
 ZERO: Final = Decimal(0)
 #: Version of the ``breakdown`` JSON written to ``net_worth_snapshot``.
 BREAKDOWN_VERSION: Final = 1
+#: Version of how a day is valued, stored as ``breakdown["valuation"]``: a
+#: stored row with a lower one (or none) was valued by older rules and is
+#: rewritten by the next snapshot job (``app.domain.networth.service``).
+#: 2: a statement's opening positions count in its opening value.
+VALUATION_VERSION: Final = 2
 
 Side = Literal["asset", "liability"]
 
@@ -265,6 +282,7 @@ class NetWorthPoint:
         classes = self.by_class()
         return {
             "version": BREAKDOWN_VERSION,
+            "valuation": VALUATION_VERSION,
             "by_class": {
                 "assets": {k: text(v) for k, v in classes["asset"].items()},
                 "liabilities": {k: text(v) for k, v in classes["liability"].items()},
@@ -295,6 +313,16 @@ class NetWorthPoint:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _Opening:
+    """Units a statement says were held before its period (statement import, step 7)."""
+
+    security_id: uuid.UUID
+    currency: str
+    on: date
+    quantity: Decimal
+
+
 @dataclass
 class _AccountData:
     account: Account
@@ -303,6 +331,7 @@ class _AccountData:
     valuations: _Valuations | None = None
     invest_moves: _Cumulative | None = None
     positions: list[_Position] = field(default_factory=list)
+    openings: list[_Opening] = field(default_factory=list)
     loan_origination: date | None = None
     loan_principal: Decimal = ZERO
     loan_paid: _Cumulative | None = None
@@ -319,12 +348,14 @@ class NetWorthBook:
         until: date,
         data: list[_AccountData],
         prices: PriceBook,
+        opening_prices: Mapping[uuid.UUID, tuple[list[date], list[Decimal]]] | None = None,
     ) -> None:
         self.household_id = household_id
         self.target = target
         self.until = until
         self._data = data
         self._prices = prices
+        self._opening_prices = opening_prices or {}
         self._to_target = FxConverter(db, household_id, target, until=until)
         self._to_account: dict[str, FxConverter] = {}
         self._db = db
@@ -486,9 +517,13 @@ class NetWorthBook:
         }
         positions = _replay_positions(db, household_id, invest, txns, seeds, securities)
         invest_moves: dict[uuid.UUID, dict[date, Decimal]] = defaultdict(dict)
+        openings: dict[uuid.UUID, list[_Opening]] = defaultdict(list)
         for txn in txns:
             by_day = invest_moves[txn.account_id]
             by_day[txn.trade_date] = by_day.get(txn.trade_date, ZERO) + txn.amount
+            opening = _opening(txn, securities)
+            if opening is not None:
+                openings[txn.account_id].append(opening)
 
         data: list[_AccountData] = []
         for account in accounts:
@@ -504,14 +539,32 @@ class NetWorthBook:
             ):
                 entry.positions = positions.get(account.id, [])
                 entry.invest_moves = _Cumulative.of(invest_moves.get(account.id, {}))
+                entry.openings = openings.get(account.id, [])
             loan = loans.get(account.id)
             if loan is not None:
                 entry.loan_origination = loan.origination_date
                 entry.loan_principal = loan.principal_original
                 entry.loan_paid = _Cumulative.of(paid.get(account.id, {}))
             data.append(entry)
-        prices = PriceBook(db, household_id, security_ids, until=until, trades=txns)
-        return cls(db, household_id, target, until, data, prices)
+        # An opening's price is the position's cost basis, not a trade: it
+        # prices the units only where nothing else does (:meth:`_close`).
+        opening_ids = {t.id for t in txns if _opening(t, securities) is not None}
+        prices = PriceBook(
+            db,
+            household_id,
+            security_ids,
+            until=until,
+            trades=[t for t in txns if t.id not in opening_ids],
+        )
+        by_security: dict[uuid.UUID, dict[date, Decimal]] = defaultdict(dict)
+        for txn in txns:
+            if txn.id in opening_ids and txn.security_id is not None and txn.price:
+                by_security[txn.security_id].setdefault(txn.trade_date, txn.price)
+        opening_prices = {
+            security_id: (sorted(by_day), [by_day[d] for d in sorted(by_day)])
+            for security_id, by_day in by_security.items()
+        }
+        return cls(db, household_id, target, until, data, prices, opening_prices)
 
     # -- evaluation ----------------------------------------------------------
 
@@ -541,6 +594,17 @@ class NetWorthBook:
             self._to_account[currency] = found
         return found
 
+    def _close(self, security_id: uuid.UUID, day: date) -> Decimal | None:
+        """The close of ``day`` (``PriceBook``), else the latest opening's price up to it."""
+        close = self._prices.close(security_id, day)
+        if close is not None:
+            return close.close
+        series = self._opening_prices.get(security_id)
+        if series is None:
+            return None
+        at = bisect.bisect_right(series[0], day)
+        return series[1][at - 1] if at else None
+
     def _holdings(self, entry: _AccountData, day: date, unpriced: set[uuid.UUID]) -> Decimal:
         """Market value of the account's positions at the end of ``day`` (account currency)."""
         total = ZERO
@@ -550,15 +614,45 @@ class NetWorthBook:
                 quantity = position.at(day)
                 if quantity == 0:
                     continue
-                close = self._prices.close(position.security_id, day)
+                close = self._close(position.security_id, day)
                 if close is None:
                     unpriced.add(position.security_id)
                     continue
-                value = fx.try_convert(quantity * close.close, position.currency, day)
+                value = fx.try_convert(quantity * close, position.currency, day)
                 if value is None:
                     unpriced.add(position.security_id)
                     continue
                 total += value
+        return total
+
+    def _opened(self, entry: _AccountData, anchor_day: date, day: date) -> Decimal:
+        """What the statement openings dated in ``(anchor_day, day]`` were worth on ``anchor_day``.
+
+        An opening row is dated on the statement's first day although its
+        units were held before it, so a balance anchored before that day (a
+        statement's opening value, a person's figure) already counts them:
+        they are part of ``H(anchor)``, not something that arrived after it.
+        Each is valued at the close on the anchor's day; with none known
+        then, at the close used on ``day`` (so they add nothing either way).
+        """
+        total = ZERO
+        if not entry.openings:
+            return total
+        fx = self._converter(entry.account.currency)
+        with localcontext(calc_context()):
+            for opening in entry.openings:
+                if not anchor_day < opening.on <= day:
+                    continue
+                on = anchor_day
+                close = self._close(opening.security_id, anchor_day)
+                if close is None:
+                    on = day
+                    close = self._close(opening.security_id, day)
+                if close is None:
+                    continue
+                value = fx.try_convert(opening.quantity * close, opening.currency, on)
+                if value is not None:
+                    total += value
         return total
 
     def _value(self, entry: _AccountData, day: date, unpriced: set[uuid.UUID]) -> Decimal:
@@ -575,7 +669,9 @@ class NetWorthBook:
             holdings = self._holdings(entry, day, unpriced)
             if anchor is None:
                 return holdings + entry.moves.upto(day) + entry.invest_moves.upto(day)
-            then = self._holdings(entry, anchor.as_of_date, unpriced)
+            then = self._holdings(entry, anchor.as_of_date, unpriced) + self._opened(
+                entry, anchor.as_of_date, day
+            )
             moved = entry.moves.between(anchor.as_of_date, day) + entry.invest_moves.between(
                 anchor.as_of_date, day
             )
@@ -644,6 +740,22 @@ class NetWorthBook:
             accounts=tuple(values),
             unpriced_security_ids=tuple(sorted(unpriced, key=lambda u: u.bytes)),
         )
+
+
+def _opening(txn: InvestmentTxn, securities: Mapping[uuid.UUID, Security]) -> _Opening | None:
+    """``txn`` as a statement opening (:class:`_Opening`), when it is one (by its hash)."""
+    if (
+        txn.type is not InvestmentTxnType.TRANSFER_IN
+        or txn.security_id is None
+        or txn.quantity is None
+        or txn.import_hash is None
+        or txn.import_hash != opening_import_hash(txn.account_id, txn.security_id, txn.trade_date)
+    ):
+        return None
+    security = securities.get(txn.security_id)
+    if security is None:  # pragma: no cover - the foreign key keeps it
+        return None
+    return _Opening(txn.security_id, security.currency, txn.trade_date, txn.quantity)
 
 
 def _replay_positions(

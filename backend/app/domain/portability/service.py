@@ -11,7 +11,11 @@ export-not-found`` / ``import-not-found``.
 * :func:`request_export` derives the passphrase key (Argon2id) in the
   request when the user chose one, stores it only wrapped by the master key
   on the archive row, and queues ``portability.export``. One export and
-  one import may be pending per household (``409``).
+  one import may be pending per household (``409``) - pending meaning its
+  job is still queued or running: an archive whose job was dead-lettered
+  (or pruned) is failed with ``job-failed`` and its upload and sealed key
+  shredded (:func:`fail_orphaned`), by the next request and by the
+  ``portability.sweep`` job.
 * :func:`run_export_job` writes the archive into the blob store
   (``permanent`` area, encrypted at rest) and marks it ``ready`` for
   ``PERFIN_EXPORT_TTL_MINUTES``; ``portability.expire`` shreds it then.
@@ -72,7 +76,8 @@ from app.core.events import emit
 from app.core.ids import uuid7
 from app.core.logging import get_logger
 from app.core.settings import Settings
-from app.db.queue import enqueue
+from app.db.models import JobState
+from app.db.queue import enqueue, job_states
 from app.domain.documents import repo as documents_repo
 from app.domain.documents import service as documents_service
 from app.domain.documents.blobstore import (
@@ -106,6 +111,10 @@ log = get_logger(__name__)
 
 #: Argon2id cost for export passphrases (tests lower it).
 EXPORT_KDF: KdfParams = DEFAULT_KDF
+#: The most an uploaded archive's header may ask the API to spend on Argon2id:
+#: the memory PerFin's exports use (a 1 GiB derivation inside the API
+#: container would exhaust it); the pass count keeps the format's ceiling.
+IMPORT_MAX_KDF: Final = KdfParams(MAX_KDF.opslimit, DEFAULT_KDF.memlimit)
 _ZIP_MAGIC: Final = (b"PK\x03\x04", b"PK\x05\x06")
 _KEY_PACK: Final = struct.Struct(">IQ")
 _ERROR_DETAIL_MAX: Final = 300
@@ -221,6 +230,55 @@ def _pending(db: Session, household_id: uuid.UUID, kind: ArchiveKind) -> bool:
         ).scalar_one_or_none()
         is not None
     )
+
+
+_ALIVE: Final = frozenset({JobState.QUEUED, JobState.RUNNING})
+_ORPHAN_DETAIL: Final = "the job stopped before it finished; start again"
+
+
+def fail_orphaned(
+    db: Session, household_id: uuid.UUID, store: BlobStore, kind: ArchiveKind | None = None
+) -> int:
+    """Fail the household's pending archives whose job is no longer queued or running.
+
+    A job that was dead-lettered (every attempt failed, timed out or killed
+    its worker) or already pruned leaves its archive ``pending``; that would
+    block every later export or import with ``409`` and keep the upload and
+    the sealed passphrase key forever. Each such archive is failed with
+    ``job-failed`` like any other failure (blob and key shredded, audited).
+    The job state is read first and the archive locked with ``SKIP LOCKED``,
+    so a running job (which holds its archive's row lock) is never waited
+    for. Returns how many were failed; the caller commits.
+    """
+    query = select(PortabilityArchive.id, PortabilityArchive.job_id).where(
+        PortabilityArchive.household_id == household_id,
+        PortabilityArchive.state == ArchiveState.PENDING,
+    )
+    if kind is not None:
+        query = query.where(PortabilityArchive.kind == kind)
+    pending = db.execute(query).all()
+    if not pending:
+        return 0
+    states = job_states(db, [row.job_id for row in pending])
+    failed = 0
+    for row in pending:
+        if states.get(row.job_id) in _ALIVE:
+            continue
+        archive = db.execute(
+            select(PortabilityArchive)
+            .where(
+                PortabilityArchive.household_id == household_id,
+                PortabilityArchive.id == row.id,
+                PortabilityArchive.state == ArchiveState.PENDING,
+            )
+            .with_for_update(skip_locked=True)
+        ).scalar_one_or_none()
+        if archive is None:
+            continue
+        action = "export.fail" if archive.kind is ArchiveKind.EXPORT else "import.fail"
+        _fail(db, archive, action, "job-failed", _ORPHAN_DETAIL, store)
+        failed += 1
+    return failed
 
 
 def _lock_archive(
@@ -349,10 +407,12 @@ def request_export(
     body: ExportRequest,
     *,
     keyring: Keyring,
+    store: BlobStore,
     request: HTTPConnection | None,
     kdf: KdfParams | None = None,
 ) -> ExportQueuedOut:
     household_id = _household(principal)
+    fail_orphaned(db, household_id, store, ArchiveKind.EXPORT)
     if _pending(db, household_id, ArchiveKind.EXPORT):
         raise _in_progress(ArchiveKind.EXPORT)
     archive_id = uuid7()
@@ -622,8 +682,10 @@ def open_export_download(
 # ---------------------------------------------------------------------------
 
 
-def check_import_allowed(db: Session, principal: Principal) -> None:
-    if _pending(db, _household(principal), ArchiveKind.IMPORT):
+def check_import_allowed(db: Session, principal: Principal, *, store: BlobStore) -> None:
+    household_id = _household(principal)
+    fail_orphaned(db, household_id, store, ArchiveKind.IMPORT)
+    if _pending(db, household_id, ArchiveKind.IMPORT):
         raise _in_progress(ArchiveKind.IMPORT)
 
 
@@ -712,7 +774,7 @@ def store_import(
     keyring: Keyring,
     max_bytes: int,
     passphrase: str | None,
-    max_kdf: KdfParams = MAX_KDF,
+    max_kdf: KdfParams = IMPORT_MAX_KDF,
 ) -> StoredImport:
     """Stream an uploaded archive into the quarantine area (module doc)."""
     writer = EncryptingWriter(store, keyring, uuid7(), area=BlobArea.QUARANTINE)
@@ -761,10 +823,11 @@ def record_import(
     stored: StoredImport,
     *,
     keyring: Keyring,
+    store: BlobStore,
     request: HTTPConnection | None,
 ) -> ImportQueuedOut:
     household_id = _household(principal)
-    check_import_allowed(session, principal)
+    check_import_allowed(session, principal, store=store)
     archive_id = uuid7()
     sealed_key = (
         seal_passphrase_key(keyring, archive_id, *stored.passphrase_key)
@@ -838,7 +901,7 @@ def _load_upload(session: Session, archive: PortabilityArchive, deps: Portabilit
     out = bytearray()
     if archive.passphrase_protected:
         key, salt, kdf = open_passphrase_key(deps.keyring, archive)
-        reader = HeaderReader(MAX_KDF)
+        reader = HeaderReader(IMPORT_MAX_KDF)
         decryptor: ArchiveDecryptor | None = None
         for chunk in stream:
             rest = reader.feed(chunk)

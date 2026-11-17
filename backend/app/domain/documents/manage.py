@@ -91,6 +91,7 @@ from app.domain.documents.schemas import (
     Verification,
 )
 from app.domain.imports.models import StatementRecord
+from app.domain.networth import recompute
 from app.domain.transactions import service as transactions_service
 from app.ingestion.intake.sniff import FileType
 from app.ingestion.intake.upload import StoredUpload, record_stored, store_stream
@@ -874,6 +875,7 @@ def _delete_imported(
             request=request,
         )
         emit(db, household_id, "account.updated", {"account_id": str(snapshot.account_id)})
+        recompute.request_recompute(db, household_id, snapshot.as_of_date)
         db.delete(snapshot)
     db.flush()
 

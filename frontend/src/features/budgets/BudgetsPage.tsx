@@ -15,7 +15,7 @@ import { Table, type TableColumn } from "../../components/Table";
 import { formatDate, todayIsoDate, startOfMonth } from "../../lib/dates";
 import { useCanWrite } from "../accounts/api";
 import { useHouseholdCurrency } from "../planning/currency";
-import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { ErrorLine, PlanForm, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAction } from "../planning/useAction";
 import { budgetKeys, createBudget, listBudgets, type Budget, type BudgetCreate } from "./api";
 
@@ -85,13 +85,13 @@ function NewBudgetDialog({ onClose }: { onClose: () => void }) {
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={create.busy} onClick={() => void submit()}>
+          <Button variant="primary" type="submit" form="budget-form" loading={create.busy}>
             Create budget
           </Button>
         </>
       }
     >
-      <div className="planning-form">
+      <PlanForm id="budget-form" submit={submit}>
         <Field label="Name" error={problems["name"]} required>
           <Input value={name} onChange={(event) => { setName(event.target.value); }} />
         </Field>
@@ -120,7 +120,7 @@ function NewBudgetDialog({ onClose }: { onClose: () => void }) {
           onChange={(event) => { setRollover(event.target.checked); }}
         />
         <ErrorLine message={create.error} />
-      </div>
+      </PlanForm>
     </Dialog>
   );
 }

@@ -463,6 +463,36 @@ describe("transactions grid", () => {
     expect(await screen.findByText("2 transactions changed")).toBeInTheDocument();
   });
 
+  it("shows Select all, in the tab order, where the table is cards", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({ matches: query === "(max-width: 719px)", media: query, addEventListener: () => undefined, removeEventListener: () => undefined })),
+    );
+    setup();
+    renderApp("/transactions");
+    // Under 720px the header row shows only its checkbox, labelled "Select
+    // all" (transactions.css), so it is a focus stop with something to see.
+    const all = await screen.findByLabelText<HTMLInputElement>("Select all loaded transactions");
+    expect(all).not.toHaveAttribute("tabindex");
+    const shown = screen.getByText("Select all");
+    expect(shown).toHaveClass("tx-select-all");
+    expect(shown).not.toHaveClass("visually-hidden");
+    expect(all.labels?.[0]).toContainElement(shown);
+  });
+
+  it("says in the delete dialog why a bulk delete failed", async () => {
+    const api = setup();
+    api.on("POST /api/v1/transactions/bulk", () => problem(403, "forbidden"));
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select all loaded transactions"));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete 2 transactions?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete transactions" }));
+    // The toast region is behind the modal dialog, so the refusal is said here.
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+  });
+
   it("a viewer sees the source and no accept button", async () => {
     setup("viewer", [
       tx("x-1", { category_source: "learned", category_confidence: "0.95" }),

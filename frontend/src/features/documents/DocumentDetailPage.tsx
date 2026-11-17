@@ -416,7 +416,7 @@ export function DocumentDetailPage() {
       {doc === undefined ? null : (
         <>
           <Card title="Details">
-            <dl>
+            <dl className="doc-facts">
               <dt>Kind</dt>
               <dd>
                 {KIND_LABELS[doc.kind]}

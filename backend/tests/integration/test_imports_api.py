@@ -634,6 +634,30 @@ def test_trailing_footers_and_pending_rows_are_counted_not_reported(
     assert (summary["footer_rows"], summary["pending_rows"]) == (1, 1)
 
 
+def test_repeated_header_and_balance_rows_are_counted_in_the_import(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    """A repeated header and a dated balance row import nothing but are recorded."""
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    account = ledger.account(household_id)
+    rows = [
+        SAMPLE_ROWS[0],
+        ["01/04/2026", "Opening balance", "", "1000.00"],
+        SAMPLE_ROWS[1],
+        SAMPLE_ROWS[0],
+        *SAMPLE_ROWS[2:],
+        ["01/31/2026", "Closing balance", "", "2427.90"],
+    ]
+    document_id = _document(factories, household_id, account, result=table_result(rows))
+    _mapping(factories, household_id)
+    assert owner.post(f"{API}/imports/{document_id}/apply-mapping", json={}).status_code == 202
+    assert run_jobs(factories, household_id, APPLY_MAPPING_JOB_TYPE, done=set())
+    summary = owner.get(f"{API}/imports/{document_id}/preview").json()["last_import"]
+    assert (summary["imported"], summary["skipped_rows"]) == (3, 0)
+    assert (summary["header_rows"], summary["balance_rows"]) == (1, 2)
+
+
 # ---------------------------------------------------------------------------
 # Learned layouts: what the household taught, to look at and to forget
 # ---------------------------------------------------------------------------

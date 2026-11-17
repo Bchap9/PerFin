@@ -81,6 +81,7 @@ from app.domain.accounts.visibility import (
 )
 from app.domain.households import repo as households_repo
 from app.domain.households import service as households_service
+from app.domain.networth import recompute
 from app.domain.networth.compute import INVESTMENT_TYPES, NetWorthBook
 from app.domain.transactions.import_hash import normalize_payee
 from app.ingestion.match.institutions import pick
@@ -461,6 +462,7 @@ def create_account(
     if data.opening_balance is not None:
         as_of = data.opening_balance_date or data.opened_on or today()
         repo.upsert_snapshot(db, account, as_of, data.opening_balance.amount, BalanceSource.MANUAL)
+        recompute.request_recompute(db, household_id, as_of)
     _record(
         db,
         principal,
@@ -619,11 +621,18 @@ def reopen_account(
 def delete_account(
     db: Session, principal: Principal, account_id: uuid.UUID, *, request: HTTPConnection | None
 ) -> None:
-    """Delete an account and everything recorded on it (owner/admin)."""
+    """Delete an account and everything recorded on it (owner/admin).
+
+    Its place in the stored net worth history goes too: the days that name
+    it are rewritten without it (``networth.recompute``).
+    """
     _require_role(principal, HouseholdRole.ADMIN)
     account = get_visible_account(db, principal, account_id, need="edit", lock=True)
     state = _audit_state(account)
+    stored = recompute.first_stored_with(db, account.household_id, account.id)
     repo.delete_account(db, account)
+    if stored is not None:
+        recompute.request_recompute(db, account.household_id, stored)
     _record(
         db,
         principal,
@@ -641,6 +650,31 @@ def delete_account(
 # ---------------------------------------------------------------------------
 # Balances
 # ---------------------------------------------------------------------------
+
+
+def _history(db: Session, account: Account, first: date, last: date) -> list[balances.DailyBalance]:
+    """End-of-day balances of ``first..last``, each day valued as :func:`_balances` does.
+
+    The ledger's, except that an investment account is worth its cash plus
+    its holdings on each day: one net-worth book read for the range, valued
+    per day (at most ``MAX_HISTORY_DAYS`` of them).
+    """
+    if account.type not in INVESTMENT_TYPES:
+        return balances.balance_history(db, account, first, last)
+    book = NetWorthBook.load(
+        db,
+        account.household_id,
+        [account.id],
+        target=account.currency,
+        until=last,
+        include_excluded=True,
+    )
+    days = (last - first).days + 1
+    out: list[balances.DailyBalance] = []
+    for offset in range(days):
+        day = first + timedelta(days=offset)
+        out.append(balances.DailyBalance(day, book.values_on(day)[account.id]))
+    return out
 
 
 def balance_history(
@@ -666,7 +700,7 @@ def balance_history(
             f"Ask for at most {MAX_HISTORY_DAYS} days at a time.",
             extra={"max_days": MAX_HISTORY_DAYS},
         )
-    series = balances.balance_history(db, account, first, last)
+    series = _history(db, account, first, last)
     return BalanceHistoryOut(
         account_id=account.id,
         currency=account.currency,
@@ -692,13 +726,15 @@ def record_manual_balance(
     account = _editable(db, principal, account_id)
     if data.balance.currency != account.currency:
         raise _currency_mismatch(account.currency)
-    if data.as_of_date > today():
+    # A day of slack: a browser east of UTC is already on tomorrow's date.
+    if data.as_of_date > today() + timedelta(days=1):
         raise ProblemError(
             422, "balance-in-future", "Balance date in the future", "as_of_date is after today."
         )
     snapshot = repo.upsert_snapshot(
         db, account, data.as_of_date, data.balance.amount, BalanceSource.MANUAL
     )
+    recompute.request_recompute(db, account.household_id, data.as_of_date)
     _record(
         db,
         principal,

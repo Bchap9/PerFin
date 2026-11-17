@@ -40,6 +40,7 @@ from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
 from app.core.errors import ProblemError
 from app.core.settings import Settings
+from app.db.models import Job
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
 from app.domain.documents.blobstore import LocalFSBlobStore
@@ -54,6 +55,7 @@ from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.models import ImportTombstone, StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import import_extraction
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE
 from app.domain.review import reconciliation
 from app.domain.review.layout import stored_result
 from app.domain.review.models import ImportHashAlias
@@ -690,10 +692,26 @@ def states(env: Env, account: Account) -> list[tuple[uuid.UUID, ReviewState]]:
     return [(r.id, r.review_state) for r in env.transactions(account)]
 
 
+def rewrites(env: Env) -> list[str]:
+    """The ``since`` of the net worth rewrites waiting (then taken off the queue)."""
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        jobs = list(
+            db.execute(
+                select(Job).where(Job.type == SNAPSHOT_JOB_TYPE, Job.dedupe_key.is_(None))
+            ).scalars()
+        )
+        found = [str(job.payload.get("since")) for job in jobs]
+        for job in jobs:
+            db.delete(job)
+    return found
+
+
 def test_confirm_writes_the_snapshot_and_closes_the_findings(env: Env) -> None:
     stmt, account, document_id, forged = tampered(env, 71)
     owner = env.client()
     assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    rewrites(env)  # the import's and the delete's: not under test here
     pending = [r for r in env.transactions(account) if r.review_state is ReviewState.PENDING]
     assert len(env.transactions(account)) == len(stmt.transactions)
     assert env.open_reviews(document_id)
@@ -717,6 +735,8 @@ def test_confirm_writes_the_snapshot_and_closes_the_findings(env: Env) -> None:
     assert snapshot.source is BalanceSource.STATEMENT
     assert snapshot.source_document_id == document_id
     assert snapshot.as_of_date == got_date(got["statement"]["period_end"])
+    # The balance it recorded is on a past day: net worth from then is rewritten.
+    assert rewrites(env) == [snapshot.as_of_date.isoformat()]
     (record,) = records(env, document_id)
     assert record.verification == "reconciled"
     assert env.open_reviews(document_id) == []
@@ -894,11 +914,15 @@ def test_a_row_put_back_into_a_confirmed_statement_unchecks_it(env: Env) -> None
     status, got = act(owner, document_id, "confirm", statement=0)
     assert (status, got["statement"]["verification"]) == (200, "reconciled")
     (removed,) = got["statement"]["removed"]
+    period_end = got_date(got["statement"]["period_end"])
+    rewrites(env)
 
     status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
 
     assert status == 200, got
     assert (got["statement"]["status"], got["statement"]["verification"]) == ("off", "unverified")
+    # The row put back and the balance taken back: rewritten from the earlier day.
+    assert rewrites(env) == [min(forged.posted_date, period_end).isoformat()]
     assert [r.verification for r in records(env, document_id)] == ["unverified"]
     waiting = [i for i, state in states(env, account) if state is ReviewState.PENDING]
     assert len(waiting) == 1

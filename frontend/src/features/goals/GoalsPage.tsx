@@ -24,7 +24,8 @@ import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
 import { useCanWrite } from "../accounts/api";
 import { useHouseholdCurrency } from "../planning/currency";
-import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { ErrorLine, PlanForm, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { ConfirmDelete } from "../planning/ConfirmDelete";
 import { useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import {
@@ -112,13 +113,13 @@ function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void 
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
+          <Button variant="primary" type="submit" form="goal-form" loading={save.busy}>
             Save goal
           </Button>
         </>
       }
     >
-      <div className="planning-form">
+      <PlanForm id="goal-form" submit={submit}>
         <Field label="Name" error={problems["name"]} required>
           <Input value={name} onChange={(event) => { setName(event.target.value); }} />
         </Field>
@@ -143,7 +144,7 @@ function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void 
           ))}
         </fieldset>
         <ErrorLine message={save.error} />
-      </div>
+      </PlanForm>
     </Dialog>
   );
 }
@@ -160,6 +161,7 @@ function ContributionsDialog({ goal, canWrite, onClose }: { goal: Goal; canWrite
     success: "Contribution added",
   });
   const remove = useAction((id: string) => removeContribution(goal.id, id), { invalidate, success: "Contribution removed" });
+  const [removing, setRemoving] = useState<Contribution | null>(null);
   const columns: TableColumn<Contribution>[] = [
     { id: "date", header: "Date", rowHeader: true, cell: (row) => formatDate(row.contributed_on) ?? row.contributed_on },
     { id: "amount", header: "Amount", align: "end", cell: (row) => <MoneyText amount={row.amount.amount} currency={row.amount.currency} tone="none" /> },
@@ -170,7 +172,7 @@ function ContributionsDialog({ goal, canWrite, onClose }: { goal: Goal; canWrite
     header: <span className="visually-hidden">Remove</span>,
     align: "end",
     cell: (row) => (
-      <Button size="sm" variant="danger" aria-label={`Remove contribution of ${row.amount.amount} on ${row.contributed_on}`} onClick={() => void remove.run(row.id)}>
+      <Button size="sm" variant="danger" aria-label={`Remove contribution of ${row.amount.amount} on ${row.contributed_on}`} onClick={() => { setRemoving(row); }}>
         Remove
       </Button>
     ),
@@ -227,6 +229,16 @@ function ContributionsDialog({ goal, canWrite, onClose }: { goal: Goal; canWrite
           />
         </QueryState>
       </div>
+      {removing === null ? null : (
+        <ConfirmDelete
+          title="Remove this contribution?"
+          description={`${removing.amount.amount} on ${formatDate(removing.contributed_on) ?? removing.contributed_on} no longer counts towards ${goal.name}.`}
+          label="Remove contribution"
+          action={remove}
+          confirm={() => remove.run(removing.id)}
+          onClose={() => { setRemoving(null); }}
+        />
+      )}
     </Dialog>
   );
 }
@@ -288,32 +300,14 @@ function GoalCard({ goal, canWrite, onEdit, onContribute }: { goal: Goal; canWri
         <ErrorLine message={archive.error} />
       </div>
       {canWrite && confirming ? (
-        <Dialog
-          open
-          onClose={() => { setConfirming(false); }}
+        <ConfirmDelete
           title="Delete goal"
           description={`Delete "${goal.name}" and its contributions?`}
-          footer={
-            <>
-              <Button onClick={() => { setConfirming(false); }}>Cancel</Button>
-              <Button
-                variant="danger"
-                loading={remove.busy}
-                onClick={() => {
-                  void remove.run().then((done) => {
-                    if (done !== undefined) {
-                      setConfirming(false);
-                    }
-                  });
-                }}
-              >
-                Delete goal
-              </Button>
-            </>
-          }
-        >
-          <ErrorLine message={remove.error} />
-        </Dialog>
+          label="Delete goal"
+          action={remove}
+          confirm={() => remove.run()}
+          onClose={() => { setConfirming(false); }}
+        />
       ) : null}
     </Card>
   );

@@ -116,6 +116,7 @@ export function BulkBar({ ids, suggestionIds = [], onDone }: BulkBarProps) {
       <Button
         variant="danger"
         onClick={() => {
+          run.reset();
           setConfirmDelete(true);
         }}
       >
@@ -149,7 +150,14 @@ export function BulkBar({ ids, suggestionIds = [], onDone }: BulkBarProps) {
             </Button>
           </>
         }
-      />
+      >
+        {/* The toast region is behind the modal dialog: a refusal is said here too. */}
+        {run.isError ? (
+          <p role="alert" className="ledger-error">
+            {errorMessage(run.error)}
+          </p>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

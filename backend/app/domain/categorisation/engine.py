@@ -49,6 +49,7 @@ from app.domain.categorisation.dictionary import Hit
 from app.domain.categorisation.memory import Direction, Learned
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.categorisation.pinned import pinned_update
+from app.domain.recurring.detection import BILL_KEYS
 from app.domain.transactions.categories import category_ids_by_key
 from app.domain.transactions.categories import resolve as resolve_category
 from app.domain.transactions.models import MERCHANT_KEY_MAX, Transaction, TransactionSplit
@@ -60,6 +61,45 @@ if TYPE_CHECKING:
 APPLY_MIN: Final = Decimal("0.80")
 #: Tokens of the core that make the key of a merchant the dictionary does not know.
 KEY_TOKENS: Final = 4
+#: Letters and digits such a key needs at least. What is left of "E" or "XY
+#: #0042" is no name: as a key it would make one merchant of every such line,
+#: for what is learned, for a rule and for a series. A brand the dictionary
+#: knows by fewer ("BP") keeps the dictionary's key.
+KEY_CHARS_MIN: Final = 3
+#: Words that say only that cash went in or out. A core of these alone (and
+#: numbers), with at least one of :data:`CASH_CORE_WORDS`, or one that starts
+#: with ``atm``, names nobody: "WITHDRAWAL", "CASH DEPOSIT", "TELLER DEPOSIT",
+#: "ATM 0412 <town>". Like the cash lines clean-up reads by their kind, it has
+#: no merchant key; the keywords still read its core.
+CASH_WORDS: Final = frozenset(
+    {
+        "atm",
+        "cash",
+        "deposit",
+        "deposits",
+        "withdrawal",
+        "withdrawals",
+        "withdraw",
+        "withdrwl",
+        "teller",
+        "counter",
+        "branch",
+        "cheque",
+    }
+)
+CASH_CORE_WORDS: Final = frozenset(
+    {"atm", "cash", "deposit", "deposits", "withdrawal", "withdrawals", "withdraw", "withdrwl"}
+)
+#: The words some banks wrap around a teller's cash ("WITHDRAWAL MADE IN THE
+#: STORE", "CUSTOMER WITHDRAWAL IMAGE", "OVER THE COUNTER WITHDRAWAL").
+#: They name nobody only beside a word for money taken out or paid in
+#: (:data:`CASH_MOVE_WORDS`): around CASH alone they may be a shop ("CASH IN A BRANCH").
+CASH_FILLER_WORDS: Final = frozenset(
+    {"made", "in", "a", "the", "store", "customer", "image", "over"}
+)
+CASH_MOVE_WORDS: Final = frozenset(
+    {"deposit", "deposits", "withdrawal", "withdrawals", "withdraw", "withdrwl"}
+)
 
 _PLACES: Final = Decimal("0.01")
 
@@ -100,6 +140,21 @@ MONEY_BACK_KINDS: Final[frozenset[DescriptorKind]] = frozenset(
 MONEY_IN_MAX: Final = Decimal("0.70")
 KEYWORD_CONFIDENCE: Final = Decimal("0.60")
 KEYWORD_STRONG_CONFIDENCE: Final = Decimal("0.80")
+#: Groups of categories a keyword answers for money coming in only: a word for
+#: pay ("wages") on money going out is pay for somebody else.
+INFLOW_ONLY_GROUPS: Final = frozenset({"income"})
+#: Keywords that say which way the money went, and answer only that way: no
+#: money comes in by a withdrawal, none goes out by a deposit.
+KEYWORD_DIRECTIONS: Final[Mapping[str, Direction]] = {
+    "withdrawal": "out",
+    "cash deposit": "in",
+}
+#: Categories a keyword in the entry description of a labelled ACH line
+#: answers: a bill's (``DES:RENT``, ``DES:TUITION``), the recurring payments
+#: detection calls bills. Any other word there answers nothing: a company is on
+#: the other end, so ``DES:WITHDRAWAL`` is no cash at the counter, and what it
+#: says it charged for (``DES:PHARMACY``, ``DES:GYM``) is its own wording.
+DESCRIBED: Final = BILL_KEYS
 
 #: Money that is not spending at a merchant, read from the descriptor's kind:
 #: ``(kind, direction) -> (default category key, confidence)``. A pair that is
@@ -218,15 +273,39 @@ class Summary:
     )
 
 
+def cash_wording(core: str) -> bool:
+    """Whether ``core`` says only that cash went in or out (:data:`CASH_WORDS`).
+
+    Also with :data:`CASH_FILLER_WORDS`, when a word of :data:`CASH_MOVE_WORDS`
+    is among them.
+    """
+    words = [token for token in core.split() if not token.isdigit()]
+    if not words:
+        return False
+    if words[0] == "atm":
+        return True
+    filler = any(w in CASH_FILLER_WORDS for w in words)
+    return all(w in CASH_WORDS or w in CASH_FILLER_WORDS for w in words) and any(
+        w in (CASH_MOVE_WORDS if filler else CASH_CORE_WORDS) for w in words
+    )
+
+
 def _key_of(core: str) -> str | None:
-    """The first :data:`KEY_TOKENS` tokens of ``core`` that fit a merchant key."""
+    """The first :data:`KEY_TOKENS` tokens of ``core`` that fit a merchant key.
+
+    ``None`` when they hold fewer than :data:`KEY_CHARS_MIN` letters and digits,
+    and for bare cash wording (:func:`cash_wording`).
+    """
+    if cash_wording(core):
+        return None
     tokens = core.split()[:KEY_TOKENS]
     while tokens and len(" ".join(tokens)) > MERCHANT_KEY_MAX:
         tokens.pop()
-    if tokens:
-        return " ".join(tokens)
     # One token longer than a key: its start still names the merchant.
-    return core[:MERCHANT_KEY_MAX].strip() or None
+    key = " ".join(tokens) if tokens else core[:MERCHANT_KEY_MAX].strip()
+    if sum(ch.isalnum() for ch in key) < KEY_CHARS_MIN:
+        return None
+    return key
 
 
 def display_name(key: str | None) -> str | None:
@@ -338,6 +417,31 @@ def _hit_confidence(identity: Identity, hit: Hit, direction: Direction) -> Decim
     return confidence
 
 
+def _described(identity: Identity) -> dictionary.KeywordHit | None:
+    """A keyword in the entry description of a labelled ACH line (``DES:RENT``), or ``None``.
+
+    Read only when the company's name holds none: "<name> DES:TUITION" is
+    tuition at a business no list knows. Only a bill's word answers there
+    (:data:`DESCRIBED`), or pay's word (an ``income`` category, which the
+    caller allows for money in only): a company that pulls money by ACH
+    ("<name> DES:WITHDRAWAL") was paid, it handed out no cash.
+    """
+    for signal in sorted(identity.signals):
+        prefix, _, described = signal.partition(":")
+        if prefix == "descr" and described:
+            hit = dictionary.keyword(described, None)
+            if hit is None:
+                return None
+            group = hit.category.partition(".")[0]
+            return hit if _is_bill(hit.category) or group in INFLOW_ONLY_GROUPS else None
+    return None
+
+
+def _is_bill(key: str) -> bool:
+    """Whether ``key`` is under one of :data:`DESCRIBED` (``housing`` is under ``housing.``)."""
+    return key.startswith(DESCRIBED) or f"{key}." in DESCRIBED
+
+
 def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Decimal] | None:
     """The kind's, the merchant's or a keyword's answer: ``(source, key, confidence)``.
 
@@ -355,6 +459,13 @@ def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Deci
         confidence = _hit_confidence(identity, hit, direction)
         return None if confidence is None else ("dictionary", hit.merchant.category, confidence)
     word = dictionary.keyword(identity.core, identity.via) if identity.core else None
+    if word is None:
+        word = _described(identity)
+    if word is not None and (
+        (direction == "out" and word.category.partition(".")[0] in INFLOW_ONLY_GROUPS)
+        or KEYWORD_DIRECTIONS.get(word.word, direction) != direction
+    ):
+        return None
     if word is not None:
         confidence = KEYWORD_STRONG_CONFIDENCE if word.strong else KEYWORD_CONFIDENCE
         if direction == "in" and identity.kind not in MONEY_BACK_KINDS:
@@ -383,7 +494,8 @@ def decide(
        ``memory.STALE_DAYS``);
     4. the descriptor's kind (:data:`KIND_CATEGORIES`, ``dictionary``);
     5. the dictionary's merchant (``dictionary``);
-    6. a telling word (``keyword``).
+    6. a telling word (``keyword``), in the core or else, for a bill only
+       (:data:`DESCRIBED`), in a labelled ACH line's entry description.
 
     When the household is split on the merchant (a share below the minimum),
     steps 4 to 6 give a suggestion at most. So do steps 5 and 6 for money
@@ -823,8 +935,10 @@ def keys_at(
     """The keys the rows of ``account_id`` and ``direction`` that carried ``old`` carry now.
 
     For a recurring series (``Summary.renamed_at``): rows that name nobody
-    any more are left out, since no series can be found for them. Empty when
-    no such row carried ``old``; ``{old}`` alone when the key did not move.
+    any more are left out, since no key can follow them (a series whose rows
+    all name nobody loses its key: ``service._follow_keys``). Empty when no
+    such row carried ``old`` or none names anybody now; ``{old}`` alone when
+    the key did not move.
     """
     return frozenset(
         key for key in renamed_at.get((account_id, direction, old), ()) if key is not None

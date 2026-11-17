@@ -7,7 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { Button } from "../../components/Button";
 import { Checkbox } from "../../components/Checkbox";
@@ -106,6 +106,12 @@ function isGone(error: unknown): boolean {
 }
 
 /**
+ * Told when the person answered (or dismissed) an item, so the card list can
+ * move focus off the pressed button when the reload takes it away.
+ */
+export const AnsweredContext = createContext<() => void>(() => undefined);
+
+/**
  * Resolve the item and reload what it may have changed. No toast: the card
  * says what happened once the list is back.
  */
@@ -114,9 +120,11 @@ export function useResolve(
   onError: (message: string | null) => void,
 ) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   return useMutation({
     mutationFn: (body: ResolveBody) => resolveItem(item.id, body),
     onSuccess: () => {
+      answered();
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
       void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
@@ -333,6 +341,7 @@ export function NewInstitutionTools({
   actionable: boolean;
 }) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   const detail = useItemDetail(item);
   const [institution, setInstitution] = useState("");
   const [similar, setSimilar] = useState(true);
@@ -343,6 +352,7 @@ export function NewInstitutionTools({
     mutationFn: () =>
       rememberLayout(item.id, layoutRequest(institution, similar, replace)),
     onSuccess: () => {
+      answered();
       setError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });

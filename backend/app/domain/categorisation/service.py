@@ -283,6 +283,14 @@ def _keys_of_series(
     return engine.keys_at(account_id, direction, key, summary.renamed_at) or frozenset({key})
 
 
+def _names_nobody_now(
+    account_id: uuid.UUID, direction: Direction, key: str, summary: Summary
+) -> bool:
+    """Whether rows of ``account_id`` and ``direction`` carried ``key``, none naming anybody now."""
+    now = summary.renamed_at.get((account_id, direction, key), frozenset())
+    return bool(now) and all(new is None for new in now)
+
+
 def _follow_keys(db: Session, household_id: uuid.UUID, summary: Summary) -> tuple[int, int]:
     """Carry merchant rules and recurring series over to their merchants' new keys.
 
@@ -299,10 +307,15 @@ def _follow_keys(db: Session, household_id: uuid.UUID, summary: Summary) -> tupl
     where the next detection looks for it. When those rows went to one key,
     the series takes it; when they went to several, it keeps its key and
     ``split_keys`` holds the others, where detection finds a person's
-    "dismissed" or "ended" too (``recurring.service``). Keys already in
+    "dismissed" or "ended" too (``recurring.service``). When none of them
+    names anybody now (bare cash wording, a line of one or two letters),
+    the series has no key either: detection groups such rows by their text
+    and finds a series without a key by its name or payee, so a person's
+    "dismissed" still stands. Keys already in
     ``split_keys`` follow their rows the same way. Nothing else of the rule
     or the series is written. Returns ``(rules, series)`` that follow a new
-    key; a series that only gains ``split_keys`` is not counted.
+    key (a series that loses its key counts too); a series that only gains
+    ``split_keys`` is not counted.
     """
     renamed = summary.renamed
     rules = list(
@@ -344,7 +357,10 @@ def _follow_keys(db: Session, household_id: uuid.UUID, summary: Summary) -> tupl
         old = cast(str, series.merchant_key)
         direction: Direction = "in" if series.amount_min >= 0 else "out"
         keys = _keys_of_series(series.account_id, direction, old, summary)
-        if len(keys) == 1 and old not in keys:
+        if _names_nobody_now(series.account_id, direction, old, summary):
+            series.merchant_key = None
+            series_moved += 1
+        elif len(keys) == 1 and old not in keys:
             [series.merchant_key] = keys
             series_moved += 1
         held_now = {

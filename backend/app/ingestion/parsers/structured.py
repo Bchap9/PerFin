@@ -89,6 +89,7 @@ from app.domain.imports.schemas import (
     MappingSpec,
     Sign,
 )
+from app.ingestion.balance_lines import BalanceEnd, balance_line
 from app.ingestion.parsers.accounts import summary_last4
 from app.ingestion.parsers.text import MAX_LINE
 from app.ingestion.sandbox.protocol import Reconciliation, Statement, Table
@@ -163,6 +164,10 @@ class ParsedStatement:
     #: that hold no transaction (totals, closing lines): not reported as
     #: skipped (:func:`_split_footers`).
     footer_rows: list[int] = field(default_factory=list)
+    #: Of ``note_rows``: rows that repeat the header row, and rows that only
+    #: print a balance (:func:`_balance_row`), counted in the import's summary.
+    header_rows: list[int] = field(default_factory=list)
+    balance_rows: list[int] = field(default_factory=list)
     #: Table rows whose date cell says ``Pending``: not yet a transaction,
     #: neither imported nor reported, only counted.
     pending_rows: list[int] = field(default_factory=list)
@@ -177,6 +182,12 @@ class ParsedStatement:
     #: Document parsers: the printed opening balance and the reconciliation
     #: of opening + transactions = closing (``app.ingestion.reconcile``).
     opening_balance: Decimal | None = None
+    #: Tables: the day whose end ``opening_balance`` is the balance at (a
+    #: snapshot's meaning), the day before the opening row's own date, else
+    #: before the first transaction: the row is the balance before that day's
+    #: rows, so a snapshot on its own day would leave them out. A statement's
+    #: (QIF, document parsers) is its ``opening_balance.as_of`` as read.
+    opening_balance_date: date | None = None
     reconciliation: Reconciliation | None = None
     #: Which parser read it (``name/version``), for review items.
     parser: str | None = None
@@ -236,6 +247,7 @@ def from_statement(statement: Statement) -> ParsedStatement:
         date_order_assumed=statement.date_order == "mdy_assumed",
         truncated=statement.truncated,
         opening_balance=statement.opening_balance.amount if statement.opening_balance else None,
+        opening_balance_date=statement.opening_balance.as_of if statement.opening_balance else None,
         reconciliation=statement.reconciliation,
         parser=f"{parser.name}/{parser.version}" if parser is not None else None,
         period_confidence=statement.confidence.get("period"),
@@ -748,6 +760,42 @@ def _continuation(row: Sequence[str], spec: MappingSpec) -> str | None:
     return None
 
 
+def _header_names(row: Sequence[str]) -> list[str]:
+    """A row's cells as header names, trailing blanks dropped (a repeated header)."""
+    names = [_header_cell(cell) for cell in row]
+    while names and not names[-1]:
+        names.pop()
+    return names
+
+
+def _balance_row(row: Sequence[str], spec: MappingSpec) -> BalanceEnd | None:
+    """Which balance a row prints when it says nothing else (``app.ingestion.balance_lines``).
+
+    The payee cell (the memo cell when the payee's is empty) is a balance
+    phrase, and the other of the two is empty or a balance phrase too:
+    ``Opening balance fee`` or a memo of its own is a transaction.
+    """
+    payee = _text(row, spec.payee_column)
+    memo = _text(row, spec.memo_column) if spec.memo_column != spec.payee_column else None
+    described, other = (payee, memo) if payee is not None else (memo, None)
+    end = balance_line(described)
+    if end is None or (other is not None and balance_line(other) is None):
+        return None
+    return end
+
+
+def _balance_figure(
+    row: Sequence[str], spec: MappingSpec, printed_negative: frozenset[str]
+) -> Decimal | None:
+    """A balance row's figure: its balance cell when one is mapped and reads, else its amount."""
+    if spec.balance_column is not None:
+        raw = _text(row, spec.balance_column)
+        figure = _amount(raw, spec.decimal_separator) if raw else None
+        if figure is not None:
+            return figure
+    return _row_amount(row, spec, printed_negative)
+
+
 def _read_rows(
     table: Table,
     spec: MappingSpec,
@@ -764,7 +812,13 @@ def _read_rows(
     * a row whose date cell and amount cells are all empty is a note row
       wherever it stands (a holder's name beside an opening balance, a
       section title over two cells);
-    * a row whose date cell says ``Pending`` is a pending row.
+    * a row whose date cell says ``Pending`` is a pending row;
+    * a row that repeats the header row (case and spacing aside) is a note
+      row: an export that prints its header again on every page;
+    * a row whose description is a balance (:func:`_balance_row`) is a note
+      row; the first of an opening kind gives the statement's
+      ``opening_balance`` (its balance cell, else its amount) and
+      ``opening_balance_date``.
 
     A **continuation row** is a row with one filled cell, under the payee
     or the memo header, directly below a transaction row or below another
@@ -775,7 +829,14 @@ def _read_rows(
     was.
     """
     parsed = ParsedStatement(source_format="csv", truncated=table.truncated)
+    header = (
+        _header_names(table.rows[spec.skip_rows])
+        if spec.has_header and spec.skip_rows < len(table.rows)
+        else None
+    )
     balances: list[tuple[int, date, Decimal, Decimal | None]] = []
+    #: The opening balance row's own date, when it reads.
+    opened: date | None = None
     #: (position of the transaction, row, text) of each candidate continuation.
     continued: list[tuple[int, int, str]] = []
     #: The last transaction row, or the last continuation row below it.
@@ -792,6 +853,19 @@ def _read_rows(
             else:
                 continued.append((len(parsed.transactions) - 1, index, text))
                 line = index
+            continue
+        if header is not None and _header_names(row) == header:
+            parsed.note_rows.append(index)
+            parsed.header_rows.append(index)
+            continue
+        end = _balance_row(row, spec)
+        if end is not None:
+            parsed.note_rows.append(index)
+            parsed.balance_rows.append(index)
+            if end == "opening" and parsed.opening_balance is None:
+                parsed.opening_balance = _balance_figure(row, spec, printed_negative)
+                raw_opening = _cell(row, spec.date_column)
+                opened = parse_cell_date(raw_opening, spec.date_format) if raw_opening else None
             continue
         if _blank(row, spec.date_column, spec.amount_column, spec.debit_column, spec.credit_column):
             parsed.note_rows.append(index)
@@ -828,6 +902,9 @@ def _read_rows(
         currencies = {t.currency for t in parsed.transactions if t.currency}
         if len(currencies) == 1:
             parsed.currency = next(iter(currencies))
+    if parsed.opening_balance is not None:
+        before = opened or parsed.period_start
+        parsed.opening_balance_date = before - timedelta(days=1) if before else None
     chronological = _chronological(balances)
     printed = [(posted, balance) for _, posted, _, balance in chronological if balance is not None]
     if printed:
@@ -1007,12 +1084,16 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     orphans: list[int] = []
     notes: list[int] = []
     pending: list[int] = []
+    headers: list[int] = []
+    balance_rows: list[int] = []
     for key, indexes in rows.items():
         parsed = _read_rows(table, spec, indexes, printed_negative)
         if not parsed.transactions:
             orphans.extend(parsed.skipped_rows)
             notes.extend(parsed.note_rows)
             pending.extend(parsed.pending_rows)
+            headers.extend(parsed.header_rows)
+            balance_rows.extend(parsed.balance_rows)
             continue
         parsed.last4 = key[0] if key[0] is not None and shared[key[0]] == 1 else None
         first = parsed.transactions[0].row
@@ -1028,6 +1109,8 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
                 skipped_rows=sorted(orphans),
                 note_rows=sorted(notes),
                 pending_rows=sorted(pending),
+                header_rows=sorted(headers),
+                balance_rows=sorted(balance_rows),
                 truncated=table.truncated,
             )
         ]
@@ -1037,6 +1120,10 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
         statements[0].note_rows = sorted([*statements[0].note_rows, *notes])
     if pending:
         statements[0].pending_rows = sorted([*statements[0].pending_rows, *pending])
+    if headers:
+        statements[0].header_rows = sorted([*statements[0].header_rows, *headers])
+    if balance_rows:
+        statements[0].balance_rows = sorted([*statements[0].balance_rows, *balance_rows])
     _split_footers(table, spec, statements)
     return statements
 

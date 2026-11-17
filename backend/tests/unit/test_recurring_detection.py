@@ -43,6 +43,7 @@ def rows(
     account: uuid.UUID = ACCOUNT,
     cadence_hints: frozenset[str] = frozenset(),
     habit_hint: bool = False,
+    suggested: str | None = None,
 ) -> list[Observed]:
     day_list = list(days)
     if isinstance(amounts, (Decimal, str)):
@@ -66,6 +67,7 @@ def rows(
             payee_id=payee_id,
             cadence_hints=cadence_hints,
             habit_hint=habit_hint,
+            suggested_key=suggested,
         )
         for d, v in zip(day_list, values, strict=True)
     ]
@@ -613,6 +615,122 @@ def test_rows_without_a_merchant_key_meet_on_their_text() -> None:
     found = only(detect(ledger))
     assert (found.merchant_key, found.text_key) == (None, "quarry lane studio")
     assert found.kind == "other"  # fixed, but nothing says what it is
+
+
+@pytest.mark.parametrize(
+    ("suggested", "kind"),
+    [
+        ("housing.rent", "bill"),
+        ("utilities.water", "bill"),
+        ("transfers.loan_payment", "bill"),
+        ("family.education", "bill"),
+        # Only a bill-like suggestion says what the series is.
+        ("health.fitness", "other"),
+        ("leisure.hobbies", "other"),
+        (None, "other"),
+    ],
+)
+def test_a_bill_like_suggestion_makes_an_unfiled_series_a_bill(
+    suggested: str | None, kind: str
+) -> None:
+    # Nobody filed the rows; the engine suggested a category for them.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, "-1850.00", key="hollowbrook apts", suggested=suggested)
+    assert only(detect(ledger)).kind == kind
+
+
+@pytest.mark.parametrize(
+    ("text", "amount"),
+    [("withdrawal", "-200.00"), ("cash deposit", "500.00")],
+)
+def test_a_fixed_monthly_cash_line_naming_nobody_is_only_suggested(text: str, amount: str) -> None:
+    # A withdrawal or a cash deposit names nobody: no merchant key, and only
+    # a cash suggestion. Taking out the same sum each month may be a habit
+    # or a payment to somebody, so it is asked about, never shown as running.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, amount, key=None, text=text, kind="unknown", suggested="transfers.cash")
+    assert only(detect(ledger)).status == "suggested"
+
+
+@pytest.mark.parametrize(
+    ("text", "amount"),
+    [("atm quarryvale oh", "-200.00"), ("atm cash deposit elkton", "500.00")],
+)
+def test_a_fixed_monthly_atm_line_naming_nobody_is_only_suggested(text: str, amount: str) -> None:
+    # An ATM line with a town behind it names nobody either, and its core
+    # ("atm") holds no word that suggests cash: the ATM is enough.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, amount, key=None, text=text, kind="unknown")
+    assert only(detect(ledger)).status == "suggested"
+
+
+def test_a_name_that_only_begins_with_atm_is_no_atm() -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, "-200.00", key=None, text="atmosphere studio", kind="unknown")
+    assert only(detect(ledger)).status == "active"
+
+
+@pytest.mark.parametrize(
+    ("key", "suggested", "category"),
+    [
+        # A merchant key names somebody.
+        ("quarry lane studio", "transfers.cash", None),
+        # Another suggestion, or none, says nothing about cash.
+        (None, "leisure.hobbies", None),
+        (None, None, None),
+        # A category somebody filed outranks the suggestion.
+        (None, "transfers.cash", "leisure.hobbies"),
+    ],
+)
+def test_only_a_cash_suggestion_on_rows_naming_nobody_holds_a_series_back(
+    key: str | None, suggested: str | None, category: str | None
+) -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(
+        days,
+        "-200.00",
+        key=key,
+        text="quarry lane studio",
+        kind="unknown",
+        suggested=suggested,
+        category=category,
+    )
+    assert only(detect(ledger)).status == "active"
+
+
+def test_a_stated_category_beats_a_suggested_one() -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days[:3], "-32.00", key="riverbend swim", category="leisure.hobbies") + rows(
+        days[3:], "-32.00", key="riverbend swim", suggested="family.education"
+    )
+    assert only(detect(ledger)).kind == "subscription"
+
+
+def test_a_suggestion_moves_nothing_but_the_kind() -> None:
+    # A bill by its suggestion alone is not judged on its amounts as a bill
+    # is: amounts that swing widely still make no series.
+    days = monthly(date(2026, 1, 6), 6)
+    swinging = ["-40.00", "-95.00", "-52.00", "-130.00", "-61.00", "-77.00"]
+    ledger = rows(days, swinging, key="ashgrove water dist", suggested="utilities.water")
+    assert detect(ledger) == []
+    filed = rows(days, swinging, key="ashgrove water dist", category="utilities.water")
+    assert only(detect(filed)).kind == "bill"
+
+
+@pytest.mark.parametrize("text", ["e", "xy", "j k"])
+def test_rows_meet_on_no_text_of_fewer_than_three_letters(text: str) -> None:
+    # "E", "XY #0042": what is left names nobody, as for a merchant key
+    # (``engine.KEY_CHARS_MIN``), so such rows are no series of one payee.
+    days = monthly(date(2026, 1, 6), 6)
+    assert detect(rows(days, "-30.00", key=None, text=text)) == []
+    assert detect(rows(days, "-30.00", key="zelle", text=text, kind="p2p")) == []
+    assert detection.group_key(rows(days[:1], "-30.00", key=None, text=text)[0]) is None
+
+
+def test_a_text_key_is_held_to_the_floor_of_a_merchant_key() -> None:
+    from app.domain.categorisation import engine
+
+    assert detection.TEXT_KEY_CHARS_MIN == engine.KEY_CHARS_MIN
 
 
 def test_groups_split_by_account_and_direction() -> None:

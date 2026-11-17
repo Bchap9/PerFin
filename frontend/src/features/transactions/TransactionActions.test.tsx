@@ -106,6 +106,8 @@ describe("add a transaction", () => {
     expect(within(dialog).getByText("Choose an account.")).toBeInTheDocument();
     expect(within(dialog).getByText("Enter an amount such as 12.50.")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/^Amount/)).toBeInvalid();
+    // The first field with an error takes focus, so its error is read out.
+    expect(within(dialog).getByLabelText(/^Account/)).toHaveFocus();
     // Correcting a field clears its message straight away.
     await user.selectOptions(within(dialog).getByLabelText(/^Account/), "a-2");
     expect(within(dialog).queryByText("Choose an account.")).not.toBeInTheDocument();
@@ -167,6 +169,10 @@ describe("add a transaction", () => {
     });
     renderApp("/accounts/a-2");
     const user = userEvent.setup();
+    // The account page loads on demand and then fetches the account; on a
+    // slow runner that takes longer than the default 1 s, so wait for its
+    // heading (the page is ready) before looking for the button.
+    await screen.findByRole("heading", { level: 1, name: "Wallet" }, { timeout: 5000 });
     const dialog = await openAddDialog(user);
     await waitFor(() => {
       expect(within(dialog).getByLabelText(/^Account/)).toHaveValue("a-2");

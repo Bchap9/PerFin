@@ -520,6 +520,65 @@ def test_server_without_move_uses_copy_and_expunge(
         assert not any(" MOVE " in c for c in server.commands)
 
 
+def test_server_without_uidplus_never_expunges_other_mail(
+    factories: Factories, keyring: Keyring, store: LocalFSBlobStore, pki: ImapPki
+) -> None:
+    """A bare EXPUNGE would also remove mail the user flagged ``\\Deleted`` elsewhere."""
+    with running_imap(pki, move=False, uidplus=False) as server:
+        household = Household(factories, keyring, store, pki, server)
+        theirs = server.deliver(make_mail(message_id="<flagged-by-user@x.invalid>"))
+        inbox = server.folders["INBOX"]
+        flagged = inbox.find(theirs)
+        assert flagged is not None
+        flagged.deleted = True
+        household.deliver(message_id="<no-uidplus@x.invalid>")
+        for _ in range(3):
+            household.poll()
+        assert not any("EXPUNGE" in c for c in server.commands)
+        assert inbox.find(theirs) is not None  # the user's own flagged mail is still there
+        # Ours is copied once and left flagged; later polls do not copy it again.
+        assert server.count("INBOX") == 0
+        assert len(server.folders[PROCESSED].messages) == 1
+        assert all("SEARCH UNDELETED" in c for c in server.commands if " SEARCH " in c)
+
+
+def test_capabilities_announced_after_login_are_used(
+    factories: Factories, keyring: Keyring, store: LocalFSBlobStore, pki: ImapPki
+) -> None:
+    """Servers such as Dovecot list MOVE and UIDPLUS only once logged in."""
+    with running_imap(pki, caps_after_login=True) as server:
+        household = Household(factories, keyring, store, pki, server)
+        household.deliver(message_id="<caps-after-login@x.invalid>")
+        household.poll()
+        household.poll()
+        assert server.count(PROCESSED) == 1
+        assert any(" MOVE " in c for c in server.commands)
+
+
+def test_body_fetch_is_bounded_even_when_the_declared_size_lies(household: Household) -> None:
+    cap = 10_000
+    uid = household.deliver(message_id="<liar@x.invalid>", body="x" * 50_000)
+    message = household.server.folders["INBOX"].find(uid)
+    assert message is not None
+    message.declared_size = 1_000
+    stats = household.poll(limits=email.RunLimits(max_message_bytes=cap))
+    assert stats is not None
+    assert stats.reasons == {"too_large": 1}
+    fetches = [c for c in household.server.commands if "BODY.PEEK[]" in c]
+    assert fetches
+    assert all(f"BODY.PEEK[]<0.{cap + 1}>" in c for c in fetches)
+    assert household.rows(Document) == []
+
+
+def test_a_message_of_exactly_the_cap_is_accepted(household: Household) -> None:
+    uid = household.deliver(message_id="<exact@x.invalid>")
+    message = household.server.folders["INBOX"].find(uid)
+    assert message is not None
+    stats = household.poll(limits=email.RunLimits(max_message_bytes=len(message.data)))
+    assert stats is not None
+    assert stats.accepted == 1
+
+
 def _run_handler(household: Household, job_type: str) -> None:
     with household.factories.transaction() as db:
         set_context(db, household.id)

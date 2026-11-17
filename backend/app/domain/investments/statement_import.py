@@ -304,6 +304,7 @@ from app.domain.imports.statement_records import (
     record_statement,
 )
 from app.domain.investments.models import (
+    IMPORT_HASH_VERSION,
     AssetClass,
     CostMethod,
     Holding,
@@ -312,6 +313,7 @@ from app.domain.investments.models import (
     Lot,
     Price,
     Security,
+    opening_import_hash,
     security_name_key,
 )
 from app.domain.investments.service import cost_method, replay_position
@@ -331,7 +333,7 @@ from app.ingestion.sandbox.protocol import (
     Statement,
 )
 
-HASH_VERSION: Final = "perfin-invest-v1"
+HASH_VERSION: Final = IMPORT_HASH_VERSION
 STATEMENT_PRICE_SOURCE: Final = "statement"
 #: Run warning: a security listed again for a day at another price (step 8).
 DUPLICATE_PRICE_IGNORED: Final = "duplicate_price_ignored"
@@ -393,6 +395,9 @@ class InvestmentImport:
     #: Activity lines of imported statements held back for a person (step 3).
     lines_held: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
+    #: The first day a price was written or changed on (prices name no
+    #: document: the importer asks for net worth to be rewritten from it).
+    first_price: date | None = None
     #: What the run read around rather than wrote (each code once).
     warnings: list[str] = field(default_factory=list)
 
@@ -1382,10 +1387,13 @@ def _record_price(
                 source=STATEMENT_PRICE_SOURCE,
             )
         )
-        ctx.result.prices += 1
     elif existing.source == STATEMENT_PRICE_SOURCE and existing.close != price:
         existing.close = price
-        ctx.result.prices += 1
+    else:
+        return
+    ctx.result.prices += 1
+    earliest = ctx.result.first_price
+    ctx.result.first_price = day if earliest is None else min(earliest, day)
 
 
 # ---------------------------------------------------------------------------
@@ -1627,11 +1635,7 @@ def _openings(
                 cost = abs(held_at_end.cost_basis) / held_at_end.quantity
             else:
                 cost = held_at_end.price_per_unit or Decimal(0)
-        digest = hashlib.sha256(
-            _SEP.join(
-                (HASH_VERSION, str(account.id), "opening", str(security_id), opened_on.isoformat())
-            ).encode()
-        ).hexdigest()
+        digest = opening_import_hash(account.id, security_id, opened_on)
         if digest in existing:
             continue
         existing.add(digest)

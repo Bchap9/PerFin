@@ -241,6 +241,17 @@
   font-size: var(--font-size-sm);
 }
 
+/* "Select all" is for the cards below 720px (shown there); a wide table's
+   header checkbox sits in its column with no words. */
+.tx-select-all {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* Under 720px a row is two lines to glance at: merchant and amount, then
    date and category, with the checkbox and the row menu at the sides. The
    account and how a category was decided leave the row (the drawer shows
@@ -269,6 +280,43 @@
 
   .tx-grid .table tbody tr > [data-label]::before {
     content: none;
+  }
+
+  /* The header row keeps only its checkbox, labelled "Select all", above
+     the cards; the other column headers stay for screen readers only. */
+  .tx-grid .table thead {
+    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+  }
+
+  .tx-grid .table thead th:not(.tx-col-select) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .tx-select-all {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+  }
+
+  .tx-grid .table thead th.tx-col-select {
+    display: block;
+    padding: 0 0 var(--space-2);
+    border: 0;
+    color: var(--color-text);
+    font-size: var(--font-size-sm);
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   .tx-grid .table .tx-col-account,

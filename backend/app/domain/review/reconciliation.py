@@ -128,6 +128,7 @@ from app.domain.imports import tombstones
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.statement_answers import REF_FIELD, statement_refs
 from app.domain.imports.statement_records import withdraw_snapshot
+from app.domain.networth import recompute
 from app.domain.review import repo, service
 from app.domain.review.actions import correct_balances
 from app.domain.review.causes import Cause, LedgerRow, PageAmount, fee_lines, rank_causes
@@ -1016,6 +1017,7 @@ def confirm(
             BalanceSource.STATEMENT,
             source_document_id=opened.document.id,
         )
+        recompute.request_recompute(db, account.household_id, as_of)
         emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
         snapshot = True
     if record is not None:
@@ -1183,6 +1185,7 @@ def restore(
         )
         db.add(row)
         db.flush()
+        recompute.request_recompute(db, account.household_id, row.posted_date)
         emit(
             db,
             account.household_id,

@@ -623,6 +623,73 @@ def test_removing_totp_needs_step_up_and_drops_recovery_codes(
 
 
 # ---------------------------------------------------------------------------
+# Factor changes end the user's other sessions
+# ---------------------------------------------------------------------------
+
+
+def _other_sessions(
+    factories: Factories, client: TestClient, record: UserRecord
+) -> list[uuid.UUID]:
+    """A full session and one waiting for its second factor, on other devices."""
+    full = factories.login(client, record)
+    pending = _pending(factories, client, record)
+    client.cookies.clear()
+    return [full.session_id, pending.session_id]
+
+
+def _assert_revoked(admin_engine: Engine, ids: list[uuid.UUID]) -> None:
+    for session_id in ids:
+        assert _session_row(admin_engine, session_id).revoked_at is not None, session_id
+
+
+def test_enrolling_a_factor_ends_other_sessions(
+    factories: Factories, client: TestClient, settings: Settings, admin_engine: Engine
+) -> None:
+    record = factories.user()  # no factor yet
+    others = _other_sessions(factories, client, record)
+    login = factories.login(client, record, mfa_verified=False)
+    started = client.post(TOTP, headers=login.headers())
+    assert started.status_code == 201, started.text
+    done = client.post(
+        TOTP_CONFIRM,
+        json={"code": totp_code(started.json()["secret"])},
+        headers=login.headers(),
+    )
+    assert done.status_code == 201, done.text
+    _assert_revoked(admin_engine, others)
+    # The acting browser carries on with its rotated session and new CSRF token.
+    adopt_session_cookie(client, settings, done)
+    assert client.get(SESSIONS).status_code == 200
+    headers = unsafe_headers(done.json()["csrf_token"])
+    assert client.post(RECOVERY, headers=headers).status_code == 200
+
+
+def test_regenerating_recovery_codes_ends_other_sessions(
+    factories: Factories, client: TestClient, admin_engine: Engine
+) -> None:
+    record = factories.user(with_totp=True)
+    others = _other_sessions(factories, client, record)
+    login = factories.login(client, record, mfa_verified=True)
+    assert client.post(RECOVERY, headers=login.headers()).status_code == 200
+    _assert_revoked(admin_engine, others)
+    assert _session_row(admin_engine, login.session_id).revoked_at is None
+    # Same session, same CSRF token: the next write still works.
+    assert client.post(RECOVERY, headers=login.headers()).status_code == 200
+
+
+def test_removing_a_factor_ends_other_sessions(
+    factories: Factories, lenient_client: TestClient, admin_engine: Engine
+) -> None:
+    record = factories.user(with_totp=True)
+    others = _other_sessions(factories, lenient_client, record)
+    login = factories.login(lenient_client, record, mfa_verified=True)
+    assert lenient_client.delete(TOTP, headers=login.headers()).status_code == 204
+    _assert_revoked(admin_engine, others)
+    assert _session_row(admin_engine, login.session_id).revoked_at is None
+    assert lenient_client.get(MFA, headers=login.headers()).status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Login policy helpers (for the local and OIDC login flows)
 # ---------------------------------------------------------------------------
 

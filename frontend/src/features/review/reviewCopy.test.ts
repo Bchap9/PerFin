@@ -84,6 +84,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["possible_duplicate", "near_matches"],
   ["possible_duplicate", "same_content_skipped"],
   ["low_confidence_field", "earlier_rows_kept"],
+  ["low_confidence_field", "opening_balance_not_recorded"],
 ];
 
 describe("review explanations", () => {
@@ -673,6 +674,29 @@ describe("what the import says about rows and accounts", () => {
     );
     expect(unchecked.what).toContain("could not be checked");
     expect(unchecked.what).toContain("no balance was recorded");
+  });
+
+  it("says a file's opening balance was not recorded over the account's own", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "opening_balance_not_recorded",
+        field: "opening_balance",
+        account_id: "a",
+        statement: 0,
+        currency: "USD",
+        amount: "1234.50",
+        as_of: "2026-03-01",
+      }),
+    );
+    expect(found.title).toBe("Opening balance not recorded");
+    expect(found.what).toBe(
+      "This file opens with a balance of $1,234.50 on Mar 1, 2026, but the account already has a different balance for that day, so PerFin did not record it.",
+    );
+    expect(found.steps.join(" ")).not.toContain("confirm");
+    const bare = explain(
+      item("low_confidence_field", { reason: "opening_balance_not_recorded" }),
+    );
+    expect(bare.what).toContain("already has a different balance");
   });
 
   it("explains a value the account list prints differently", () => {

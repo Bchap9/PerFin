@@ -11,6 +11,11 @@
 # opens a listed merchant's name ("pizza" in Pizza Hut) may be a keyword
 # only in that merchant's group of categories.
 #
+# The entry description of a labelled ACH line (`DES:RENT`, `CO ENTRY
+# DESCR:TUITION`) is read too when the company's name holds no keyword, and
+# there only a bill's keyword (`engine.DESCRIBED`), or pay's for money in,
+# answers.
+#
 # `via` ties an entry to a payment processor (the name clean-up gives it).
 # With no `word`, the entry covers everything that processor fronts.
 keywords:
@@ -118,6 +123,15 @@ keywords:
   - {word: preschool, category: family.childcare}
   - {word: montessori, category: family.childcare}
   - {word: tutoring, category: family.education}
+  - {word: tuition, category: family.education}
+  # Lessons in a sport or an art are a pastime, not school: said before
+  # "school". A driving school stays school.
+  - {word: swim school, category: leisure.hobbies}
+  - {word: swimming school, category: leisure.hobbies}
+  - {word: dance school, category: leisure.hobbies}
+  - {word: music school, category: leisure.hobbies}
+  - {word: karate, category: leisure.hobbies}
+  - {word: martial arts, category: leisure.hobbies}
   - {word: university, category: family.education}
   - {word: college, category: family.education}
   - {word: school, category: family.education}
@@ -140,6 +154,9 @@ keywords:
   - {word: cinema, category: leisure.events}
   - {word: theatre, category: leisure.events}
   - {word: theater, category: leisure.events}
+  - {word: theaters, category: leisure.events}
+  - {word: theatres, category: leisure.events}
+  - {word: cinemas, category: leisure.events}
   - {word: bowling, category: leisure.events}
   - {word: museum, category: leisure.events}
   - {word: zoo, category: leisure.events}
@@ -160,11 +177,31 @@ keywords:
   - {word: pest control, category: housing.maintenance}
   - {word: locksmith, category: housing.maintenance}
   - {word: apartments, category: housing.rent}
+  - {word: apts, category: housing.rent}
+  # "rent" alone opens shops' names ("Rent-A-Center"): only with a word
+  # that makes it the household's rent.
+  - {word: rent payment, category: housing.rent}
+  - {word: apartment rent, category: housing.rent}
+  - {word: monthly rent, category: housing.rent}
+  - {word: rent pmt, category: housing.rent}
   - {word: self storage, category: housing.fees}
   - {word: furniture, category: shopping.home}
   - {word: water dept, category: utilities.water}
   - {word: water district, category: utilities.water}
+  - {word: water dist, category: utilities.water}
+  # "sewer" alone is a plumber or a pipe supplier as often as a bill.
+  - {word: sewer dist, category: utilities.water}
+  - {word: sewer district, category: utilities.water}
+  - {word: sewer dept, category: utilities.water}
+  - {word: sewer service, category: utilities.water}
+  - {word: sewer utility, category: utilities.water}
+  - {word: sewer authority, category: utilities.water}
+  - {word: city sewer, category: utilities.water}
+  # "electric" alone is a guitar shop as often as a bill.
+  - {word: electricity, category: utilities.electricity}
+  - {word: electric bill, category: utilities.electricity}
   - {word: utilities, category: utilities.other}
+  - {word: utility, category: utilities.other}
 
   # Shops and offices.
   - {word: boutique, category: shopping.clothing}
@@ -175,3 +212,16 @@ keywords:
   - {word: attorney, category: financial.services}
   - {word: law office, category: financial.services}
   - {word: cpa, category: financial.services}
+
+  # Money in that names nobody. A word for pay or a dividend answers money
+  # coming in only (engine.INFLOW_ONLY_GROUPS): paid out, it is somebody
+  # else's.
+  - {word: wages, category: income.salary}
+  - {word: salary, category: income.salary}
+  - {word: employer, category: income.salary}
+  - {word: dividend earned, category: income.dividends}
+  # Cash into or out of the account at the counter. Last of all: any other
+  # word in the line says better what the money was. Each answers one way
+  # only (engine.KEYWORD_DIRECTIONS); a cheque withdrawal is a cheque.
+  - {word: cash deposit, category: transfers.cash}
+  - {word: withdrawal, category: transfers.cash}

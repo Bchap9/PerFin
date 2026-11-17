@@ -22,6 +22,7 @@ granted every account and so gets household figures.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -30,17 +31,24 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.auth.models import GrantLevel
 from app.core.settings import Settings
 from app.db.models import Job
-from app.db.rls import set_context
+from app.db.queue import enqueue
+from app.db.rls import queue_scope, set_context
 from app.domain.accounts import service as accounts_service
-from app.domain.accounts.models import Account, AccountType
+from app.domain.accounts.models import Account, AccountType, BalanceSource
+from app.domain.documents.models import Document
+from app.domain.imports import service as imports_service
+from app.domain.investments.models import InvestmentTxnType, Security, opening_import_hash
 from app.domain.loans import service as loans_service
+from app.domain.loans.models import Loan
+from app.domain.networth import recompute as networth_recompute
 from app.domain.networth import service as networth_service
+from app.domain.networth.compute import NetWorthBook
 from app.domain.networth.models import NetWorthSnapshot
 from app.domain.reports import service as reports_service
 from app.workers.handlers import networth as networth_handler
@@ -48,6 +56,7 @@ from app.workers.registry import JobContext
 from app.workers.scheduler import SCHEDULE
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, problem_type
+from tests.fixtures.imports import make_extracted_document, make_import_mapping, table_result
 from tests.fixtures.ledger import (
     LedgerFactories,
     household_context,
@@ -92,6 +101,7 @@ def actors(settings: Settings, factories: Factories) -> Iterator[Actors]:
 
 def freeze(monkeypatch: pytest.MonkeyPatch, day: date = TODAY) -> None:
     monkeypatch.setattr(networth_service, "today", lambda: day)
+    monkeypatch.setattr(networth_recompute, "today", lambda: day)
     monkeypatch.setattr(reports_service, "today", lambda: day)
 
 
@@ -153,7 +163,11 @@ def world(
         ledger.grant(hid, member.record.id, account, GrantLevel.VIEW)
         ledger.grant(hid, viewer.record.id, account, GrantLevel.VIEW)
     ledger.grant(hid, viewer.record.id, hidden, GrantLevel.VIEW)
-    return World(owner, member, viewer, hid, accounts, hidden, ledger, factories)
+    world = World(owner, member, viewer, hid, accounts, hidden, ledger, factories)
+    # The rewrite building the household asked for (the loan's balances) is
+    # not under test: off the queue.
+    _asked(world)
+    return world
 
 
 def _get(client: AuthedClient, url: str, status: int = 200, **params: Any) -> Any:
@@ -264,11 +278,11 @@ def test_snapshot_job_backfills_once_and_is_idempotent(world: World) -> None:
     assert breakdown["by_class"]["liabilities"]["mortgages"] == "199000.000000"
     assert {a["account_id"] for a in breakdown["accounts"]} >= {str(world.hidden.id)}
     assert breakdown["unconverted"] == []
-    # Again the same day: one row rewritten, nothing added.
-    assert _snapshot(world) == 1
+    # Again the same day: the day before and the day rewritten, nothing added.
+    assert _snapshot(world) == 2
     assert len(_snapshots(world)) == written
-    # The next day fills only that day.
-    assert _snapshot(world, TODAY + timedelta(days=1)) == 1
+    # The next day fills that day and rewrites the last stored one.
+    assert _snapshot(world, TODAY + timedelta(days=1)) == 2
 
 
 def test_history_uses_snapshots_for_household_scope(world: World) -> None:
@@ -338,6 +352,85 @@ def test_brokerage_statement_anchor_carries_the_market_move(world: World) -> Non
     assert entry["amount"]["amount"] == "1700.00"
 
 
+def _first_statement(
+    db: Session, household_id: uuid.UUID, account: Account, *, opening: str, hashed: str
+) -> None:
+    """An account's first statement for June, as the statement importer records it.
+
+    It opened with 1500.00 (10 units, held before June), recorded the day
+    before the period; the 10 units are a zero-amount transfer in dated on
+    the period's first day, costed at 80.00 a unit (the cost basis, not the
+    market price). On 06-10 750.00 is paid in and 5 more units are bought at
+    the market price of 150.00. ``opening`` is the stored close on 05-31
+    ("" for none); ``hashed``: ``opening`` (the importer's opening hash),
+    ``none`` (a transfer in a person added) or ``other`` (an imported row).
+    """
+    make_snapshot(
+        db,
+        account,
+        as_of_date=date(2026, 5, 31),
+        balance="1500.00",
+        source=BalanceSource.STATEMENT,
+    )
+    security = make_security(db, household_id)
+    if opening:
+        make_price(db, security, close=opening, price_date=date(2026, 5, 31))
+    digest = {
+        "opening": opening_import_hash(account.id, security.id, date(2026, 6, 1)),
+        "none": None,
+        "other": "e" * 64,
+    }[hashed]
+    make_investment_txn(
+        db,
+        account,
+        security=security,
+        type=InvestmentTxnType.TRANSFER_IN,
+        trade_date=date(2026, 6, 1),
+        quantity="10",
+        price="80",
+        amount="0",
+        memo="Opening position from statement",
+        import_hash=digest,
+    )
+    make_transaction(db, account, amount="750.00", posted_date=date(2026, 6, 10))
+    make_investment_txn(
+        db, account, security=security, trade_date=date(2026, 6, 10), quantity="5", price="150"
+    )
+
+
+def _values(world: World, account: Account, days: list[date]) -> list[Decimal]:
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        book = NetWorthBook.load(db, world.household_id, [account.id], target="USD", until=TODAY)
+        return [book.values_on(day)[account.id] for day in days]
+
+
+DAYS = [date(2026, 5, 31), date(2026, 6, 1), date(2026, 6, 5), date(2026, 6, 20)]
+
+
+def test_a_first_statement_s_opening_positions_are_held_on_its_opening_day(world: World) -> None:
+    # The opening value already holds the 10 units: they are not added to it
+    # on the period's first day. 06-20: 1500.00 + the 750.00 paid in.
+    account = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, account, opening="", hashed="opening")
+    assert _values(world, account, DAYS) == [D("1500"), D("1500"), D("1500"), D("2250")]
+    # With a close known on the opening day, the units' market move counts:
+    # 10 x (150.00 - 140.00) more by 06-20.
+    other = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, other, opening="140", hashed="opening")
+    assert _values(world, other, DAYS) == [D("1500"), D("1500"), D("1500"), D("2350")]
+
+
+@pytest.mark.parametrize("hashed", ["none", "other"])
+def test_a_transfer_in_after_an_anchor_still_adds_its_units(world: World, hashed: str) -> None:
+    # Units that really arrived on 06-01 (a person's row, or an imported
+    # transfer) are on top of what the account held: 10 x 80.00, then
+    # 15 x 150.00 + 750.00 - 750.00.
+    account = world.ledger.account(world.household_id, type=AccountType.BROKERAGE)
+    world.ledger.run(_first_statement, world.household_id, account, opening="", hashed=hashed)
+    assert _values(world, account, DAYS) == [D("1500"), D("2300"), D("2300"), D("3750")]
+
+
 def test_accounts_value_an_investment_account_as_net_worth_does(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -358,6 +451,42 @@ def test_accounts_value_an_investment_account_as_net_worth_does(
         row.include_in_net_worth = False
     single = _get(world.owner, f"{API}/accounts/{brokerage.id}")
     assert single["balance"]["amount"] == "1200.00"
+
+
+def test_an_investment_account_s_history_is_valued_as_net_worth_does(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ledger alone says 1000.00 every day from the deposit on; the
+    # account is worth its cash plus its holdings on each day, priced at the
+    # latest close (or trade price) on or before it.
+    monkeypatch.setattr(accounts_service, "today", lambda: TODAY)
+    brokerage = world.accounts["brokerage"]
+    body = _get(
+        world.owner,
+        f"{API}/accounts/{brokerage.id}/balances",
+        start="2026-02-28",
+        end="2026-06-30",
+    )
+    by_day = {p["date"]: p["balance"]["amount"] for p in body["items"]}
+    assert len(by_day) == (TODAY - date(2026, 2, 28)).days + 1
+    assert by_day["2026-02-28"] == "0.00"
+    assert by_day["2026-03-01"] == "1000.00"  # the deposit, nothing bought yet
+    assert by_day["2026-03-02"] == "1000.00"  # 0.00 cash + 10 x 100.00
+    assert by_day["2026-06-28"] == "1000.00"
+    assert by_day["2026-06-29"] == "1200.00"  # the close of 120.00
+    assert by_day["2026-06-30"] == "1200.00"
+    # The last point is the balance the account shows.
+    single = _get(world.owner, f"{API}/accounts/{brokerage.id}")
+    assert by_day["2026-06-30"] == single["balance"]["amount"]
+    # A bank account's history is its ledger, as before.
+    checking = world.accounts["checking"]
+    bank = _get(
+        world.owner,
+        f"{API}/accounts/{checking.id}/balances",
+        start="2026-06-01",
+        end="2026-06-30",
+    )
+    assert bank["items"][-1]["balance"]["amount"] == "3800.00"
 
 
 def test_projection(world: World) -> None:
@@ -436,6 +565,232 @@ def test_household_job_writes_the_snapshot(world: World) -> None:
     assert count == (TODAY - date(2024, 3, 1)).days + 1
 
 
+def _run_job(world: World, household_id: uuid.UUID) -> None:
+    """Run every queued ``networth.snapshot`` job of ``household_id``, as the worker would."""
+    with world.factories.transaction() as db:
+        set_context(db, household_id)
+        jobs = list(
+            db.execute(
+                select(Job).where(
+                    Job.type == networth_handler.SNAPSHOT_JOB_TYPE, Job.state == "queued"
+                )
+            ).scalars()
+        )
+        for job in jobs:
+            ctx = JobContext(
+                job_id=job.id,
+                job_type=job.type,
+                attempt=1,
+                max_attempts=1,
+                household_id=job.household_id,
+                session=db,
+                deadline=datetime.max.replace(tzinfo=UTC),
+            )
+            networth_handler.snapshot_household(
+                ctx, networth_handler.HouseholdSnapshotPayload.model_validate(job.payload)
+            )
+            db.delete(job)
+
+
+def _stored(world: World) -> dict[date, Decimal]:
+    return {row.as_of_date: row.net for row in _snapshots(world)}
+
+
+def test_a_backdated_import_rewrites_the_stored_days_from_its_first_day(
+    world: World, actors: Actors
+) -> None:
+    _snapshot(world)
+    before = _stored(world)
+    # A statement of June, imported today: 400.00 paid on 06-12.
+    world.ledger.transaction(
+        world.accounts["checking"], amount="-400.00", posted_date=date(2026, 6, 12)
+    )
+    # The daily job alone rewrites today and the day before, and keeps what
+    # was known on each earlier day.
+    _snapshot(world)
+    yesterday = TODAY - timedelta(days=1)
+    assert {d: n for d, n in _stored(world).items() if d < yesterday} == {
+        d: n for d, n in before.items() if d < yesterday
+    }
+    # Another household with stored days of its own, and a job queued for each.
+    stranger = actors.new(role="owner")
+    other = stranger.record.household
+    assert other is not None
+    ledger = world.ledger
+    theirs = ledger.account(other.id, type=AccountType.CHECKING)
+    ledger.transaction(theirs, amount="70.00", posted_date=date(2026, 6, 1))
+    with world.factories.transaction() as db:
+        set_context(db, other.id)
+        networth_service.snapshot_household(db, other.id, TODAY)
+    for household_id in (world.household_id, other.id):
+        with world.factories.transaction() as db:
+            set_context(db, household_id)
+            networth_service.request_recompute(db, household_id, date(2026, 6, 12))
+    _run_job(world, world.household_id)
+    stored = _stored(world)
+    assert stored == {
+        day: net - (D("400.00") if day >= date(2026, 6, 12) else 0) for day, net in before.items()
+    }
+    assert stored[TODAY] == D("161200.00")
+    # The other household's job has not run: its rows are its own and as they were.
+    with world.factories.transaction() as db:
+        set_context(db, other.id)
+        rows = list(db.execute(select(NetWorthSnapshot)).scalars())
+        queued = db.execute(
+            select(func.count()).select_from(Job).where(Job.household_id == other.id)
+        ).scalar_one()
+    assert {r.household_id for r in rows} == {other.id}
+    assert {r.net for r in rows} == {D("70.00")}
+    assert queued == 1
+
+
+def test_data_older_than_the_backfill_window_is_not_rewritten_every_day(world: World) -> None:
+    # The mortgage reaches back before a 30-day window: the first run fills
+    # the window, the next one only its own day and the one before.
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 30
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 2
+        # A row from older rules before the window stays as it is.
+        make_net_worth_snapshot(db, world.household_id, as_of_date=date(2026, 1, 2))
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 2
+
+
+def test_a_day_stored_in_a_former_base_currency_stays_as_recorded(world: World) -> None:
+    _snapshot(world)
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        old = db.execute(
+            select(NetWorthSnapshot).where(NetWorthSnapshot.as_of_date == date(2026, 5, 10))
+        ).scalar_one()
+        old.currency, old.assets, old.liabilities, old.net = "EUR", D("10"), D("0"), D("10")
+        old.breakdown = {"version": 1, "accounts": []}
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        # Rewritten from before it: the row stays; and, though it carries no
+        # valuation version, it does not make the next run start again.
+        networth_service.snapshot_household(db, world.household_id, TODAY, since=date(2026, 5, 1))
+        assert networth_service.snapshot_household(db, world.household_id, TODAY) == 2
+        row = db.execute(
+            select(NetWorthSnapshot).where(NetWorthSnapshot.as_of_date == date(2026, 5, 10))
+        ).scalar_one()
+    assert (row.currency, row.net) == ("EUR", D("10.00"))
+
+
+def test_the_snapshot_job_payload_names_since_only_when_set() -> None:
+    # A daily job queued before going back to rc.11 must still be readable there.
+    payload = networth_handler.HouseholdSnapshotPayload(as_of=TODAY)
+    assert payload.model_dump(mode="json") == {"as_of": "2026-06-30"}
+    since = networth_handler.HouseholdSnapshotPayload(as_of=TODAY, since=date(2026, 6, 1))
+    assert since.model_dump(mode="json") == {"as_of": "2026-06-30", "since": "2026-06-01"}
+
+
+def test_stored_days_valued_by_older_rules_are_rewritten(world: World) -> None:
+    # A row from before this version (no "valuation" in its breakdown) and
+    # one from it: the job rewrites from the older one on.
+    _snapshot(world)
+    before = _stored(world)
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        for row in db.execute(select(NetWorthSnapshot)).scalars():
+            if row.as_of_date >= date(2026, 6, 1):
+                row.net = D("1.00")
+                row.assets = D("1.00")
+                row.liabilities = D("0")
+                if row.as_of_date == date(2026, 6, 20):
+                    row.breakdown = {"version": 1, "accounts": []}
+    written = _snapshot(world)
+    assert written == (TODAY - date(2026, 6, 20)).days + 1
+    stored = _stored(world)
+    assert stored[date(2026, 6, 19)] == D("1.00")
+    assert all(stored[day] == before[day] for day in before if day >= date(2026, 6, 20))
+    # Rewritten with this version: nothing left to rewrite but the last days.
+    assert _snapshot(world) == 2
+
+
+def _live(world: World) -> dict[date, Decimal]:
+    """What every stored day is worth by the data held now."""
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        book = NetWorthBook.load(db, world.household_id, None, target="USD", until=TODAY)
+        return {day: book.on(day).net for day in _stored(world)}
+
+
+def _named(row: NetWorthSnapshot) -> list[str]:
+    return [a["account_id"] for a in row.breakdown["accounts"]]
+
+
+def test_deleting_an_account_takes_it_out_of_the_stored_history(world: World) -> None:
+    _snapshot(world)
+    before = _stored(world)
+    hidden = world.hidden
+    response = world.owner.delete(f"{API}/accounts/{hidden.id}")
+    assert response.status_code == 204, response.text
+    _run_job(world, world.household_id)
+    # Deleting removes everything recorded on it, its place in the history
+    # too (closing an account is how it stays): 5000.00 from 06-01 is gone.
+    stored = _stored(world)
+    assert stored == {
+        day: net - (D("5000.00") if day >= date(2026, 6, 1) else 0) for day, net in before.items()
+    }
+    assert stored == _live(world)
+    assert all(str(hidden.id) not in _named(row) for row in _snapshots(world))
+
+
+_STATEMENT_ROWS = [
+    ["Date", "Description", "Amount"],
+    ["06/05/2026", "Northfield Payroll", "10000.00"],
+]
+_STATEMENT_SPEC = {
+    "date_column": 0,
+    "date_format": "MM/DD/YYYY",
+    "payee_column": 1,
+    "amount_column": 2,
+}
+
+
+def _import_statement(world: World, account: Account) -> None:
+    """Import a June statement (10000.00 on 06-05) into ``account``, as the importer would."""
+    ledger, hid = world.ledger, world.household_id
+    mapping = ledger.run(
+        make_import_mapping, hid, spec=_STATEMENT_SPEC, rows=_STATEMENT_ROWS, account=account
+    )
+    result = table_result(_STATEMENT_ROWS)
+    document = ledger.run(make_extracted_document, hid, account=account, result=result)
+    with world.factories.transaction() as db:
+        set_context(db, hid)
+        found = db.get(Document, document.id)
+        assert found is not None
+        imports_service.import_extraction(
+            db, found, result, mapping_id=mapping.id, account_id=account.id
+        )
+
+
+def test_a_statement_moved_to_another_account_by_deleting_the_first_counts_once(
+    world: World,
+) -> None:
+    # Imported into the wrong account, which is then deleted, and imported
+    # again into the right one: every stored day says what the ledger does.
+    _snapshot(world)
+    before = _stored(world)
+    wrong = world.ledger.account(world.household_id, type=AccountType.CHECKING, name="Wrong")
+    _import_statement(world, wrong)
+    _run_job(world, world.household_id)
+    assert _stored(world)[date(2026, 6, 5)] == before[date(2026, 6, 5)] + D("10000.00")
+    response = world.owner.delete(f"{API}/accounts/{wrong.id}")
+    assert response.status_code == 204, response.text
+    _run_job(world, world.household_id)
+    right = world.ledger.account(world.household_id, type=AccountType.CHECKING, name="Right")
+    _import_statement(world, right)
+    _run_job(world, world.household_id)
+    stored = _stored(world)
+    assert stored == {
+        day: net + (D("10000.00") if day >= date(2026, 6, 5) else 0) for day, net in before.items()
+    }
+    assert stored == _live(world)
+    assert all(str(wrong.id) not in _named(row) for row in _snapshots(world))
+
+
 def test_other_household_sees_none_of_it(world: World, actors: Actors) -> None:
     _snapshot(world)
     stranger = actors.new(role="owner")
@@ -444,3 +799,273 @@ def test_other_household_sees_none_of_it(world: World, actors: Actors) -> None:
     assert _amount(body["net"]) == 0
     history = _get(stranger, NW, range="1m")
     assert {_amount(p["net"]) for p in history["points"]} == {D(0)}
+
+
+def _queued(world: World) -> list[Job]:
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        jobs = list(
+            db.execute(
+                select(Job)
+                .where(Job.type == networth_handler.SNAPSHOT_JOB_TYPE, Job.state == "queued")
+                .order_by(Job.created_at)
+            ).scalars()
+        )
+        db.expunge_all()
+        return jobs
+
+
+def _request(world: World, since: date) -> None:
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        networth_service.request_recompute(db, world.household_id, since)
+
+
+def test_rewrites_asked_for_while_one_waits_become_one_from_the_earliest_day(
+    world: World,
+) -> None:
+    # The day's own job (keyed) is left alone; the rewrites asked for while
+    # one is waiting fold into it, from the earliest day any of them names.
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        enqueue(
+            db,
+            networth_handler.SNAPSHOT_JOB_TYPE,
+            networth_handler.HouseholdSnapshotPayload(as_of=TODAY),
+            household_id=world.household_id,
+            dedupe_key=networth_handler.dedupe_key(world.household_id, TODAY),
+        )
+    _request(world, date(2026, 6, 12))
+    _request(world, date(2026, 6, 20))
+    _request(world, date(2026, 5, 3))
+    _request(world, date(2026, 6, 1))
+    jobs = _queued(world)
+    assert [j.dedupe_key is not None for j in jobs] == [True, False]
+    assert jobs[1].payload == {"as_of": TODAY.isoformat(), "since": "2026-05-03"}
+    # A day not before today needs nothing: the next daily run rewrites the
+    # last stored day.
+    _request(world, TODAY)
+    assert len(_queued(world)) == 2
+
+
+def test_a_running_rewrite_does_not_swallow_a_later_one(world: World) -> None:
+    _request(world, date(2026, 6, 12))
+    [job] = _queued(world)
+    with world.factories.transaction() as db:
+        set_context(db, None)
+        with queue_scope(db):
+            db.execute(
+                update(Job)
+                .where(Job.id == job.id)
+                .values(
+                    state="running",
+                    locked_by="w",
+                    locked_at=func.now(),
+                    lease_expires_at=func.now(),
+                )
+            )
+    _request(world, date(2026, 6, 20))
+    [queued] = _queued(world)
+    assert queued.id != job.id
+    assert queued.payload["since"] == "2026-06-20"
+
+
+def test_a_row_dated_today_reaches_the_stored_day_on_the_next_run(world: World) -> None:
+    _snapshot(world)
+    world.ledger.transaction(world.accounts["checking"], amount="-40.00", posted_date=TODAY)
+    _snapshot(world, TODAY + timedelta(days=1))
+    assert _stored(world)[TODAY] == D("161560.00")
+
+
+def test_the_snapshot_job_holds_the_household_s_lock(world: World) -> None:
+    # Two runs of one household one after the other, never side by side: the
+    # later one reads the book only once the earlier one has committed.
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        networth_service.snapshot_household(db, world.household_id, TODAY)
+        with world.factories.transaction() as other:
+            taken = other.execute(
+                text("SELECT pg_try_advisory_xact_lock(:ns, hashtext(:h))"),
+                {"ns": networth_service.SNAPSHOT_LOCK_NAMESPACE, "h": str(world.household_id)},
+            ).scalar_one()
+    assert taken is False
+
+
+def _asked(world: World) -> list[str]:
+    """The ``since`` of the rewrites waiting (the jobs are then taken off the queue)."""
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        jobs = list(
+            db.execute(
+                select(Job).where(
+                    Job.type == networth_handler.SNAPSHOT_JOB_TYPE, Job.dedupe_key.is_(None)
+                )
+            ).scalars()
+        )
+        found = [str(job.payload.get("since")) for job in jobs]
+        for job in jobs:
+            db.delete(job)
+    return found
+
+
+def _usd(amount: str) -> dict[str, str]:
+    return {"amount": amount, "currency": "USD"}
+
+
+def _ok(response: Any, status: int = 200) -> Any:
+    assert response.status_code == status, response.text
+    return response.json() if response.content else None
+
+
+def test_a_write_on_a_past_day_has_the_stored_days_rewritten(world: World) -> None:
+    owner, checking = world.owner, world.accounts["checking"]
+    # A manual balance, and an account opened with a balance from before.
+    _ok(
+        owner.post(
+            f"{API}/accounts/{checking.id}/balances",
+            json={"as_of_date": "2026-06-10", "balance": _usd("900.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-10"]
+    body = {
+        "type": "checking",
+        "name": "Opened Earlier",
+        "currency": "USD",
+        "opening_balance": _usd("50.00"),
+        "opening_balance_date": "2026-05-01",
+    }
+    _ok(owner.post(f"{API}/accounts", json=body), 201)
+    assert _asked(world) == ["2026-05-01"]
+    # A transaction added, moved earlier, changed and deleted.
+    row = _ok(
+        owner.post(
+            f"{API}/transactions",
+            json={
+                "account_id": str(checking.id),
+                "posted_date": "2026-06-07",
+                "amount": _usd("-12.50"),
+                "raw_payee": "Synthetic Grocer",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-07"]
+    url = f"{API}/transactions/{row['id']}"
+    _ok(owner.patch(url, json={"posted_date": "2026-06-03"}))
+    assert _asked(world) == ["2026-06-03"]
+    _ok(owner.patch(url, json={"memo": "only words"}))
+    assert _asked(world) == []
+    _ok(owner.patch(url, json={"amount": _usd("-13.50")}))
+    assert _asked(world) == ["2026-06-03"]
+    _ok(owner.delete(url), 204)
+    assert _asked(world) == ["2026-06-03"]
+    # An investment transaction, a price.
+    brokerage = world.accounts["brokerage"]
+    txn = _ok(
+        owner.post(
+            f"{API}/investments/transactions",
+            json={
+                "account_id": str(brokerage.id),
+                "type": "interest",
+                "trade_date": "2026-06-08",
+                "amount": _usd("10.00"),
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-08"]
+    _ok(owner.delete(f"{API}/investments/transactions/{txn['id']}"), 204)
+    assert _asked(world) == ["2026-06-08"]
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        security_id = db.execute(select(Security.id)).scalar_one()
+        loan_id = db.execute(select(Loan.id)).scalar_one()
+    price = _ok(
+        owner.post(
+            f"{API}/securities/{security_id}/prices",
+            json={"price_date": "2026-06-09", "close": "130"},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-09"]
+    _ok(owner.delete(f"{API}/securities/{security_id}/prices/{price['id']}"), 204)
+    assert _asked(world) == ["2026-06-09"]
+    # A manual asset's valuations.
+    car = world.ledger.account(
+        world.household_id, type=AccountType.MANUAL_ASSET, asset_kind="vehicle", name="Car"
+    )
+    asset = _ok(
+        owner.post(
+            f"{API}/assets",
+            json={
+                "account_id": str(car.id),
+                "valuation_method": "manual",
+                "value": _usd("9000.00"),
+                "valued_on": "2026-04-01",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-04-01"]
+    valuation = _ok(
+        owner.post(
+            f"{API}/assets/{asset['id']}/valuations",
+            json={"valued_on": "2026-05-02", "value": _usd("8800.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-05-02"]
+    _ok(owner.delete(f"{API}/assets/{asset['id']}/valuations/{valuation['id']}"), 204)
+    assert _asked(world) == ["2026-05-02"]
+    # A loan payment: the balance owed changes from its day.
+    payment = _ok(
+        owner.post(
+            f"{API}/loans/{loan_id}/payments",
+            json={"paid_on": "2026-05-01", "principal": _usd("500.00"), "interest": _usd("1.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-05-01"]
+    _ok(owner.delete(f"{API}/loans/{loan_id}/payments/{payment['id']}"), 204)
+    assert _asked(world) == ["2026-05-01"]
+    # A row dated today asks for nothing.
+    _ok(
+        owner.post(
+            f"{API}/transactions",
+            json={
+                "account_id": str(checking.id),
+                "posted_date": TODAY.isoformat(),
+                "amount": _usd("-1.00"),
+                "raw_payee": "Synthetic Grocer",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == []
+
+
+def test_a_second_run_waits_for_the_first_past_the_lock_timeout(world: World) -> None:
+    # The connection's lock timeout bounds row locks, not this wait: the
+    # second run of the household waits for the first instead of failing.
+    outcome: list[object] = []
+
+    def second() -> None:
+        try:
+            with world.factories.transaction() as db:
+                set_context(db, world.household_id)
+                db.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                outcome.append(networth_service.snapshot_household(db, world.household_id, TODAY))
+                outcome.append(db.execute(text("SHOW lock_timeout")).scalar_one())
+        except Exception as error:  # noqa: BLE001 - reported below
+            outcome.append(error)
+
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        networth_service.snapshot_household(db, world.household_id, TODAY)
+        thread = threading.Thread(target=second)
+        thread.start()
+        thread.join(timeout=1.0)
+        assert thread.is_alive()  # waiting on the first run's lock
+    thread.join(timeout=30.0)
+    assert outcome == [2, "100ms"]

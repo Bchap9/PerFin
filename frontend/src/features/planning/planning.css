@@ -18,6 +18,11 @@
   gap: var(--space-2);
 }
 
+/* Actions directly above a table (New category) keep a gap from it. */
+.planning-actions + .table-wrap {
+  margin-top: var(--space-3);
+}
+
 /* Two or three panels side by side; one column on a narrow screen. */
 .planning-grid {
   display: grid;
@@ -31,11 +36,50 @@
   gap: var(--space-3);
 }
 
+/* A group of fields (a rule's When and Then, a goal's accounts) is a quiet
+   panel in the theme's border colour, with its legend set as a field label;
+   the browser's grooved default ignores the theme. Its checkboxes take the
+   column gap only. */
+fieldset.planning-form {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+fieldset.planning-form > legend {
+  padding: 0 var(--space-1);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.planning-form > .checkbox {
+  margin-bottom: 0;
+}
+
 .planning-row {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-3);
+}
+
+/* Fields and checkboxes in a row line up with its buttons (no stacked-form
+   gap under them); a checkbox or a bare label centres on the inputs. */
+.planning-row > .field,
+.planning-row > .checkbox,
+.planning-actions > .field,
+.planning-actions > .checkbox {
+  margin-bottom: 0;
+}
+
+.planning-row > .checkbox {
+  min-height: 2.5rem;
+}
+
+.planning-row > strong {
+  align-self: center;
 }
 
 /* A list of rows: a hairline between items, none above the first. */

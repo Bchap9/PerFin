@@ -69,7 +69,14 @@ export function weightValue(weight: string): number {
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }
 
+/** Keys that are acronyms, spelled in capitals rather than as a word. */
+const ACRONYMS: ReadonlyMap<string, string> = new Map([["etf", "ETF"]]);
+
 export function titleCase(key: string): string {
+  const acronym = ACRONYMS.get(key);
+  if (acronym !== undefined) {
+    return acronym;
+  }
   const spaced = key.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }

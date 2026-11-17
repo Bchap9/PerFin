@@ -79,7 +79,7 @@ function IdpReauthLink() {
   );
 }
 
-function StepUpBody({ onVerified }: { onVerified: (proof: MfaProof) => Promise<void> }) {
+function StepUpBody({ onVerified, onCancel }: { onVerified: (proof: MfaProof) => Promise<void>; onCancel: () => void }) {
   const status = useQuery({ queryKey: mfaStatusKey, queryFn: getMfaStatus, staleTime: 0 });
   if (status.isPending) {
     return <Spinner label="Loading your second factors" />;
@@ -97,7 +97,11 @@ function StepUpBody({ onVerified }: { onVerified: (proof: MfaProof) => Promise<v
       <>
         <p>
           This needs a second factor, and your account has none yet. Set one up under{" "}
-          <Link to="/settings/security">Security</Link> first.
+          {/* Following it cancels the step-up, so the dialog does not stay over that page. */}
+          <Link to="/settings/security" onClick={onCancel}>
+            Security
+          </Link>{" "}
+          first.
         </p>
         <IdpReauthLink />
       </>
@@ -149,6 +153,9 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(() => run, [run]);
+  const cancel = (): void => {
+    settle({ ok: false, error: new StepUpCancelledError() });
+  };
 
   return (
     <StepUpContext.Provider value={value}>
@@ -158,11 +165,9 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
         size="sm"
         title="Confirm it is you"
         description="For your security, verify your second factor to continue."
-        onClose={() => {
-          settle({ ok: false, error: new StepUpCancelledError() });
-        }}
+        onClose={cancel}
       >
-        {open ? <StepUpBody onVerified={onVerified} /> : null}
+        {open ? <StepUpBody onVerified={onVerified} onCancel={cancel} /> : null}
       </Dialog>
     </StepUpContext.Provider>
   );

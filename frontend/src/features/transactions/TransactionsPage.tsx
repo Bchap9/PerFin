@@ -370,7 +370,13 @@ export function TransactionsPage() {
             className: "tx-col-select",
             header: (
               <Checkbox
-                label={<span className="visually-hidden">Select all loaded transactions</span>}
+                // "Select all" shows where the table is cards (transactions.css).
+                label={
+                  <>
+                    <span className="tx-select-all">Select all</span>
+                    <span className="visually-hidden"> loaded transactions</span>
+                  </>
+                }
                 checked={allSelected}
                 onChange={(event) => {
                   setSelected(event.target.checked ? new Set(selectableRows.map((row) => row.id)) : new Set());

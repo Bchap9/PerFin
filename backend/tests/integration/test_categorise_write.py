@@ -463,6 +463,105 @@ def test_a_row_without_a_key_teaches_nothing(db: Session, home: Home) -> None:
     assert _memory_rows(db) == []
 
 
+def test_a_line_of_one_or_two_letters_gets_no_key_and_teaches_nothing(
+    db: Session, home: Home
+) -> None:
+    first, second = home.row("E"), home.row("XY")
+
+    engine.categorise_rows(db, home.household_id, [first, second])
+
+    for row in (first, second):
+        assert _stored(db, row.id)["merchant_key"] is None
+        assert _provenance(db, row) == (None, None, None, None)
+    first.category_id = home.other.id
+    engine.person_decided(db, first, before_category_id=None, before_source=None, at=T1)
+    db.flush()
+    assert _memory_rows(db) == []
+    # Another such line is not answered by that correction.
+    later = home.row("E")
+    engine.categorise_rows(db, home.household_id, [later])
+    assert _provenance(db, later) == (None, None, None, None)
+
+
+def test_a_rekey_takes_a_short_key_away_and_leaves_what_was_learned_under_it(
+    db: Session, home: Home
+) -> None:
+    # Keyed and taught before keys of one or two letters were withheld.
+    mine = home.row(
+        "E",
+        merchant_key="e",
+        category=home.other,
+        category_source="person",
+        category_confidence=Decimal(1),
+        updated_at=T1,
+    )
+    learned = home.row(
+        "E",
+        merchant_key="e",
+        category=home.other,
+        category_source="learned",
+        category_confidence=Decimal("0.80"),
+    )
+    guessed = home.row(
+        "E",
+        merchant_key="e",
+        suggested_category_id=home.other.id,
+        category_source="learned",
+        category_confidence=Decimal("0.70"),
+    )
+    memory.record(db, home.household_id, "e", "out", home.other.id, at=T1)
+
+    summary = engine.reconsider(db, home.household_id, rekey=True)
+
+    assert _stored(db, mine.id)["merchant_key"] is None
+    assert _provenance(db, mine) == (home.other.id, None, "person", Decimal(1))
+    # A learned fact is never guessed again (``GUESS_AGAIN_SOURCES``): it
+    # stays, without the key.
+    assert _stored(db, learned.id)["merchant_key"] is None
+    assert _provenance(db, learned) == (home.other.id, None, "learned", Decimal("0.80"))
+    # A suggestion is looked at again, and the memory no longer answers it.
+    assert _stored(db, guessed.id)["merchant_key"] is None
+    assert _provenance(db, guessed) == (None, None, None, None)
+    assert summary.renamed == {"e": frozenset({None})}
+    assert engine.key_now("e", summary.renamed) is None
+    assert engine.keys_at(home.account.id, "out", "e", summary.renamed_at) == frozenset()
+    # No row names the entry any more and it is moved nowhere.
+    assert summary.memory_moved == 0
+    assert _memory_rows(db) == [("e", "out", home.other.id, 1)]
+
+
+def test_a_rekey_takes_the_key_off_bare_cash_wording(db: Session, home: Home) -> None:
+    # Keyed before bare cash wording was withheld: "WITHDRAWAL" was a merchant.
+    mine = home.row(
+        "WITHDRAWAL",
+        merchant_key="withdrawal",
+        category=home.other,
+        category_source="person",
+        category_confidence=Decimal(1),
+        updated_at=T1,
+    )
+    guessed = home.row(
+        "CASH DEPOSIT",
+        amount=Decimal("40.00"),
+        merchant_key="cash deposit",
+        suggested_category_id=home.other.id,
+        category_source="learned",
+        category_confidence=Decimal("0.70"),
+    )
+    memory.record(db, home.household_id, "withdrawal", "out", home.other.id, at=T1)
+
+    summary = engine.reconsider(db, home.household_id, rekey=True)
+
+    assert _stored(db, mine.id)["merchant_key"] is None
+    assert _provenance(db, mine) == (home.other.id, None, "person", Decimal(1))
+    assert _stored(db, guessed.id)["merchant_key"] is None
+    assert summary.renamed == {
+        "withdrawal": frozenset({None}),
+        "cash deposit": frozenset({None}),
+    }
+    assert summary.memory_moved == 0
+
+
 # ---------------------------------------------------------------------------
 # A second look
 # ---------------------------------------------------------------------------

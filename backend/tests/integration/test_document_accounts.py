@@ -198,9 +198,11 @@ def test_a_bank_statement_proposal_carries_its_opening_balance() -> None:
     proposal = proposals._proposal(found, found.institution, "USD")
     assert proposal.name == "Synthetic Checking 4321"
     assert proposal.type is AccountType.CHECKING
+    # The balance at the end of the day before the period: rows posted on
+    # its first day count on top of it.
     assert (proposal.opening_balance, proposal.opening_balance_date) == (
         "120.50",
-        date(2026, 10, 1),
+        date(2026, 9, 30),
     )
     card = proposals._proposal(
         proposals._Found(**{**found.__dict__, "account_type": "CREDITCARD", "institution": None}),
@@ -279,3 +281,34 @@ def test_shares_of_one_member_become_two_accounts(env: Env) -> None:
     assert [amount for _, amount in _bank_rows(env, one)] == [Decimal("300"), Decimal("1.09")]
     assert len(_bank_rows(env, two)) == 4
     assert not env.open_reviews(document_id)
+
+
+@pytest.mark.parametrize(
+    ("source_format", "as_of", "expected"),
+    [
+        # A document parser dates the opening balance on the period's first day.
+        ("pdf", "2026-10-01", "2026-09-30"),
+        # A QIF's is already the day before its first record.
+        ("qif", "2026-09-30", "2026-09-30"),
+    ],
+)
+def test_a_statement_s_opening_balance_is_proposed_for_the_day_before_its_period(
+    source_format: str, as_of: str, expected: str
+) -> None:
+    from datetime import date
+
+    from app.ingestion.sandbox.protocol import Statement
+
+    statement = Statement.model_validate(
+        {
+            "source_format": source_format,
+            "account": {"last4": "4321", "currency": "USD"},
+            "period_start": "2026-10-01",
+            "period_end": "2026-10-31",
+            "opening_balance": {"amount": "1000.00", "as_of": as_of},
+            "transactions": [{"posted": "2026-10-01", "amount": "-900.00", "payee": "Rent"}],
+        }
+    )
+    found = proposals._bank(0, statement)
+    proposal = proposals._proposal(found, None, "USD")
+    assert proposal.opening_balance_date == date.fromisoformat(expected)

@@ -2,12 +2,16 @@
 import "./auth.css";
 
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 
 import { PAGE_TITLE_ID } from "../../components/PageHeader";
 
 /** The centred card the sign-in, setup and reset pages share. */
 export function AuthLayout({ title, intro, children }: { title: string; intro?: ReactNode; children: ReactNode }) {
+  // The document title (WCAG 2.4.2); RootLayout names the other pages.
+  useEffect(() => {
+    document.title = `${title} · PerFin`;
+  }, [title]);
   return (
     <section className="auth-page" aria-labelledby={PAGE_TITLE_ID}>
       <div className="auth-card">

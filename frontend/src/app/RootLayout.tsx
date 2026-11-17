@@ -16,6 +16,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 
 import { cx } from "../components/cx";
 import { GearIcon } from "../components/icons";
@@ -26,7 +27,7 @@ import { AiBanner } from "../features/settings/ai/AiBanner";
 import { sessionQueryOptions } from "../lib/session";
 import { CommandPalette } from "./CommandPalette";
 import { InboxBadge } from "./InboxBadge";
-import { SECTIONS, sectionForPath } from "./routeMap";
+import { SECTIONS, pageTitle, sectionForPath } from "./routeMap";
 import { ThemeToggle } from "./ThemeProvider";
 import { useLiveUpdates } from "./useLiveUpdates";
 
@@ -89,6 +90,12 @@ function Rail({ pathname }: { pathname: string }) {
 export function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const bare = isBarePath(pathname);
+  const title = useRouterState({ select: (state) => pageTitle(state.location.pathname, (state.location.search as { tab?: unknown }).tab) });
+  useEffect(() => {
+    if (!bare) {
+      document.title = title;
+    }
+  }, [bare, title]);
 
   return (
     <div className={cx("app-shell", bare && "app-shell--bare")}>

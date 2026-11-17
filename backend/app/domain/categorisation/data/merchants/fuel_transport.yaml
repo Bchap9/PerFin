@@ -12,7 +12,7 @@
 # when the word is all the line names (` =`), as a station's own line is.
 merchants:
   # Fuel brands.
-  - {key: shell, name: Shell, category: transport.fuel, match: [shell oil, shell service, shell station, shell gas]}
+  - {key: shell, name: Shell, category: transport.fuel, match: [shell oil, shell service, shell station, shell gas, shell fuel, shell petroleum]}
   - {key: exxon, name: Exxon, category: transport.fuel, match: [exxon, exxonmobil]}
   - {key: mobil, name: Mobil, category: transport.fuel, match: [mobil]}
   - {key: chevron, name: Chevron, category: transport.fuel, match: [chevron]}

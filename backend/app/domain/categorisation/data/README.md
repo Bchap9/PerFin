@@ -122,6 +122,12 @@ only in that merchant's group of categories. Only an entry with `via` and no
 `word` may be `strong`. A `strong` entry still gives way to a word in the
 line that names another category (`TST* NORTHSIDE ESPRESSO BAR` is coffee,
 as a suggestion): PerFin does not state what the line itself contradicts.
+A keyword in an `income.` category (`wages`, `dividend earned`) answers
+money coming in only (`engine.INFLOW_ONLY_GROUPS`); `withdrawal` answers
+money going out only and `cash deposit` money coming in only
+(`engine.KEYWORD_DIRECTIONS`). A word that is only
+the bank's own wording about itself (a fee, interest) is not a keyword: it
+is a kind, read by `../cleanup.py`, and stated.
 
 ## Sources
 
@@ -159,7 +165,7 @@ conditions and disclaimer to this section in the same change.
    merchant, every category a default key, no match that is a keyword or a
    processor prefix, the names other businesses carry (`NOT_THE_CHAIN`) and
    the store-card payments (`STORE_CARD_PAYMENTS`) naming nobody, a cadence for every series, the size (800 to 1,500
-   merchants, 100 to 150 keywords), and the digest pinned to the version.
+   merchants, 100 to 160 keywords), and the digest pinned to the version.
 
 The version is what makes installed households catch up: each household
 records the version it was last evaluated with, and a newer one queues a

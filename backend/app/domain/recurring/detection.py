@@ -18,7 +18,9 @@ judged against what was uploaded, never against today.
    A row without a merchant key is grouped by its ``text_key``. A
    person-to-person payment is grouped by its ``text_key`` too (its merchant
    key is the service, and the text is what tells two people apart); without
-   one it is ignored.
+   one it is ignored. A ``text_key`` of fewer than
+   :data:`TEXT_KEY_CHARS_MIN` letters is no ``text_key``: such rows are in no
+   group.
 3. **One charge per cycle is one series.** When the whole group has a cadence
    (step 5) and no two charges closer than the cadence allows, it is one
    series whatever the amounts. Its amount is then read from its **price
@@ -75,8 +77,13 @@ judged against what was uploaded, never against today.
    ``subscription`` for a dictionary subscription with a fixed amount;
    ``bill`` for a category in :data:`BILL_KEYS` or a loan payment; ``bill``
    for an amount that is not fixed; ``subscription`` for a fixed amount in
-   any other expense category; else ``other`` (fixed, and nothing says what
-   it is).
+   any other expense category; ``bill`` when nobody filed the rows and the
+   category the engine suggested for them is in :data:`BILL_KEYS`
+   (``suggested_key``: rent, water, tuition at a business no dictionary
+   knows); else ``other`` (fixed, and nothing says what it is). A suggested
+   category says the kind and nothing else: it does not make a series a
+   bill for its amounts, its confidence or a habit, and a suggestion of any
+   other category says nothing.
 8. **Habits.** A series whose category is in :data:`HABIT_KEYS` (groceries,
    restaurants, coffee, fuel, parking, fares, shopping) is dropped unless its
    amount is fixed, every gap is regular and it has
@@ -95,8 +102,11 @@ judged against what was uploaded, never against today.
    dictionary subscription or bill.
 10. **Status.** ``active`` when the confidence is at least
     :data:`ACTIVE_MIN` and the unreduced ``min_count`` is met; else
-    ``suggested``. A habit, a person-to-person series and a merchant seen once
-    are ``suggested`` whatever the confidence.
+    ``suggested``. A habit, a person-to-person series, a merchant seen once
+    and cash that names nobody (rows without a merchant key that nobody
+    filed, whose suggested category is :data:`CASH_KEY` or whose text begins
+    with the word ATM: the same ``WITHDRAWAL``, ``CASH DEPOSIT`` or ``ATM
+    0412 <town>`` every month) are ``suggested`` whatever the confidence.
 
 Amounts are exact ``Decimal``; no floats. No regular expression is applied to
 a merchant key; :func:`normalize_payee` (the letters-only ``text_key``) uses
@@ -141,6 +151,10 @@ FIXED_DAY_SPREAD: Final = 2
 FIXED_DAY_MIN_COUNT: Final = 3
 CONFIDENCE_QUANTUM: Final = Decimal("0.01")
 PAYEE_KEY_MAX: Final = 64
+#: Letters a ``text_key`` needs to group rows (step 2): what is left of "E" or
+#: "XY #0042" names nobody. The same floor as a merchant key's
+#: (``app.domain.categorisation.engine.KEY_CHARS_MIN``).
+TEXT_KEY_CHARS_MIN: Final = 3
 _NOT_WORD: Final = re.compile(r"[^a-z]+")
 
 #: Descriptor kinds that are never a series.
@@ -173,6 +187,10 @@ BILL_KEYS: Final = (
     "family.childcare",
     "family.education",
 )
+#: The suggestion of a withdrawal or a cash deposit (step 10).
+CASH_KEY: Final = "transfers.cash"
+#: The group of rows without a merchant key whose text begins with the word ATM (step 10).
+_ATM_TEXT: Final = "text:atm"
 #: Names the dictionary may use for a yearly cadence (``Observed.cadence_hints``).
 ANNUAL_HINTS: Final = frozenset({"annual", "yearly"})
 
@@ -239,8 +257,10 @@ class Observed:
     ``p2p``. ``category_key`` is the category's ``system_key`` and
     ``category_kind`` its kind. ``series_hint``, ``cadence_hints`` and
     ``habit_hint`` (a store that sells everything and bills no series) are
-    what the dictionary says about the merchant. ``category_id`` and ``label``
-    (the text to name a series by) are carried through to the candidate.
+    what the dictionary says about the merchant. ``suggested_key`` is the
+    ``system_key`` of the category the engine suggested for a row nobody
+    filed (step 7). ``category_id`` and ``label`` (the text to name a series
+    by) are carried through to the candidate.
     """
 
     id: uuid.UUID
@@ -258,6 +278,7 @@ class Observed:
     label: str | None = None
     cadence_hints: frozenset[str] = frozenset()
     habit_hint: bool = False
+    suggested_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +422,8 @@ class _Group:
     annual_ok: bool
     #: A store that sells everything, by the dictionary (step 8).
     general_store: bool = False
+    #: The category most suggested for its rows (step 7, the kind only).
+    suggested_key: str | None = None
 
     @property
     def known(self) -> bool:
@@ -416,6 +439,18 @@ class _Group:
     def general_plan(self) -> bool:
         """A habit by the dictionary's word alone (step 8): nobody filed its rows."""
         return self.category_key is None and self.general_store
+
+    @property
+    def cash(self) -> bool:
+        """Cash that names nobody (step 10): no merchant key, unfiled, suggested as cash.
+
+        Or an ATM line: no word of "ATM 0412 <town>" suggests cash, the ATM says it.
+        """
+        return (
+            self.merchant_key is None
+            and self.category_key is None
+            and (self.suggested_key == CASH_KEY or self.key.partition(" ")[0] == _ATM_TEXT)
+        )
 
     @property
     def bill_like(self) -> bool:
@@ -471,6 +506,8 @@ def _kind(group: _Group, fixed: bool) -> SeriesKind:
         return "bill"
     if group.category_key is not None and group.category_kind == "expense":
         return "subscription"
+    if group.category_key is None and _matches(group.suggested_key, BILL_KEYS):
+        return "bill"
     return "other"
 
 
@@ -513,7 +550,7 @@ def _candidate(
         return None
     sure = confidence >= ACTIVE_MIN and len(rows) >= spec.min_count
     status: FoundStatus = "active"
-    if once or group.habit or group.p2p or not sure:
+    if once or group.habit or group.p2p or group.cash or not sure:
         status = "suggested"
     last = rows[-1]
     return Candidate(
@@ -639,11 +676,17 @@ def _excluded(row: Observed) -> bool:
 
 def group_key(row: Observed) -> str | None:
     """The group ``row`` belongs to (module doc, step 2), ``None`` for a row without one."""
+    text = row.text_key if _names_somebody(row.text_key) else None
     if row.kind == "p2p":
-        return f"p2p:{row.text_key}" if row.text_key else None
+        return f"p2p:{text}" if text else None
     if row.merchant_key:
         return f"merchant:{row.merchant_key}"
-    return f"text:{row.text_key}" if row.text_key else None
+    return f"text:{text}" if text else None
+
+
+def _names_somebody(text_key: str | None) -> bool:
+    """Whether ``text_key`` holds :data:`TEXT_KEY_CHARS_MIN` letters and digits."""
+    return text_key is not None and sum(ch.isalnum() for ch in text_key) >= TEXT_KEY_CHARS_MIN
 
 
 def _describe(key: str, inflow: bool, members: Sequence[Observed]) -> _Group:
@@ -663,6 +706,7 @@ def _describe(key: str, inflow: bool, members: Sequence[Observed]) -> _Group:
         loan=_most_common(r.kind for r in members) == "loan_payment",
         annual_ok=not hints or bool(hints & ANNUAL_HINTS),
         general_store=any(r.habit_hint for r in members),
+        suggested_key=_most_common(r.suggested_key for r in members),
     )
 
 

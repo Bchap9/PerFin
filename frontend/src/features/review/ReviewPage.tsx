@@ -13,7 +13,7 @@ import "./review.css";
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
@@ -39,6 +39,7 @@ import {
   SettledLine,
 } from "./DocumentCard";
 import { itemAnchor } from "../inbox/order";
+import { AnsweredContext } from "./ReviewTools";
 
 export { DocumentLine, ExplanationBlock } from "./DocumentCard";
 
@@ -70,7 +71,7 @@ type CardSort = (cards: readonly ReviewCard[]) => ReviewCard[];
  * documents that left the list while the page was open, and the loose items.
  * `documentId` keeps one document's card; `sort` orders the cards.
  */
-function useCardEntries(documentId: string | null, sort: CardSort | undefined): Entry[] {
+function useCardEntries(documentId: string | null, sort: CardSort | undefined): { entries: Entry[]; loaded: number } {
   const cards = useQuery({
     queryKey: reviewKeys.cards(),
     queryFn: () => listReviewCards(),
@@ -132,7 +133,7 @@ function useCardEntries(documentId: string | null, sort: CardSort | undefined): 
       }
     }
   }
-  return entries;
+  return { entries, loaded: cards.dataUpdatedAt };
 }
 
 /** One entry of the card list. */
@@ -172,19 +173,43 @@ export function ReviewCardList({
   after?: readonly ReactNode[];
   empty?: ReactNode;
 }) {
-  const entries = useCardEntries(documentId, sort);
+  const { entries, loaded } = useCardEntries(documentId, sort);
+  // An answer replaces the card's question (or the card), and the pressed
+  // button with it: on the reload after an answer given here, focus moves
+  // to the card's item, not the page body. Any other reload leaves it.
+  const last = useRef("");
+  const pending = useRef(false);
+  const answered = useCallback(() => {
+    pending.current = true;
+  }, []);
+  useEffect(() => {
+    if (pending.current) {
+      pending.current = false;
+      if (document.activeElement === document.body && last.current !== "") {
+        document.getElementById(last.current)?.focus();
+      }
+    }
+  }, [loaded]);
   if (entries.length === 0 && after.length === 0) {
     return empty;
   }
   return (
-    <ul className="review-list" aria-label={label}>
-      {entries.map((entry) => (
-        <li key={entry.key} id={entry.anchor} tabIndex={-1} className="review-list__item">
-          {entry.node}
-        </li>
-      ))}
-      {after}
-    </ul>
+    <AnsweredContext.Provider value={answered}>
+      <ul
+        className="review-list"
+        aria-label={label}
+        onFocus={(event) => {
+          last.current = event.target.closest(".review-list__item")?.id ?? "";
+        }}
+      >
+        {entries.map((entry) => (
+          <li key={entry.key} id={entry.anchor} tabIndex={-1} className="review-list__item">
+            {entry.node}
+          </li>
+        ))}
+        {after}
+      </ul>
+    </AnsweredContext.Provider>
   );
 }
 

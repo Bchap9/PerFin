@@ -438,9 +438,12 @@ function AccountsForm({
 
 export function DocumentAccountsDialog({
   documentId,
+  onApplied,
   onClose,
 }: {
   documentId: string;
+  /** Told once the choices are saved, before the dialog closes. */
+  onApplied?: () => void;
   onClose: () => void;
 }) {
   const query = useQuery({
@@ -470,7 +473,10 @@ export function DocumentAccountsDialog({
         <AccountsForm
           documentId={documentId}
           found={query.data.accounts}
-          onDone={onClose}
+          onDone={() => {
+            onApplied?.();
+            onClose();
+          }}
         />
       ) : null}
     </Dialog>

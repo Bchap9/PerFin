@@ -29,7 +29,8 @@ next statement yet.
 A candidate is matched to an existing series of the same account and
 direction (money in or out), best first: (0) the same merchant key and
 overlapping amounts; (1) the same merchant key; (2) a series without a key
-(from before merchant keys, or entered by hand) with the same payee or the
+(from before merchant keys, entered by hand, or one whose rows lost their
+key in a re-key: ``categorisation.service``) with the same payee or the
 same normalised name and overlapping amounts; (3) the series most of the
 candidate's already linked charges belong to (a series without a key that
 a person renamed, or one whose key was recomputed). Cadence is not part of the
@@ -113,7 +114,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlalchemy import Select, and_, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.auth.authz import forbidden, role_at_least
 from app.auth.models import HouseholdRole
@@ -507,6 +508,7 @@ def _read(
         .group_by(Transaction.account_id)
     )
     as_of = {account_id: min(on, day) for account_id, day in latest}
+    suggested = aliased(Category)
     found = db.execute(
         select(
             Transaction.id,
@@ -520,12 +522,20 @@ def _read(
             Transaction.scheduled_transaction_id,
             Category.system_key,
             Category.kind,
+            suggested.system_key,
         )
         .outerjoin(
             Category,
             and_(
                 Category.household_id == Transaction.household_id,
                 Category.id == Transaction.category_id,
+            ),
+        )
+        .outerjoin(
+            suggested,
+            and_(
+                suggested.household_id == Transaction.household_id,
+                suggested.id == Transaction.suggested_category_id,
             ),
         )
         .where(
@@ -551,6 +561,7 @@ def _read(
         schedule_id,
         category_key,
         category_kind,
+        suggested_key,
     ) in found:
         identity = identities.get(raw_payee)
         if identity is None:
@@ -575,6 +586,7 @@ def _read(
                 label=raw_payee,
                 cadence_hints=frozenset(merchant.cadences) if merchant is not None else frozenset(),
                 habit_hint=merchant is not None and merchant.mixed and merchant.series is None,
+                suggested_key=suggested_key,
             )
         )
     return _Ledger(rows, as_of, links)
@@ -634,8 +646,9 @@ def _match_rank(
 
     The same account and direction are required; the cadence is not looked
     at. Then: 0 the same merchant key and overlapping amount ranges; 1 the
-    same merchant key; 2 a series without a key that has the same payee or
-    the same normalised name, and overlapping ranges; 3 ``row`` holds most of
+    same merchant key; 2 a series without a key that has the same payee, the
+    same normalised name or the cash key the line once had
+    (:func:`_once_keyed_as`), and overlapping ranges; 3 ``row`` holds most of
     the candidate's charges that are linked to a series at all
     (``holds_most``).
     """
@@ -648,13 +661,28 @@ def _match_rank(
         return 0 if overlaps else 1
     if row.merchant_key is None and overlaps:
         same_payee = candidate.payee_id is not None and row.payee_id == candidate.payee_id
-        same_name = (
-            candidate.text_key is not None
-            and detection.normalize_payee(row.name) == candidate.text_key
-        )
-        if same_payee or same_name:
+        name = detection.normalize_payee(row.name)
+        same_name = candidate.text_key is not None and name == candidate.text_key
+        if same_payee or same_name or _once_keyed_as(name, candidate):
             return 2
     return 3 if holds_most else None
+
+
+def _once_keyed_as(name: str, candidate: Candidate) -> bool:
+    """Whether ``name`` is the cash key an older release gave the candidate's line.
+
+    Bare cash wording had a merchant key once ("ATM 0412 <town>" was ``atm``)
+    and a detected series was named after it; the refresh took the key off
+    (``categorisation.service``). Such a series is the candidate's when its
+    name is still that key: the first words of the line's core.
+    """
+    if candidate.merchant_key is not None or not candidate.label or not name:
+        return False
+    if not categorisation.cash_wording(name):
+        return False
+    core = categorisation.identify(candidate.label).core
+    once = " ".join(core.split()[: categorisation.KEY_TOKENS])
+    return detection.normalize_payee(once) == name
 
 
 def _existing(

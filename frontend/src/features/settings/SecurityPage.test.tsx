@@ -131,6 +131,12 @@ describe("security settings: step-up", () => {
     const dialog = await screen.findByRole("dialog", { name: "Confirm it is you" });
     expect(await within(dialog).findByText(/your account has none yet/)).toBeInTheDocument();
     expect(within(dialog).queryByRole("link", { name: /identity provider/ })).not.toBeInTheDocument();
+    // Following the link to Security closes the dialog, which would otherwise
+    // stay open over that page.
+    await user.click(within(dialog).getByRole("link", { name: "Security" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Confirm it is you" })).not.toBeInTheDocument();
+    });
   });
 
   it("asks for step-up, then retries the original request with the rotated CSRF token", async () => {

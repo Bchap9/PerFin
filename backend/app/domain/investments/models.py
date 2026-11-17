@@ -52,6 +52,7 @@ of a hidden account are never shown to a member or viewer.
 from __future__ import annotations
 
 import enum
+import hashlib
 import unicodedata
 import uuid
 from datetime import date
@@ -207,6 +208,29 @@ def security_name_key(name: str) -> str:
     similarity, abbreviation or punctuation rule ever merges two names.
     """
     return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+
+
+#: Prefix of every ``investment_txn.import_hash`` the statement importer writes.
+IMPORT_HASH_VERSION = "perfin-invest-v1"
+
+
+def opening_import_hash(account_id: uuid.UUID, security_id: uuid.UUID, opened_on: date) -> str:
+    """``import_hash`` of the opening position a statement implies (statement import, step 7).
+
+    Recomputable from the row's own account, security and trade date, so a
+    reader can tell such a row (units held *before* the statement's period)
+    from a transfer in that happened on that day: a row a person added has no
+    hash, an imported activity row another one, and a row whose security or
+    date a person changed no longer matches.
+    """
+    parts = (
+        IMPORT_HASH_VERSION,
+        str(account_id),
+        "opening",
+        str(security_id),
+        opened_on.isoformat(),
+    )
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
 class Price(UUIDPk, Timestamps, HouseholdScoped, Base):

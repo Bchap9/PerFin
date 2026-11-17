@@ -13,7 +13,7 @@
 # service's own, or left out.
 merchants:
   # Opaque billers.
-  - {key: apple services, name: Apple (App Store and services), category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [apple com bill, apl itunes com bill, apl itunes, itunes com bill, itunes com, apple services]}
+  - {key: apple services, name: Apple (App Store and services), category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [apple com bill, apl itunes com bill, apl itunes, itunes com bill, itunes com, itunes music, itunes store, apple services]}
   - {key: google play, name: Google Play, category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [google play, google]}
   - {key: microsoft, name: Microsoft, category: leisure.software, series: subscription, cadences: [monthly, annual], mixed: true, match: [microsoft, msft, msbill info]}
 

@@ -12,7 +12,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useContext, useState } from "react";
 
 import { Button } from "../../components/Button";
 import { Checkbox } from "../../components/Checkbox";
@@ -26,6 +26,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts } from "../accounts/api";
 import { docKeys, getDocumentDetail } from "../documents/api";
 import { PageViewer } from "../documents/PageViewer";
+import { AnsweredContext } from "./ReviewTools";
 import {
   payloadString,
   teachDocument,
@@ -395,6 +396,7 @@ export function TeachDialog({
     setConflict(isApiError(caught) && caught.slug === "layout-conflict");
     setError(errorMessage(caught));
   };
+  const answered = useContext(AnsweredContext);
   const look = useMutation({
     mutationFn: (asked: { key: string; body: TeachRequest }) =>
       teachDocument(documentId, asked.body),
@@ -412,6 +414,7 @@ export function TeachDialog({
   const teach = useMutation({
     mutationFn: (sent: TeachRequest) => teachDocument(documentId, sent),
     onSuccess: (_out, sent) => {
+      answered();
       setError(null);
       setApplied(JSON.stringify(sent));
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });

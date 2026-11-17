@@ -66,6 +66,12 @@ describe("enrolment-only flow", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/plan/budgets");
     });
+    // Let the redirect's load finish before the test ends, or it settles
+    // after the environment is torn down ("window is not defined").
+    await waitFor(() => {
+      expect(router.state.status).toBe("idle");
+      expect(router.state.isLoading).toBe(false);
+    });
     expect(screen.queryByText("AAAA-BBBB-CCCC-DDDD")).not.toBeInTheDocument();
   });
 });

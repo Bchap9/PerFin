@@ -2416,3 +2416,104 @@ def test_0014_backfills_sources_and_statuses_and_isolates_the_new_tables(
         assert _columns(engine, "transaction") >= PROVENANCE_COLUMNS
     finally:
         engine.dispose()
+
+
+def test_0014_rolling_overlap_what_the_previous_release_can_still_write(
+    scratch_factory: Callable[[], Scratch],
+) -> None:
+    """During a rolling upgrade, pods of the release before 0014 (rc.9, head
+    0013) keep running for a while against the migrated schema. This pins
+    what their writes, which know none of 0014's columns, do there:
+
+    * a new transaction, a new category, a new active series, and a category
+      set on a row without a suggestion all succeed (the new columns are
+      nullable or have defaults);
+    * switching a series off or on by ``active`` alone, or creating one
+      switched off, is refused by ``ck_scheduled_transaction_active_matches_status``;
+    * setting a category on a row the new release has already given a
+      suggestion is refused by ``ck_transaction_suggestion_only_without_category``.
+
+    docs/UPGRADING.md (1.0.0-rc.10) says so and gives the stop-then-migrate
+    order for anyone who wants no such errors."""
+    scratch = scratch_factory()
+    cfg = scratch.config()
+    command.upgrade(cfg, "0013")
+    app = scratch.app_engine()
+    household = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                {"id": household},
+            )
+            account = _insert_account(conn, household)
+            category = _insert_category(conn, household)
+            running = _insert_schedule(
+                conn, household, account, origin="detected", active=True, amount="-9.99"
+            )
+            switched_off = _insert_schedule(
+                conn, household, account, origin="manual", active=False, amount="-4.50"
+            )
+            suggested = _insert_ledger_row(conn, household, account, None)
+        command.upgrade(cfg, "head")
+        with app.begin() as conn:
+            set_context(conn, household)
+            # The new release's background pass leaves a suggestion on one row.
+            conn.execute(
+                text("UPDATE transaction SET suggested_category_id = :c WHERE id = :id"),
+                {"c": category, "id": suggested},
+            )
+        # Writes of the previous release that still succeed.
+        with app.begin() as conn:
+            set_context(conn, household)
+            row = _insert_ledger_row(conn, household, account, None)
+            other = _insert_category(conn, household)
+            conn.execute(
+                text("UPDATE transaction SET category_id = :c, updated_at = now() WHERE id = :id"),
+                {"c": other, "id": row},
+            )
+            added = _insert_schedule(
+                conn, household, account, origin="manual", active=True, amount="-12.00"
+            )
+            conn.execute(
+                text("UPDATE scheduled_transaction SET name = 'Renamed' WHERE id = :id"),
+                {"id": running},
+            )
+            assert (
+                conn.execute(
+                    text("SELECT status FROM scheduled_transaction WHERE id = :id"), {"id": added}
+                ).scalar_one()
+                == "active"
+            )
+        # Writes of the previous release that the migrated schema refuses.
+        refused: tuple[tuple[str, dict[str, object], str], ...] = (
+            (
+                "UPDATE scheduled_transaction SET active = false WHERE id = :id",
+                {"id": running},
+                "ck_scheduled_transaction_active_matches_status",
+            ),
+            (
+                "UPDATE scheduled_transaction SET active = true WHERE id = :id",
+                {"id": switched_off},
+                "ck_scheduled_transaction_active_matches_status",
+            ),
+            (
+                "UPDATE transaction SET category_id = :c, updated_at = now() WHERE id = :id",
+                {"c": category, "id": suggested},
+                "ck_transaction_suggestion_only_without_category",
+            ),
+        )
+        for statement, params, constraint in refused:
+            with app.connect() as conn, conn.begin():
+                set_context(conn, household)
+                with pytest.raises(DBAPIError, match=constraint):
+                    conn.execute(text(statement), params)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError, match="ck_scheduled_transaction_active_matches_status"):
+                _insert_schedule(
+                    conn, household, account, origin="manual", active=False, amount="-3.00"
+                )
+    finally:
+        app.dispose()

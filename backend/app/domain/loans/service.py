@@ -125,6 +125,7 @@ from app.domain.loans.schemas import (
     SimulateIn,
     SimulationOut,
 )
+from app.domain.networth import recompute
 from app.domain.transactions.models import Transaction
 from app.domain.transactions.service import get_visible_transaction
 
@@ -298,8 +299,13 @@ def account_ledger(db: Session, account: Account) -> AccountLedger:
 
 
 def sync_balance(db: Session, loan: Loan) -> None:
-    """Rebuild the loan account's ``computed`` snapshots (module doc, "Balance sync")."""
+    """Rebuild the loan account's ``computed`` snapshots (module doc, "Balance sync").
+
+    Stored net worth is rewritten from the first day whose computed balance
+    changed (none when nothing did, so a rate change asks for nothing).
+    """
     account = _account(db, loan, lock=True)
+    stored = _computed(db, account)
     db.execute(
         delete(BalanceSnapshot).where(
             BalanceSnapshot.household_id == account.household_id,
@@ -334,6 +340,21 @@ def sync_balance(db: Session, loan: Loan) -> None:
         put(day, sign * max(ZERO, before - per_day[day]))
     for day, balance in sorted(computed.items()):
         accounts_repo.upsert_snapshot(db, account, day, balance, BalanceSource.COMPUTED)
+    moved = [d for d in stored.keys() | computed.keys() if stored.get(d) != computed.get(d)]
+    if moved:
+        recompute.request_recompute(db, account.household_id, min(moved))
+
+
+def _computed(db: Session, account: Account) -> dict[date, Decimal]:
+    """The account's ``computed`` snapshots by day."""
+    rows = db.execute(
+        select(BalanceSnapshot.as_of_date, BalanceSnapshot.balance).where(
+            BalanceSnapshot.household_id == account.household_id,
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.COMPUTED,
+        )
+    ).all()
+    return {row.as_of_date: row.balance for row in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +799,9 @@ def delete_loan(
     loan = require_editable(db, principal, loan_id)
     before = _state(loan)
     account = _account(db, loan, lock=True)
+    computed = _computed(db, account)
+    if computed:
+        recompute.request_recompute(db, account.household_id, min(computed))
     db.execute(
         delete(BalanceSnapshot).where(
             BalanceSnapshot.household_id == account.household_id,

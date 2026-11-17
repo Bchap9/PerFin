@@ -3,7 +3,8 @@
  * A modal dialog on the native `<dialog>` element: `showModal()` gives focus
  * trapping, `inert` background, Escape handling and top-layer stacking from
  * the browser. Controlled by `open`; Escape and the close button call
- * `onClose`. Focus returns to the element that had it before opening.
+ * `onClose`. Focus returns to the element that had it before opening, or,
+ * when that element has gone meanwhile, to the region (a table) it sat in.
  */
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
@@ -57,6 +58,8 @@ export function Dialog({
       return undefined;
     }
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Where focus goes when the opener is gone by then (a deleted row's button).
+    const region = previous?.closest<HTMLElement>("[role=region]");
     if (!dialog.open) {
       if (typeof dialog.showModal === "function") {
         dialog.showModal();
@@ -73,7 +76,7 @@ export function Dialog({
           dialog.removeAttribute("open");
         }
       }
-      previous?.focus();
+      (previous?.isConnected === true ? previous : region)?.focus();
     };
   }, [open]);
 
@@ -84,8 +87,10 @@ export function Dialog({
       aria-labelledby={titleId}
       aria-describedby={description === undefined ? undefined : descriptionId}
       onCancel={(event) => {
-        // Escape: let the parent decide (it owns `open`).
+        // Escape: let the parent decide (it owns `open`). React bubbles
+        // `cancel`, so a dialog inside another does not close that one too.
         event.preventDefault();
+        event.stopPropagation();
         onCloseRef.current();
       }}
     >

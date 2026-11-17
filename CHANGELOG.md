@@ -7,7 +7,9 @@ All notable changes to PerFin are recorded here. The format follows
 ## Status
 
 The current release candidate is `v1.0.0-rc.11`; the final `v1.0.0` follows the
-external security review. Every phase (0-7) is implemented. Alembic head is
+internal release review (Stage 4). No external security review or
+penetration test has been done: run PerFin on a private network only
+(SECURITY.md). Every phase (0-7) is implemented. Alembic head is
 `0014`. On 2026-11-16: SPDX;
 backend ruff, ruff format, mypy --strict (806 source files), bandit, OpenAPI
 drift and 11916 pytest tests with `-n 4` (one worker crashed under load and
@@ -23,8 +25,9 @@ fs`, and the shipped image built and passing `trivy image` with an SBOM).
 
 What remains (details in docs/ROADMAP.md):
 
-- An external security review or penetration test before the tag. An
-  internal review was done every phase (docs/security/CONTROLS.md).
+- The Stage 4 release review, then `v1.0.0`. An internal security review
+  was done every phase (docs/security/CONTROLS.md); by the owner's
+  decision no external review is a gate for 1.0.
 - The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
   #8). `v1.0.0-rc.3` also publishes the new `perfin-ml` image.
 - Not exercised: the optional local-model containers (`ml`/`ml-cuda`
@@ -37,7 +40,247 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+Stage 4 of four on the way to 1.0.0: the release review.
+
+### Changed
+
+- **A series nobody filed is a bill when its suggested category is a
+  bill's.** Recurring detection took only a category somebody (or the
+  engine, as a fact) gave the rows as a hint for the kind, so rent, water,
+  sewer and tuition at a business no list knows were kind "other" until a
+  row was filed. A suggested category of a bill (housing, utilities, a loan
+  payment, insurance, taxes, childcare, education) now makes such a series
+  a bill; it changes nothing else about it, and a stated category still
+  wins. More such bills are suggested: `APTS` (rent), `WATER DIST`,
+  `SEWER DIST` (a sewer district's or a city's wording; `SEWER` alone is a
+  plumber as often), `TUITION`, and the entry description of a labelled ACH line
+  (`<name> DES:RENT PMT`, `DES:TUITION`) when the name holds no telling
+  word, for a bill or for pay coming in only (`<name> DES:WITHDRAWAL` is a company paid, not a
+  withdrawal at the counter, and `DES:PHARMACY` or `DES:GYM` is the
+  company's own wording, not what the household bought); lessons are a pastime, not
+  school: `SWIM SCHOOL`, `SWIMMING SCHOOL`, `DANCE SCHOOL`, `MUSIC SCHOOL`,
+  `KARATE` and `MARTIAL ARTS` suggest hobbies (a `DRIVING SCHOOL` is still
+  education) (merchant list version 12).
+  With nobody filing anything, the kind of a planted series is right for
+  92.5% (was 82.5%).
+- **The same cash every month is only suggested.** A fixed monthly
+  `WITHDRAWAL` or `CASH DEPOSIT` on lines that name nobody and that nobody
+  gave a category was found as a running series; detection now only
+  suggests it, since it may be pocket money or a payment to somebody. The
+  same ATM line every month (`ATM 0412 <town>`) is only suggested too.
+
+### Fixed
+
+- **A first brokerage statement no longer doubles the account for its
+  month.** The value a statement opens with already holds the positions it
+  opens with; every day of the period counted them a second time, in net
+  worth and on the account's balance chart, until the closing day.
+- **Net worth history follows what you import.** Statements arrive after
+  the fact, and stored daily figures kept what was known on each day, so
+  the chart stayed flat through a month and jumped the day after its
+  statement was imported. Every import, and every edit on an earlier day
+  (a transaction, a balance, a valuation, a price, a loan payment, a
+  reconciled statement), now has the stored days from its first date on
+  recalculated, and history is recalculated once after the upgrade. Deleting an account takes it out of the stored history too, so
+  a statement imported into the wrong account, deleted with it and
+  imported again counts once (close an account to keep it in the history).
+- **A QIF or CSV opening balance counts on an existing account.** It was
+  dropped when the file went into an account that already existed, and
+  "Process again" removed the Opening Balance transaction an earlier
+  version had imported, lowering the balance. It is now the account's
+  balance on the day before, or an Inbox item ("Opening balance not
+  recorded", with the amount and the day) asks about it when the account
+  already has a different balance from before; once resolved or
+  dismissed, "Process again" does not ask about the same figure again.
+- **A CSV whose running balance does not add up no longer sets the
+  account's balance.** A card export printing the amount owed as positive
+  put the card in credit.
+- **An account set up from a PDF statement counts the first day's
+  transactions.** Its opening balance was recorded on the period's first
+  day, leaving that day's rows out of the balance.
+- **Recording today's balance works east of UTC.** The balance form's date
+  was refused as "in the future" for the first hours of the day.
+- **A credit union's `Withdrawal …` line names who was paid.** `Withdrawal
+  ACH …`, `Withdrawal Debit Card …`, `Withdrawal POS #n …` and `Withdrawal
+  Bill Payment …` name the company or shop behind the bank's words, so the
+  merchant list finds it and `WITHDRAWAL` there suggests no cash.
+  `Withdrawal Home Banking Transfer To Share …` is a transfer; `Withdrawal
+  by Check` and `Share Draft` lines are cheques (clean-up version 4).
+
+- **Plan › Upcoming keeps focus on the tab.** Switching between the
+  calendar and the recurring items with the arrow keys or a click left
+  keyboard focus on the page body.
+- **Inbox › Documents offers "Upload files" only to those who can upload.**
+  A read-only member was sent to an uploader that only said so.
+- **Answering an Inbox card keeps your place.** The pressed button went
+  away with the question and focus fell to the page body; focus now moves
+  to the card. Only an answer given on the page moves it: a card that
+  changes by itself (an upload finishing) leaves focus where it is.
+- **A failed bulk delete says why in its dialog.** The error was only a
+  toast behind the open dialog, dimmed and not announced.
+- **The step-up dialog's "Security" link closes it.** Followed by someone
+  with no second factor, the link changed the page but left the dialog open
+  over it.
+- **Enter saves the goal, budget and recurring item dialogs.** Their fields
+  were not a form, so Enter in a field did nothing.
+- **A form that cannot be saved moves to its first problem.** In the
+  transaction, goal, budget and recurring item dialogs, focus now goes to
+  the first field with an error, which reads it out; before, nothing was
+  said and focus stayed on the button.
+- **Deleting a value, a recurring item or a goal contribution asks first.**
+  Their row buttons deleted on the first click, unlike every other delete;
+  they now ask in a dialog, and after the delete focus goes to the table.
+- **A suggested category for a row with no name says which row.** On the
+  Inbox's suggested categories, such a row stands alone; its line and its
+  Accept button now give its date and amount, so several of them no longer
+  read the same.
+- **A phone's transaction list shows "Select all".** Under 720px wide (a
+  phone, or high zoom) the header's checkbox was clipped to nothing yet
+  still took focus, so there was no way to see it or select every row; it
+  now shows above the cards, labelled "Select all".
+- **Each page has a title of its own.** The browser tab, its history and
+  a screen reader's window list said "PerFin" on every page; they now name
+  the page: "Goals · PerFin", "Security · PerFin", "Sign in · PerFin".
+- **Plan › Upcoming shows its name once.** The page drew a second
+  "Upcoming" heading under the Plan section's Upcoming tab; the heading is
+  now for screen readers only, as on Plan › Subscriptions.
+- **`scripts/check_spdx.py` runs in a container.** In a checkout that
+  reports another owner (a bind mount), git refused the repository and the
+  script stopped with a traceback; it now checks that one checkout and
+  prints a one-line message for any other git failure.
+- **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
+  lists the writes of rc.9 pods that migration `0014` refuses and the
+  stop-then-migrate order for Compose and Helm.
+- **A QIF opening balance is no transaction.** Quicken's own `Opening
+  Balance` record (and `Balance brought forward` and the like, when it says
+  nothing else) was imported as a transaction. It is now the statement's
+  opening balance when it comes first (as of the day before its date, so a
+  transaction on that same day still counts toward the balance of an
+  account set up from it); a closing balance record, or an
+  opening one further down, is left out and counted in the document's
+  warnings. QIF files read before are read this way on "Process again"
+  (extractor `qif/2`).
+- **A QIF record made only of column names waits for review.** A record
+  whose payee, memo and category are the words of a header (`Description`,
+  `Reference`, `Debit`) was posted quietly. Its date and amount are kept, as
+  they may be money that moved, but it is imported pending with a
+  low-confidence item on its payee.
+- **CSV: a repeated header row and a balance row are no transactions.** A
+  row that repeats the header (an export that prints it on every page) was
+  reported as an unreadable row; a dated `Opening balance` or `Closing
+  balance` row with a figure in the amount column was imported as a
+  transaction. Both are now note rows, and an opening balance row gives
+  the statement's opening balance, proposed for a new account as of the
+  day before the row, so transactions on the row's own day still count
+  toward the balance. The import's summary counts both kinds of row
+  (`header_rows`, `balance_rows`), so a dropped closing balance row is
+  still on record.
+- **A line that leaves one or two letters names no merchant.** What was
+  left of a line such as `E` or `XY #0042` became a merchant key, so every
+  such line of a household was one merchant: one correction or one
+  "Always use…" rule covered rows that had nothing to do with each other.
+  Such a line now has no merchant key, like a transfer; a brand the
+  merchant list knows by two letters (`BP`) keeps its own. Rows keyed
+  before lose the key in the refresh that follows the upgrade (the hourly
+  `categorise.dispatch` queues it; clean-up version 4); their categories
+  stay, and what was learned under such a key no longer answers.
+- **Bare cash wording names no merchant.** `WITHDRAWAL`, `CASH DEPOSIT`,
+  `TELLER DEPOSIT`, a line that starts with `ATM` and a teller's withdrawal
+  (`WITHDRAWAL MADE IN THE STORE`, `CUSTOMER WITHDRAWAL IMAGE`, `OVER THE
+  COUNTER WITHDRAWAL`) became a merchant key,
+  so all of a household's cash lines were one merchant, though the data
+  model says a cash line has none. They now have no key; the suggestion of
+  cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
+  before lose the key in the same refresh after the upgrade. A recurring
+  series of such rows loses its key with them, so one a person dismissed
+  under the old key stays dismissed instead of coming back as a new
+  suggestion (an ATM series named after its old key, `Atm`, too); a merchant rule on such a key stops applying
+  (docs/UPGRADING.md).
+- **A cheque in the `CHEQUE` or `CHQ` spelling is a cheque.** Clean-up read
+  only `CHECK 0042` as a cheque, so `CHEQUE #0042`, `CHQ 0042`, a bare
+  `CHEQUE` or `CHECK` and `TELLER CHEQUE 0042` became the merchant
+  `cheque` (or `chq`): every cheque of a household was one merchant and
+  could make one recurring series. They are now cheques with no merchant
+  key, never guessed and never a series, as the data model says. Rows keyed
+  before lose the key in the same refresh after the upgrade.
+- **No recurring series of a line that names nobody.** Rows without a
+  merchant were put together by their text, so rows printed as `E` or `XY
+  #0042` could make one series. Text of fewer than three letters now groups
+  nothing, as for a merchant key.
+- **A brokerage account's chart shows what it is worth.** `GET
+  /accounts/{id}/balances` (the account page's chart) gave a brokerage or
+  retirement account its ledger balance on each day, so an account worth
+  its holdings charted a line near 0.00 while its page said otherwise. Each
+  day is now valued as `GET /accounts` and net worth value it: cash plus
+  holdings at that day's latest close.
+- **More of a bank's own lines are read, and more plain wording is
+  suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
+  fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`
+  interest earned, stated as for the other fee and interest lines;
+  `AUTOMATIC WITHDRAWAL <name>` is a debit to that name. Rent (`RENT
+  PAYMENT`, `APARTMENT RENT`), electricity (`ELECTRICITY`, `ELECTRIC
+  BILL`), `UTILITY`, pay (`WAGES`, `SALARY`, `EMPLOYER`, money in only),
+  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT` (money in only),
+  `WITHDRAWAL` (money out only) and cinemas (`THEATERS`, `CINEMAS`) are
+  suggested. "Rent" or "electric" alone, inside another word or at the
+  start of a shop's name suggests nothing; cheques (`CHECK WITHDRAWAL`
+  too) and deposits stay unguessed (merchant list version 8).
+- **The merchant list knows more cinemas and a few more forms.** Marcus,
+  Harkins, Alamo Drafthouse, Landmark, Cineplex, Showcase, Studio Movie
+  Grill, Cinépolis, Megaplex and Century (Cinemark); Napster, also as
+  `RHAPSODY`; `ITUNES MUSIC` and `ITUNES STORE` (Apple); `THE GAP`; Shell
+  with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
+  word names too many other businesses (merchant list version 9).
+- **A table's title reads like a card's.** Visible table captions
+  (Holdings, Totals by category, Upcoming days and the others) take the
+  card title's face, size and inset, and span the width on a phone instead
+  of breaking after each word.
+- **Inbox › Documents shows one heading.** The library no longer repeats a
+  Document library title and Inbox / Documents breadcrumbs under the Inbox
+  heading and its tabs; Upload files sits on the Documents card. A single
+  document's page keeps its breadcrumbs.
+- **A property's main action is Add valuation.** A manual asset's page
+  offers Add valuation (its Valuations tab with the value field ready, or
+  the asset details when it has none) in place of Add transaction, which
+  moves to the account's menu.
+- **Upcoming's look-ahead is a small control on the tab row**, shown with
+  the calendar only, instead of a select as wide as the page.
+- **A loan's amount stays on its row's first line on a phone.** A long
+  terms line keeps to one line with an ellipsis; the account's page has it
+  in full.
+- **Suggested categories never group rows by text of fewer than three
+  letters and digits.** Rows printed as `#1`, `-` or nothing each stand
+  alone in the Inbox, so one Accept covers only rows of the same merchant.
+
+### Security
+
+- **A dead export or import job no longer blocks the household.** Its
+  archive stayed pending forever, so every later export or import was
+  refused. It is now failed (`job-failed`), its upload and wrapped
+  passphrase key are shredded, and the household can export or import
+  again, on the next request or by the new 15-minute `portability.sweep`
+  job.
+- **`POST /import` refuses an encrypted archive asking for more Argon2id
+  memory than PerFin's own exports use** (256 MiB), before deriving
+  anything; a crafted header could make the API allocate up to 1 GiB.
+- **Adding or removing a second factor, and new recovery codes, end the
+  user's other sessions.** A stolen session survived the very change made
+  to lock it out.
+- **OIDC signing keys are not trusted past their max age.** When a JWKS
+  refetch failed, the old keys were kept as if fresh. Expired keys are now
+  refused until a fetch succeeds; a failing IdP is asked at most once per
+  minimum refresh interval, and claim refresh keeps sessions (instead of
+  ending them) while the keys cannot be fetched.
+- **OIDC claim refresh no longer holds session rows locked while it calls
+  the IdP,** and runs one at a time.
+- **Email intake bounds what it fetches.** It asks the server for at most
+  one byte over the message cap; without UIDPLUS it no longer runs a bare
+  `EXPUNGE` that deleted other mail already flagged deleted, and it reads
+  the server's capabilities again after login (MOVE and UIDPLUS were
+  missed on servers that announce them only then).
+- **The recovery-code limit holds for its full hour.** The hourly prune
+  kept rate-limit events for 15 minutes only, so 5 tries an hour became 5
+  every 15 minutes.
 
 ## [1.0.0-rc.11] - 2026-11-16
 

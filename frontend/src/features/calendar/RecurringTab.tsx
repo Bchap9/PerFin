@@ -14,7 +14,8 @@ import { Table, type TableColumn } from "../../components/Table";
 import { formatDate, todayIsoDate } from "../../lib/dates";
 import { useCanWrite } from "../accounts/api";
 import { labelOf } from "../investments/format";
-import { ErrorLine, QueryState } from "../planning/PlanningPage";
+import { ErrorLine, PlanForm, QueryState } from "../planning/PlanningPage";
+import { ConfirmDelete } from "../planning/ConfirmDelete";
 import { nameLookup, useAccounts, useCategories, usePayees } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import { SUBSCRIPTION_FAMILIES } from "../subscriptions/api";
@@ -99,13 +100,13 @@ export function ScheduleDialog({ onClose, editing }: { onClose: () => void; edit
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
+          <Button variant="primary" type="submit" form="schedule-form" loading={save.busy}>
             {editing === undefined ? "Add item" : "Save"}
           </Button>
         </>
       }
     >
-      <div className="planning-form">
+      <PlanForm id="schedule-form" submit={submit}>
         <Field label="Name" error={problems.name} required>
           <Input value={form.name} onChange={(event) => { set("name", event.target.value); }} />
         </Field>
@@ -149,7 +150,7 @@ export function ScheduleDialog({ onClose, editing }: { onClose: () => void; edit
           </>
         ) : null}
         <ErrorLine message={save.error} />
-      </div>
+      </PlanForm>
     </Dialog>
   );
 }
@@ -199,6 +200,7 @@ export function RecurringTab() {
   const invalidate = SUBSCRIPTION_FAMILIES;
   const toggle = useAction((schedule: Schedule) => updateSchedule(schedule.id, { active: !schedule.active }), { invalidate });
   const remove = useAction(deleteSchedule, { invalidate, success: "Recurring item deleted" });
+  const [deleting, setDeleting] = useState<Schedule | null>(null);
   // A found item is not deleted: the row stays as "not recurring", so detection does not bring it back.
   const dismiss = useAction(deleteSchedule, { invalidate, success: "Marked as not recurring" });
   const detect = useAction(detectSchedules, {
@@ -217,7 +219,7 @@ export function RecurringTab() {
             {toggleText(s)}
           </Button>
           {s.origin !== "detected" ? (
-            <Button size="sm" variant="danger" aria-label={`Delete ${s.name}`} onClick={() => void remove.run(s.id)}>
+            <Button size="sm" variant="danger" aria-label={`Delete ${s.name}`} onClick={() => { setDeleting(s); }}>
               Delete
             </Button>
           ) : s.status === "dismissed" ? null : (
@@ -262,6 +264,16 @@ export function RecurringTab() {
         <Table caption="Recurring items" columns={columns} rows={query.data ?? []} rowKey={(s) => s.id} maxHeight="none" empty="No recurring items yet." />
       </QueryState>
       {canWrite && adding ? <ScheduleDialog onClose={() => { setAdding(false); }} /> : null}
+      {deleting === null ? null : (
+        <ConfirmDelete
+          title={`Delete ${deleting.name}?`}
+          description="It leaves the calendar and the recurring items."
+          label="Delete item"
+          action={remove}
+          confirm={() => remove.run(deleting.id)}
+          onClose={() => { setDeleting(null); }}
+        />
+      )}
     </div>
   );
 }

@@ -10,7 +10,7 @@ import "./review.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useId, useState, type ReactNode } from "react";
+import { useContext, useId, useState, type ReactNode } from "react";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -68,6 +68,7 @@ import {
 import { ReconcileView } from "./ReconcileView";
 import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
 import {
+  AnsweredContext,
   CostBasisTools,
   HeldLines,
   LowConfidenceTools,
@@ -338,6 +339,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
   const [settingUp, setSettingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resolve = useResolve(item, setError);
+  const answered = useContext(AnsweredContext);
   if (!actionable) {
     return null;
   }
@@ -405,6 +407,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
       {settingUp && item.document_id !== null ? (
         <DocumentAccountsDialog
           documentId={item.document_id}
+          onApplied={answered}
           onClose={() => {
             setSettingUp(false);
           }}
@@ -866,9 +869,11 @@ function ReprocessControl({ item, actionable, trailing }: ControlProps) {
 
 function useDismiss(item: ReviewItem, onError: (message: string | null) => void) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   return useMutation({
     mutationFn: () => dismissItem(item.id),
     onSuccess: () => {
+      answered();
       onError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
@@ -1405,6 +1410,7 @@ interface CardModel {
 
 function CardView({ model }: { model: CardModel }) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   const [fixing, setFixing] = useState(false);
   const [teaching, setTeaching] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -1529,6 +1535,7 @@ function CardView({ model }: { model: CardModel }) {
                 }
               : {})}
             onDone={() => {
+              answered();
               setReconciling(false);
               void queryClient.invalidateQueries({ queryKey: queryRoots.review });
               void queryClient.invalidateQueries({

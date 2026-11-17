@@ -9,11 +9,20 @@
   snapshot.
 * :func:`latest_snapshot`: the most recent stored snapshot on or before a day.
 * :func:`snapshot_household` (the daily ``networth.snapshot`` job): computes
-  and upserts today's snapshot (``app.domain.networth.compute``) and fills
-  every missing day since the last stored one (or since the household's
-  first data, at most :data:`MAX_BACKFILL_DAYS` back). One row per household
+  and upserts today's snapshot (``app.domain.networth.compute``), rewrites
+  the last stored day and fills every missing day since (or since the
+  household's first data, at most :data:`MAX_BACKFILL_DAYS` back); one run
+  of a household at a time (a transaction-level advisory lock). One row per household
   and day (unique key, ``INSERT ... ON CONFLICT DO UPDATE``), so running it
-  twice on a day changes nothing but the figures.
+  twice on a day changes nothing but the figures. Stored days are
+  **rewritten** from the earliest day an import wrote or removed something
+  on (:func:`request_recompute`, enqueued by the importer: statements are
+  backdated, so a stored day would otherwise keep what was known on it) and
+  from the first stored day valued by older rules (``breakdown["valuation"]``
+  below :data:`~app.domain.networth.compute.VALUATION_VERSION`). A rewritten
+  day holds the accounts that exist: deleting an account removes everything
+  recorded on it, its place in the history too, and queues the rewrite of
+  every stored day that names it (closing an account is how it stays).
 * :func:`history` (``GET /networth?range=&granularity=``): one point per
   bucket end (every day, every 7 days back from today, or every month end),
   oldest first, the last point always today. With household scope a stored
@@ -36,7 +45,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Final
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -52,7 +61,12 @@ from app.domain.fx.service import base_currency
 from app.domain.investments.performance import range_start
 from app.domain.investments.schemas import Range
 from app.domain.networth import projection as model
-from app.domain.networth.compute import NetWorthBook, NetWorthPoint
+from app.domain.networth import recompute
+from app.domain.networth.compute import (
+    VALUATION_VERSION,
+    NetWorthBook,
+    NetWorthPoint,
+)
 from app.domain.networth.models import NetWorthSnapshot
 from app.domain.networth.schemas import (
     MAX_POINTS,
@@ -74,6 +88,9 @@ from app.domain.reports.dates import add_months, iter_months, month_end, month_s
 
 #: Most days one job run fills (ten years).
 MAX_BACKFILL_DAYS: Final = 3660
+#: First key of the per-household ``pg_advisory_xact_lock`` the snapshot job
+#: takes ("PFNW"; the queue's own household lock uses another namespace).
+SNAPSHOT_LOCK_NAMESPACE: Final = 0x5046_4E57
 _AUTO_DAY_LIMIT: Final = 400
 _AUTO_WEEK_LIMIT: Final = 7 * 366
 
@@ -123,12 +140,38 @@ def upsert_snapshot(db: Session, household_id: uuid.UUID, point: NetWorthPoint) 
 
 
 def snapshot_household(
-    db: Session, household_id: uuid.UUID, on: date, *, max_days: int = MAX_BACKFILL_DAYS
+    db: Session,
+    household_id: uuid.UUID,
+    on: date,
+    *,
+    since: date | None = None,
+    max_days: int = MAX_BACKFILL_DAYS,
 ) -> int:
-    """Upsert the snapshot of ``on`` and fill the missing days before it (module doc).
+    """Upsert the snapshot of ``on`` and fill or rewrite the days before it (module doc).
 
-    Runs in the household's RLS context. Returns the number of days written.
+    Written: every day from the last stored one (from the first data on a
+    first run, or when the data now starts before the first stored day),
+    every day from ``since`` (the earliest day an import wrote
+    or removed something on) and every day from the first stored row valued
+    by older rules (:data:`~app.domain.networth.compute.VALUATION_VERSION`),
+    at most ``max_days`` back. A stored day in another base currency than
+    today's is left as recorded (today's row excepted). Runs in the household's RLS context. Returns
+    the number of days written.
     """
+    # One run of a household at a time (the queue lets two of its jobs run
+    # at once): a later run waits here and reads the book only once the
+    # earlier one committed, so it never writes back an older reading.
+    # The wait is bounded by the statement timeout (the job's own, set by
+    # the runner), not by the connection's lock timeout: an earlier run's
+    # backfill can take longer than that, and a timed-out wait would cost
+    # the job an attempt.
+    lock_timeout = db.execute(text("SELECT current_setting('lock_timeout')")).scalar_one()
+    db.execute(text("SELECT set_config('lock_timeout', '0', true)"))
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, hashtext(CAST(:household AS text)))"),
+        {"namespace": SNAPSHOT_LOCK_NAMESPACE, "household": str(household_id)},
+    )
+    db.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": lock_timeout})
     base = base_currency(db, household_id)
     book = NetWorthBook.load(db, household_id, None, target=base, until=on)
     last = db.execute(
@@ -136,17 +179,65 @@ def snapshot_household(
             NetWorthSnapshot.household_id == household_id, NetWorthSnapshot.as_of_date < on
         )
     ).scalar_one_or_none()
-    start = last + timedelta(days=1) if last is not None else (book.first_day() or on)
-    start = min(max(start, on - timedelta(days=max_days - 1)), on)
+    # The last stored day again: what was written on it after it was stored
+    # (a row dated today, which asks for no rewrite) reaches it this way.
+    start = last if last is not None else (book.first_day() or on)
+    valuation = NetWorthSnapshot.breakdown["valuation"].as_integer()
+    # Nothing before the window is written, so nothing there counts as stale.
+    window = on - timedelta(days=max_days - 1)
+    stale = db.execute(
+        select(func.min(NetWorthSnapshot.as_of_date)).where(
+            NetWorthSnapshot.household_id == household_id,
+            NetWorthSnapshot.as_of_date >= window,
+            NetWorthSnapshot.as_of_date < on,
+            NetWorthSnapshot.currency == base,
+            or_(valuation.is_(None), valuation < VALUATION_VERSION),
+        )
+    ).scalar_one_or_none()
+    first = book.first_day()
+    earliest = db.execute(
+        select(func.min(NetWorthSnapshot.as_of_date)).where(
+            NetWorthSnapshot.household_id == household_id
+        )
+    ).scalar_one_or_none()
+    # Data now reaching back before the first stored day (a loan or account
+    # added with its history after the first run): those days are missing too.
+    front = max(first, window) if first is not None else None
+    front = front if front is not None and earliest is not None and front < earliest else None
+    for earlier in (since, stale, front):
+        if earlier is not None:
+            start = min(start, earlier)
+    start = min(max(start, window), on)
+    stored = {
+        row.as_of_date: row
+        for row in db.execute(
+            select(NetWorthSnapshot).where(
+                NetWorthSnapshot.household_id == household_id,
+                NetWorthSnapshot.as_of_date >= start,
+                NetWorthSnapshot.as_of_date <= on,
+            )
+        ).scalars()
+    }
     day = start
     written = 0
     while day <= on:
+        found = stored.get(day)
+        if found is not None and found.currency != base and day != on:
+            # Recorded in the base currency of its day: history as it was
+            # (reads use only rows in today's base currency).
+            day += timedelta(days=1)
+            continue
         upsert_snapshot(db, household_id, book.on(day))
         written += 1
         day += timedelta(days=1)
     # No payload: the event names no account, so only owners and admins hear it.
     emit(db, household_id, "networth.snapshot")
     return written
+
+
+def request_recompute(db: Session, household_id: uuid.UUID, since: date) -> None:
+    """Have the stored days from ``since`` rewritten (``recompute.request_recompute``)."""
+    recompute.request_recompute(db, household_id, since)
 
 
 # ---------------------------------------------------------------------------

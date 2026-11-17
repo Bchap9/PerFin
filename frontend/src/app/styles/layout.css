@@ -185,6 +185,10 @@
 /* The section's own heading, description and tab bar (app/SectionLayout.tsx). */
 .section-header {
   display: grid;
+  /* One column no wider than the page: an auto column grows to the tab
+     list's full width, so on a phone Reports' six tabs pushed the header
+     (and the page) 136px past the screen instead of scrolling the tabs. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   margin-bottom: var(--space-5);
 }
@@ -377,8 +381,9 @@
     justify-content: center;
     gap: 2px;
     min-height: 3rem;
-    padding: var(--space-1) 2px;
+    padding: var(--space-1) 0;
     font-size: 0.6875rem;
+    letter-spacing: -0.01em;
     text-align: center;
   }
 

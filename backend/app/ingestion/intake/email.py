@@ -26,7 +26,9 @@ library's :class:`email.parser.BytesHeaderParser` (``compat32``: no MIME
 decoding, no body), each value capped at :data:`VALUE_MAX` characters and
 at most :data:`VALUES_MAX` values per header, plus ``RFC822.SIZE``. The body
 of a rejected message is never fetched. An accepted message is fetched whole
-(``BODY.PEEK[]``, after its declared size passed the cap) and handed to the
+(``BODY.PEEK[]<0.cap+1>``, after its declared size passed the cap; a server
+that understated the size gets at most one byte over the cap asked of it,
+and the message is ``too_large``) and handed to the
 normal intake (:func:`app.ingestion.intake.upload.store_stream`: sniff, size
 cap, SHA-256, encryption into quarantine) as a ``.eml`` document with
 ``source=email``; its body, HTML and attachments are parsed only by the
@@ -60,8 +62,12 @@ Messages larger than the cap are ``too_large``; mail the intake refuses
 **Two-phase move and dedupe.** A run records its decision for each new
 message in ``mail_intake_message`` (keyed by :func:`message_key`) together
 with the document or the digest entry, in the job's transaction, and does
-**not** move it. A message is moved (``UID MOVE``; ``COPY`` + ``\\Deleted`` +
-``EXPUNGE`` where the server lacks ``MOVE``) only by a run that finds it
+**not** move it. A message is moved (``UID MOVE``; ``UID COPY`` +
+``\\Deleted`` + ``UID EXPUNGE`` where the server lacks ``MOVE``, and without
+``UIDPLUS`` the original is left flagged ``\\Deleted`` rather than running a
+bare ``EXPUNGE`` that would remove other flagged mail; runs search
+``UNDELETED`` so it is not copied again; capabilities are read again after
+login) only by a run that finds it
 already recorded: accepted ones to ``processed_folder``, rejected ones to
 ``rejected_folder``. The handler enqueues a follow-up run whenever a run
 recorded something, so the moves happen right after the commit. A crash
@@ -378,8 +384,16 @@ class Mailbox:
 
     def __init__(self, imap: imaplib.IMAP4) -> None:
         self._imap = imap
-        caps = getattr(imap, "capabilities", ())
-        self.capabilities = frozenset(str(c).upper() for c in caps)
+        caps = {str(c).upper() for c in getattr(imap, "capabilities", ())}
+        # imaplib keeps the greeting's list; servers such as Dovecot announce
+        # MOVE and UIDPLUS only once logged in, so ask again.
+        with contextlib.suppress(imaplib.IMAP4.error, OSError):
+            status, data = imap.capability()
+            if status == "OK":
+                for line in data:
+                    if isinstance(line, bytes):
+                        caps.update(t.decode("ascii", "replace").upper() for t in line.split())
+        self.capabilities = frozenset(caps)
 
     @property
     def move_supported(self) -> bool:
@@ -417,7 +431,9 @@ class Mailbox:
             self._imap.create(_quote(folder))
 
     def uids(self, limit: int) -> list[int]:
-        data = self._ok(self._imap.uid("SEARCH", "ALL"))
+        # Not ALL: a message we copied and left flagged \Deleted (no UIDPLUS)
+        # must not be copied again on every run.
+        data = self._ok(self._imap.uid("SEARCH", "UNDELETED"))
         found: list[int] = []
         for chunk in data:
             if isinstance(chunk, bytes):
@@ -455,7 +471,9 @@ class Mailbox:
         return HeaderFetch(int(size.group(1)), header[:HEADER_MAX])
 
     def fetch_message(self, uid: int, max_bytes: int) -> bytes | None:
-        fetched = self._fetch(uid, "(UID BODY.PEEK[])")
+        # A partial fetch (RFC 3501): the server sends at most one byte over
+        # the cap even when it understated RFC822.SIZE.
+        fetched = self._fetch(uid, f"(UID BODY.PEEK[]<0.{max_bytes + 1}>)")
         if fetched is None:
             return None
         body = fetched[1]
@@ -475,8 +493,9 @@ class Mailbox:
             self._imap.uid("STORE", str(uid), "+FLAGS.SILENT", r"(\Deleted)")
             if "UIDPLUS" in self.capabilities:
                 self._imap.uid("EXPUNGE", str(uid))
-            else:
-                self._imap.expunge()
+            # Without UIDPLUS the original stays flagged \Deleted in the inbox (the
+            # user's client expunges it): a bare EXPUNGE would also remove
+            # every other message flagged there. ``uids`` skips it.
             return True
         except imaplib.IMAP4.error:
             return False

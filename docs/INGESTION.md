@@ -2804,7 +2804,29 @@ same database transaction.
   transaction row directly above it continues that description and is
   appended to the row's memo. A row whose date cell says `Pending` is not
   booked yet: counted (`pending_rows` in the run summary) and not
-  imported. At most five unreadable rows after the table's last readable
+  imported. A row whose cells are the header's column names again (an
+  export that prints the header on every page) is a note, counted as
+  `header_rows`. A row whose payee cell (the memo's when the payee's is
+  empty) is a balance phrase (`Opening balance`, `Closing balance`,
+  `app.ingestion.balance_lines`), with the other of the two empty or a
+  balance phrase too, is no transaction even with a date and a figure: it
+  is a note, counted as `balance_rows`, and the first opening balance row
+  gives the statement's opening balance (its balance cell when one is
+  mapped and reads, else its amount), proposed for a new account as of the
+  day before the row's date so that transactions on that day still count.
+  Imported into an existing account (as a QIF's `Opening Balance` record
+  is), it is that day's `statement` balance snapshot when the account has
+  no snapshot and no transaction on or before the day (the row a `qif/1`
+  reading made of it is then replaced, if nobody changed it, else kept
+  with no snapshot); otherwise nothing is written and a
+  `low_confidence_field` item (`opening_balance_not_recorded`: account,
+  currency, amount, `as_of`) names it, unless a reading's row stands in
+  for it or that very balance is already recorded for the day. Not with
+  `balance_mismatch` rows. A closing balance row is dropped and stays on
+  record only in the count.
+  `Opening balance fee`, or a memo of its own, is a transaction. A grouped
+  (multi-account) file's header and balance rows that belong to no group
+  are counted in its first group. At most five unreadable rows after the table's last readable
   row that hold no transaction (totals, closing lines) are footers
   (`footer_rows`), not reported; more than five are all reported. A cash
   amount with more than six decimals is rounded half-even to six, as OFX
@@ -3765,11 +3787,18 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
   recorded something. A second copy of an accepted message (or an
   identical copy of a rejected one) is moved without being imported or
   evaluated again. Servers without `MOVE`
-  get `COPY`, `\Deleted` and `UID EXPUNGE`.
+  get `UID COPY`, `\Deleted` and `UID EXPUNGE`; a server that lacks
+  `UIDPLUS` as well gets no expunge at all (a bare `EXPUNGE` would also
+  remove other mail flagged `\Deleted`), so the original stays flagged in
+  the inbox until the user's client expunges it, and runs search only
+  `UNDELETED` mail. Capabilities are read again after login.
 - **Caps.** Per run `PERFIN_EMAIL_INTAKE_MAX_MESSAGES_PER_RUN` new
   messages (50), `PERFIN_EMAIL_INTAKE_MAX_MB_PER_RUN` (200) fetched;
   messages over `PERFIN_EMAIL_INTAKE_MAX_MESSAGE_MB` (25, and never over
-  the upload cap) are rejected from their declared size. Polls run every 5
+  the upload cap) are rejected from their declared size, and the body is
+  fetched as `BODY.PEEK[]<0.cap+1>` so a server that understated the size
+  is asked for at most one byte more (the message is then `too_large`).
+  Polls run every 5
   minutes (`poll_mailboxes` dispatches `poll_mailbox` per enabled
   household).
 - **Digest.** Rejections add to one open `rejected_email` review item per

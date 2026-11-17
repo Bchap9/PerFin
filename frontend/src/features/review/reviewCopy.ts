@@ -1030,6 +1030,23 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Remove the rows that are wrong, or keep them.",
     ],
   }),
+  "low_confidence_field:opening_balance_not_recorded": (item) => {
+    const amount = payloadString(item, "amount");
+    const day = payloadString(item, "as_of");
+    const figure =
+      amount === null || day === null
+        ? ""
+        : ` of ${money(amount, payloadString(item, "currency"))} on ${formatDate(day) ?? day}`;
+    return {
+      title: "Opening balance not recorded",
+      what: `This file opens with a balance${figure}, but the account already has a different balance for that day, so PerFin did not record it.`,
+      steps: [
+        "Check the account's balance on that day against the file.",
+        "Enter the balance on the account yourself if the file is right.",
+        "Dismiss this item.",
+      ],
+    };
+  },
 };
 
 /** The explanation of an item (falls back to the kind's own words). */

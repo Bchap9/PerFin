@@ -7,11 +7,14 @@
   justify-content: center;
   gap: var(--space-2);
   min-height: 2.5rem;
-  padding: 0 var(--space-4);
+  /* A long label that wraps on a phone ("Always use … for …") keeps room
+     between and around its lines; one line keeps the min-height. */
+  padding: var(--space-1) var(--space-4);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.25;
+  text-align: center;
   cursor: pointer;
   transition:
     background-color var(--transition-fast),
@@ -20,7 +23,7 @@
 
 .btn--sm {
   min-height: 2rem;
-  padding: 0 var(--space-3);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-sm);
 }
 
@@ -179,6 +182,14 @@ a.btn--danger:hover {
 
 .checkbox__hint {
   grid-column: 2;
+}
+
+/* A checkbox in a table cell or beside header buttons has no form gap under
+   it, so it centres on its row. */
+.table .checkbox,
+.page-header__actions > .checkbox,
+.page-header__actions > .field {
+  margin-bottom: 0;
 }
 
 /* Touch screens: every control is at least 44px tall (WCAG 2.5.8 asks 24px,
@@ -369,10 +380,17 @@ a.btn--danger:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* A visible caption is the table's title: it reads as a card title (same
+   face, size, weight and inset from the edge), so a table and a card on one
+   page carry one kind of heading. */
 .table__caption {
-  padding: var(--space-3) var(--space-4);
+  padding: 1.125rem 1.125rem var(--space-3);
   text-align: start;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
 }
 
 .table th,
@@ -460,6 +478,13 @@ a.btn--danger:hover {
     width: 100%;
   }
 
+  /* The caption spans the width (a caption box would shrink to its longest
+     word) and lines up with the row cards under it, which have no frame. */
+  .table__caption {
+    display: block;
+    padding: var(--space-2) 0 var(--space-3);
+  }
+
   .table thead {
     position: absolute;
     width: 1px;
@@ -517,6 +542,15 @@ a.btn--danger:hover {
     min-width: 0;
   }
 
+  /* A badge, chip or button keeps its own width instead of filling the
+     value column. */
+  .table td > .badge,
+  .table td > .chip,
+  .table td > .btn,
+  .table tbody th > .badge {
+    justify-self: start;
+  }
+
   .table__empty {
     display: block;
   }
@@ -564,7 +598,24 @@ a.btn--danger:hover {
   color: var(--color-text-muted);
 }
 
+/* An open dialog is a column: the header and footer stay in view and only
+   the body scrolls, so a long form (a goal's accounts, a new transaction on
+   a phone) keeps its Save button on screen. */
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog__header,
+.dialog__description,
+.dialog__footer {
+  flex: none;
+}
+
 .dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-4) var(--space-5);
 }
 

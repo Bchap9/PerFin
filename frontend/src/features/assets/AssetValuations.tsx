@@ -8,7 +8,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
@@ -24,6 +24,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { labelOf } from "../investments/format";
 import { SeriesChart } from "../networth/SeriesChart";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
+import { ConfirmDelete } from "../planning/ConfirmDelete";
 import { useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import {
@@ -93,7 +94,27 @@ function EditDialog({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   );
 }
 
-function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
+function Valuations({
+  asset,
+  editable,
+  focusValue,
+  onValueFocused,
+}: {
+  asset: Asset;
+  editable: boolean;
+  focusValue: number;
+  onValueFocused?: (() => void) | undefined;
+}) {
+  const valueInput = useRef<HTMLInputElement>(null);
+  // The hub's "Add valuation" asks for the value field. The request is used
+  // up once the field has the focus, so coming back to the tab later (with
+  // Back or Forward) does not move the focus again.
+  useEffect(() => {
+    if (focusValue > 0 && valueInput.current !== null) {
+      valueInput.current.focus();
+      onValueFocused?.();
+    }
+  }, [focusValue, editable, onValueFocused]);
   const accounts = useAccounts();
   const currency = accounts.data?.find((a) => a.id === asset.account_id)?.currency ?? asset.current_value?.value.currency ?? "USD";
   const query = useQuery({ queryKey: assetKeys.valuations(asset.id), queryFn: () => listValuations(asset.id) });
@@ -103,6 +124,7 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
   const invalidate = [queryRoots.assets, queryRoots.accounts, queryRoots.netWorth, queryRoots.dashboard];
   const add = useAction((body: Parameters<typeof addValuation>[1]) => addValuation(asset.id, body), { invalidate, success: "Value saved" });
   const remove = useAction((id: string) => deleteValuation(asset.id, id), { invalidate, success: "Value deleted" });
+  const [deleting, setDeleting] = useState<Valuation | null>(null);
   const rows = query.data ?? [];
   const change = valueChange(rows);
 
@@ -117,7 +139,7 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
       header: <span className="visually-hidden">Delete</span>,
       align: "end",
       cell: (v) => (
-        <Button size="sm" variant="danger" aria-label={`Delete the value of ${v.valued_on}`} onClick={() => void remove.run(v.id)}>
+        <Button size="sm" variant="danger" aria-label={`Delete the value of ${v.valued_on}`} onClick={() => { setDeleting(v); }}>
           Delete
         </Button>
       ),
@@ -153,7 +175,7 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
               <Input type="date" value={valuedOn} onChange={(event) => { setValuedOn(event.target.value); }} />
             </Field>
             <Field label={`Value (${currency})`}>
-              <Input inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
+              <Input ref={valueInput} inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
             </Field>
             <Button type="submit" variant="primary" loading={add.busy}>
               Save value
@@ -178,12 +200,35 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
         ) : null}
         <Table caption="Valuation history" columns={columns} rows={rows} rowKey={(v) => v.id} maxHeight="md" empty="No values recorded." />
       </QueryState>
+      {deleting === null ? null : (
+        <ConfirmDelete
+          title="Delete this value?"
+          description={`The value of ${formatDate(deleting.valued_on) ?? deleting.valued_on} leaves this asset's history.`}
+          label="Delete value"
+          action={remove}
+          confirm={() => remove.run(deleting.id)}
+          onClose={() => { setDeleting(null); }}
+        />
+      )}
     </div>
   );
 }
 
-/** The asset of a manual asset account, by its id (found by the hub from `GET /assets`). */
-export function AssetValuations({ assetId }: { assetId: string }) {
+/**
+ * The asset of a manual asset account, by its id (found by the hub from
+ * `GET /assets`). `focusValue` above 0 puts the focus in the value field of
+ * "Add a value" (the hub's "Add valuation"); `onValueFocused` then tells the
+ * hub to set it back to 0, so the request is used once.
+ */
+export function AssetValuations({
+  assetId,
+  focusValue = 0,
+  onValueFocused,
+}: {
+  assetId: string;
+  focusValue?: number;
+  onValueFocused?: () => void;
+}) {
   const navigate = useNavigate();
   const query = useQuery({ queryKey: assetKeys.one(assetId), queryFn: () => getAsset(assetId), enabled: assetId !== "" });
   const accounts = useAccounts();
@@ -236,7 +281,7 @@ export function AssetValuations({ assetId }: { assetId: string }) {
               </dl>
               {asset.description === null ? null : <p className="muted">{asset.description}</p>}
             </Card>
-            <Valuations asset={asset} editable={editable} />
+            <Valuations asset={asset} editable={editable} focusValue={focusValue} onValueFocused={onValueFocused} />
           </>
         )}
       </QueryState>

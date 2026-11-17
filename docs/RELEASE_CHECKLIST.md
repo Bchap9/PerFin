@@ -40,19 +40,20 @@ Each fix has a regression test, and each test was confirmed to fail when its fix
 | `scripts/backup.sh` (Compose) failed with `service "api" is not running` when api and worker were stopped, which its own header recommends for a consistent snapshot. | `docker compose run --rm --no-deps` one-off `api` containers instead of `exec` | `tests/unit/test_backup_script_compose.py` |
 | `perfin api` / `perfin worker` served normally with `PERFIN_DATABASE_URL` set to the schema owner (or a superuser), which leaves row-level security one `ALTER TABLE` away (SECURITY.md H3). | `backend/app/db/role_check.py`; `app/cli.py` `_database_role_ok` refuses a superuser, `BYPASSRLS` or table-owning role at startup (dev mode warns; fails closed) | `tests/integration/test_database_role_gate.py` (10 tests) |
 
-### Release blockers that are not code defects
+### State at the time of this run, and since
 
-- Versions and changelog are ready: `backend/pyproject.toml`,
-  `backend/app/__init__.py`, `frontend/package.json` and
-  `deploy/helm/perfin/Chart.yaml` (version and appVersion) are `1.0.0`,
-  `CHANGELOG.md` has a `## [1.0.0]` section, and
-  `python3 -I scripts/release_notes.py check v1.0.0` exits 0 (the release
-  workflow runs the same check). Not a blocker any more.
-- The release workflow (`.github/workflows/release.yml`) has never run. Check
-  the first tag run closely (signing, attestations, chart push).
-- CI is green end to end on the committed Phase 7 tree: `ci` run 41927816446
-  and `security` run 41927816284 (commit `21d2b38`). Not a blocker any more.
-- The external penetration test is outstanding (docs/ROADMAP.md, Phase 7).
+This is the record of the 2026-11-04 run against the pre-rc.1 tree. What it
+listed as open has been settled since:
+
+- Versions and the changelog are set at each tag;
+  `python3 -I scripts/release_notes.py check vX` runs in the release
+  workflow, which refuses to publish a tag that fails it.
+- The release workflow has run on every release candidate since rc.2
+  (signed images, SBOMs, provenance, the signed chart).
+- CI is green end to end on GitHub Actions for each release candidate.
+- The 1.0 gate is an internal release review, by the owner's decision. No
+  external security review or penetration test has been done; run PerFin on
+  a private network only (SECURITY.md).
 
 ## 1. Build the image
 

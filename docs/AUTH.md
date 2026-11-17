@@ -124,7 +124,9 @@ can run with both, or be locked to OIDC only.
 - Session id rotates on login, on privilege change and on MFA completion
   (prevents fixation).
 - Users can list and revoke their sessions. Password change revokes all other
-  sessions.
+  sessions, and so do adding or removing a second factor and regenerating
+  recovery codes (the acting session stays: rotated when a factor is added,
+  unchanged otherwise, since its CSRF token is bound to the session id).
 - Implementation notes (`app/auth/sessions.py`): a remembered device is not
   logged out for being idle (only its 30-day absolute lifetime applies); a
   password-accepted session waiting for the second factor (`mfa_pending`)
@@ -315,7 +317,13 @@ Code: `app/auth/oidc/` (`client`, `discovery`, `tokens`, `provisioning`,
   start (`perfin config check`). The discovery document and JWKS are cached
   in memory for at most `PERFIN_OIDC_METADATA_MAX_AGE_SECONDS`; a token whose
   `kid` is not in the cached JWKS refetches it at most once per
-  `PERFIN_OIDC_JWKS_MIN_REFRESH_SECONDS` and is otherwise refused.
+  `PERFIN_OIDC_JWKS_MIN_REFRESH_SECONDS` and is otherwise refused. The max
+  age counts from the last successful JWKS fetch: a failed refetch does not
+  extend it, and once the keys are older every token is refused until the
+  IdP answers again (retried at most once per minimum refresh interval
+  after a failed fetch; keys that simply reached their max age are
+  refetched at once, so a max age shorter than the interval never refuses
+  tokens while the IdP is up).
 - **ID token.** `alg` must be `RS256` or `ES256` (checked on the raw
   header before any key is used, so `none` and `HS256` signed with the public
   key fail); `crit` is refused; embedded keys (`jwk`, `jku`, `x5u`, `x5c`)
@@ -387,7 +395,14 @@ Code: `app/auth/oidc/` (`client`, `discovery`, `tokens`, `provisioning`,
   each due live session: `invalid_grant` revokes the session; a new ID token
   (same `iss`/`sub`) re-applies the group mapping, revoking the session when
   `PERFIN_OIDC_REQUIRE_GROUP` finds no mapped group or the account is
-  inactive; a rotated refresh token is stored. The hourly `oidc_prune` job
+  inactive; a rotated refresh token is stored. An unreachable IdP, the JWKS
+  included, revokes nothing: when the ID token cannot be checked for want
+  of keys, the rotated refresh token is still stored and the run stops
+  asking the IdP until the next one. The token calls are made
+  with no row locked (a request or logout on those sessions never waits for
+  the IdP); each answer is then applied under a short lock only if the
+  session is still live and still holds the token that was sent, and one
+  run at a time (advisory lock). The hourly `oidc_prune` job
   drops `oidc_session` rows of ended sessions and expired `oidc_used_state`
   rows.
 - **OIDC-only mode.** `perfin config check` refuses

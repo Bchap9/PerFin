@@ -20,6 +20,7 @@ from app.auth.models import HouseholdRole
 from app.auth.oidc.client import CookieSealer, PreAuthState, pkce_challenge, safe_return_to
 from app.auth.oidc.discovery import (
     DiscoveryError,
+    ProviderCache,
     SigningKey,
     discovery_url,
     parse_jwks,
@@ -236,6 +237,101 @@ def test_jwks_keeps_only_pinned_signing_keys(idp: FakeIdP) -> None:
         parse_jwks({"keys": [weak_jwk]})
     with pytest.raises(DiscoveryError):
         parse_jwks({"nokeys": []})
+
+
+class _StubResponse:
+    def __init__(self, status: int, body: object) -> None:
+        self.status_code = status
+        self._body = body
+
+    def json(self) -> object:
+        return self._body
+
+
+class _StubIdpHttp:
+    """Answers discovery and JWKS; ``jwks_down`` makes the JWKS endpoint fail."""
+
+    def __init__(self, idp: FakeIdP) -> None:
+        self.idp = idp
+        self.jwks_down = False
+        self.jwks_fetches = 0
+
+    def get(self, url: str, headers: dict[str, str] | None = None) -> _StubResponse:
+        if url == discovery_url(ISSUER):
+            return _StubResponse(200, self.idp.discovery())
+        self.jwks_fetches += 1
+        if self.jwks_down:
+            return _StubResponse(503, {})
+        return _StubResponse(200, self.idp.jwks())
+
+
+def test_jwks_failures_never_keep_expired_keys(idp: FakeIdP) -> None:
+    """Keys are trusted for at most max age from the last successful fetch (B9)."""
+    http = _StubIdpHttp(idp)
+    t = [datetime(2026, 3, 1, tzinfo=UTC)]
+    cache = ProviderCache(
+        http,  # type: ignore[arg-type]
+        issuer=ISSUER,
+        auth_method="client_secret_basic",
+        max_age=timedelta(hours=1),
+        jwks_min_refresh=timedelta(minutes=1),
+        now=lambda: t[0],
+    )
+    kid = idp.kid("rsa")
+    assert cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == 1
+
+    # An unknown kid refetches; the IdP is down. The known keys keep their age.
+    http.jwks_down = True
+    t[0] += timedelta(minutes=50)
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys("rotated-key", "RS256")
+    assert http.jwks_fetches == 2
+    assert cache.signing_keys(kid, "RS256")  # still inside the hour of the good fetch
+
+    # Past max age of the good fetch: the stale keys are not used.
+    t[0] += timedelta(minutes=15)
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    fetches = http.jwks_fetches
+    # Within the minimum refresh interval a down IdP is not asked again,
+    # and the expired keys are still refused.
+    t[0] += timedelta(seconds=30)
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == fetches
+    # After it the fetch is retried; once the IdP is back, keys are fresh again.
+    http.jwks_down = False
+    t[0] += timedelta(minutes=1)
+    assert cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == fetches + 1
+
+
+def test_jwks_expiry_refetches_at_once_when_the_last_fetch_succeeded(idp: FakeIdP) -> None:
+    """A max age shorter than the refresh interval never locks out a healthy IdP."""
+    http = _StubIdpHttp(idp)
+    t = [datetime(2026, 3, 1, tzinfo=UTC)]
+    cache = ProviderCache(
+        http,  # type: ignore[arg-type]
+        issuer=ISSUER,
+        auth_method="client_secret_basic",
+        max_age=timedelta(minutes=1),
+        jwks_min_refresh=timedelta(minutes=5),
+        now=lambda: t[0],
+    )
+    kid = idp.kid("rsa")
+    assert cache.signing_keys(kid, "RS256")
+    t[0] += timedelta(minutes=2)
+    assert cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == 2
+    # A failed refetch on expiry is still throttled by the refresh interval.
+    http.jwks_down = True
+    t[0] += timedelta(minutes=2)
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    with pytest.raises(DiscoveryError):
+        cache.signing_keys(kid, "RS256")
+    assert http.jwks_fetches == 3
 
 
 # ---------------------------------------------------------------------------

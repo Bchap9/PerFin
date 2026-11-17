@@ -12,7 +12,9 @@ per day even if the dispatcher runs twice.
 :func:`app.domain.networth.service.snapshot_household`: it upserts that day's
 ``net_worth_snapshot`` and fills the days missing since the last one (the
 backfill; at most ten years on a household's first run). Re-running it for
-the same day rewrites the same row.
+the same day rewrites the same row. A write on a past day enqueues it with
+``since`` (``app.domain.networth.recompute.request_recompute``, one waiting
+job per household): the stored days from then on are rewritten.
 """
 
 from __future__ import annotations
@@ -30,25 +32,20 @@ from app.core.logging import get_logger
 from app.db.queue import enqueue
 from app.db.rls import set_context
 from app.domain.networth import service
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE as SNAPSHOT_JOB_TYPE
+from app.domain.networth.schemas import HouseholdSnapshotPayload as HouseholdSnapshotPayload
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 from app.workers.scheduler import recurring
 
 log = get_logger(__name__)
 
 DISPATCH_JOB_TYPE: Final = "snapshot_net_worth"
-SNAPSHOT_JOB_TYPE: Final = "networth.snapshot"
 SNAPSHOT_INTERVAL: Final = timedelta(days=1)
 SNAPSHOT_TIMEOUT_SECONDS: Final = 900.0
 
 
 class SnapshotNetWorthPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class HouseholdSnapshotPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    as_of: date
 
 
 def household_ids(db: Session) -> list[uuid.UUID]:
@@ -87,7 +84,9 @@ def snapshot_net_worth(ctx: JobContext, payload: SnapshotNetWorthPayload) -> Non
 def snapshot_household(ctx: JobContext, payload: HouseholdSnapshotPayload) -> None:
     if ctx.household_id is None:
         raise PermanentJobError("networth.snapshot needs a household")
-    written = service.snapshot_household(ctx.session, ctx.household_id, payload.as_of)
+    written = service.snapshot_household(
+        ctx.session, ctx.household_id, payload.as_of, since=payload.since
+    )
     log.info("net worth snapshot", extra={"days": written})
 
 
