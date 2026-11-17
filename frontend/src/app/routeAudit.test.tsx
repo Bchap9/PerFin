@@ -324,6 +324,11 @@ describe.each(NEW_ROUTES.map((route) => [route]))("%s", (route) => {
     expect(document.querySelector(".empty-state")?.textContent ?? null).toBeNull();
   });
 
+  it("has a title of its own", async () => {
+    await openRoute(route);
+    expect(document.title).toMatch(/^\S.* · PerFin$/);
+  });
+
   it("has exactly one h1", async () => {
     await openRoute(route);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);

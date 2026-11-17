@@ -101,6 +101,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
   phone, or high zoom) the header's checkbox was clipped to nothing yet
   still took focus, so there was no way to see it or select every row; it
   now shows above the cards, labelled "Select all".
+- **Each page has a title of its own.** The browser tab, its history and
+  a screen reader's window list said "PerFin" on every page; they now name
+  the page: "Goals · PerFin", "Security · PerFin", "Sign in · PerFin".
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.

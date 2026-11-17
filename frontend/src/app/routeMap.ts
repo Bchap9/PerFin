@@ -155,6 +155,21 @@ export const SETTINGS_GROUPS: readonly { label: string; pages: readonly Settings
   { label: "Instance", pages: [{ to: "/settings/users", label: "Users", instanceAdmin: true }] },
 ];
 
+/**
+ * The document title of an address (WCAG 2.4.2): its tab (`tab`, the `?tab=`
+ * value, picks among tabs of one path), else its Settings page, else its
+ * section, then "PerFin". The sign-in pages set their own (AuthLayout).
+ */
+export function pageTitle(pathname: string, tab: unknown): string {
+  const tabs = SECTIONS.flatMap((section) => section.tabs).filter((entry) => entry.to === pathname);
+  const page =
+    (tabs.find((entry) => entry.search?.["tab"] === tab) ?? tabs.find((entry) => entry.search === undefined))?.label ??
+    SETTINGS_GROUPS.flatMap((group) => group.pages).find((entry) => entry.to === pathname)?.label ??
+    SECTIONS.find((section) => section.id === sectionForPath(pathname))?.label ??
+    (pathname.startsWith("/settings") ? "Settings" : undefined);
+  return page === undefined ? "PerFin" : `${page} · PerFin`;
+}
+
 export interface Redirect {
   from: string;
   to: string;

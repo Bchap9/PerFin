@@ -1,9 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { NEW_ROUTES, OLD_ROUTES, REDIRECTS, SECTIONS, SETTINGS_GROUPS, sectionForPath } from "./routeMap";
+import { NEW_ROUTES, OLD_ROUTES, REDIRECTS, SECTIONS, SETTINGS_GROUPS, pageTitle, sectionForPath } from "./routeMap";
 
 const newRoutes = new Set(NEW_ROUTES);
 
 describe("route map", () => {
+  it("names each page in the document title (WCAG 2.4.2)", () => {
+    expect(pageTitle("/", undefined)).toBe("Home · PerFin");
+    expect(pageTitle("/inbox/documents", undefined)).toBe("Documents · PerFin");
+    expect(pageTitle("/plan/goals", undefined)).toBe("Goals · PerFin");
+    // A tab under ?tab= is named by it; a view of a page without a tab of its own is the page's.
+    expect(pageTitle("/reports", undefined)).toBe("Spending · PerFin");
+    expect(pageTitle("/reports", "cashflow")).toBe("Cash flow · PerFin");
+    expect(pageTitle("/plan/upcoming", "recurring")).toBe("Upcoming · PerFin");
+    // A detail page is named after its section; Settings pages after their entry.
+    expect(pageTitle("/accounts/a-1", "valuations")).toBe("Accounts · PerFin");
+    expect(pageTitle("/settings/security", undefined)).toBe("Security · PerFin");
+    expect(pageTitle("/settings/rules/new", undefined)).toBe("Settings · PerFin");
+    expect(pageTitle("/nowhere", undefined)).toBe("PerFin");
+  });
+
   it("every old route has a home", () => {
     expect(new Set(OLD_ROUTES).size).toBe(OLD_ROUTES.length);
     expect(OLD_ROUTES).toHaveLength(49);
