@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.core import clock
 from app.core.archive_crypto import (
@@ -91,6 +91,7 @@ from tests.fixtures.portability import (
     build_rich_ledger,
     make_ready_export,
     members_of,
+    portability_deps,
     rezip,
     rows_of,
     run_portability_jobs,
@@ -613,6 +614,40 @@ def test_a_dead_import_job_is_cleaned_up_without_a_new_request(
     assert (stale.state, stale.error, stale.blob_id) == (ArchiveState.FAILED, "job-failed", None)
     assert files_in(port_settings.quarantine_dir) == []
     assert owner.post(IMPORT, files=files).status_code == 202
+
+
+def test_the_sweep_job_fails_only_dead_archives_across_households(
+    actors: Actors, factories: Factories, deps: PortabilityDeps
+) -> None:
+    """The instance-level handler, as the worker runs it (no household context)."""
+    import app.workers.handlers.portability  # noqa: F401 - registers the handler
+    from app.workers.registry import REGISTRY, JobContext
+
+    dead_owner, live_owner = actors.new(role="owner"), actors.new(role="owner")
+    dead = dead_owner.post(EXPORT, json={}).json()["job_id"]
+    live = live_owner.post(EXPORT, json={}).json()["job_id"]
+    _set_job(factories, household(dead_owner), dead, "dead")
+    spec = REGISTRY.get("portability.sweep")
+    assert spec is not None
+    with factories.transaction() as db, portability_deps(deps):
+        set_context(db, None)
+        spec.func(
+            JobContext(
+                job_id=uuid.uuid4(),
+                job_type="portability.sweep",
+                attempt=1,
+                max_attempts=spec.max_attempts,
+                household_id=None,
+                session=db,
+                deadline=datetime.max.replace(tzinfo=UTC),
+            ),
+            spec.validate_payload({}),
+        )
+        # The handler leaves the worker's (empty) context behind it.
+        assert db.execute(text("SELECT current_setting('perfin.household_id')")).scalar() == ""
+    assert _archive(factories, household(dead_owner), dead).state is ArchiveState.FAILED
+    assert _archive(factories, household(live_owner), live).state is ArchiveState.PENDING
+    assert (live_owner.post(EXPORT, json={})).status_code == 409
 
 
 def test_export_contents_and_csv_neutralisation(
