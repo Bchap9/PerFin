@@ -12,9 +12,9 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SerializerFunctionWrapHandler, model_serializer
 
 from app.core.money import Money
 
@@ -41,6 +41,15 @@ class HouseholdSnapshotPayload(BaseModel):
 
     as_of: date
     since: date | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_since(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # No "since" key unless set: a queued daily job stays readable by an
+        # older worker (UPGRADING.md, going back to rc.11).
+        data: dict[str, Any] = handler(self)
+        if data.get("since") is None:
+            data.pop("since", None)
+        return data
 
 
 class Granularity(enum.StrEnum):

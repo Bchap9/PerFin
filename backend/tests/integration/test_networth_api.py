@@ -643,6 +643,35 @@ def test_data_older_than_the_backfill_window_is_not_rewritten_every_day(world: W
         assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 1
 
 
+def test_a_day_stored_in_a_former_base_currency_stays_as_recorded(world: World) -> None:
+    _snapshot(world)
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        old = db.execute(
+            select(NetWorthSnapshot).where(NetWorthSnapshot.as_of_date == date(2026, 5, 10))
+        ).scalar_one()
+        old.currency, old.assets, old.liabilities, old.net = "EUR", D("10"), D("0"), D("10")
+        old.breakdown = {"version": 1, "accounts": []}
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        # Rewritten from before it: the row stays; and, though it carries no
+        # valuation version, it does not make the next run start again.
+        networth_service.snapshot_household(db, world.household_id, TODAY, since=date(2026, 5, 1))
+        assert networth_service.snapshot_household(db, world.household_id, TODAY) == 1
+        row = db.execute(
+            select(NetWorthSnapshot).where(NetWorthSnapshot.as_of_date == date(2026, 5, 10))
+        ).scalar_one()
+    assert (row.currency, row.net) == ("EUR", D("10.00"))
+
+
+def test_the_snapshot_job_payload_names_since_only_when_set() -> None:
+    # A daily job queued before going back to rc.11 must still be readable there.
+    payload = networth_handler.HouseholdSnapshotPayload(as_of=TODAY)
+    assert payload.model_dump(mode="json") == {"as_of": "2026-06-30"}
+    since = networth_handler.HouseholdSnapshotPayload(as_of=TODAY, since=date(2026, 6, 1))
+    assert since.model_dump(mode="json") == {"as_of": "2026-06-30", "since": "2026-06-01"}
+
+
 def test_stored_days_valued_by_older_rules_are_rewritten(world: World) -> None:
     # A row from before this version (no "valuation" in its breakdown) and
     # one from it: the job rewrites from the older one on.

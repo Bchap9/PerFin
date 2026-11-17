@@ -151,7 +151,8 @@ def snapshot_household(
     every day from ``since`` (the earliest day an import wrote
     or removed something on) and every day from the first stored row valued
     by older rules (:data:`~app.domain.networth.compute.VALUATION_VERSION`),
-    at most ``max_days`` back. Runs in the household's RLS context. Returns
+    at most ``max_days`` back. A stored day in another base currency than
+    today's is left as recorded (today's row excepted). Runs in the household's RLS context. Returns
     the number of days written.
     """
     base = base_currency(db, household_id)
@@ -170,6 +171,7 @@ def snapshot_household(
             NetWorthSnapshot.household_id == household_id,
             NetWorthSnapshot.as_of_date >= window,
             NetWorthSnapshot.as_of_date < on,
+            NetWorthSnapshot.currency == base,
             or_(valuation.is_(None), valuation < VALUATION_VERSION),
         )
     ).scalar_one_or_none()
@@ -201,10 +203,15 @@ def snapshot_household(
     day = start
     written = 0
     while day <= on:
-        point = book.on(day)
         found = stored.get(day)
+        if found is not None and found.currency != base and day != on:
+            # Recorded in the base currency of its day: history as it was
+            # (reads use only rows in today's base currency).
+            day += timedelta(days=1)
+            continue
+        point = book.on(day)
         if found is not None:
-            point = _with_deleted(point, found, live, book)
+            point = _with_deleted(point, found, live)
         upsert_snapshot(db, household_id, point)
         written += 1
         day += timedelta(days=1)
@@ -214,14 +221,14 @@ def snapshot_household(
 
 
 def _with_deleted(
-    point: NetWorthPoint, stored: NetWorthSnapshot, live: set[uuid.UUID], book: NetWorthBook
+    point: NetWorthPoint, stored: NetWorthSnapshot, live: set[uuid.UUID]
 ) -> NetWorthPoint:
     """``point`` with what ``stored`` recorded for accounts deleted since (kept as recorded).
 
     Deleting an account removes everything recorded on it, but not its
-    place in the stored history: rewriting a day keeps those entries (in
-    the stored base amount, or converted again when the base currency has
-    changed since). An entry that does not read is left out.
+    place in the stored history: rewriting a day keeps those entries, in
+    their stored base amount (``stored`` is in ``point``'s currency, today
+    excepted). An entry that does not read is left out.
     """
     kept: list[AccountValue] = []
     entries = (stored.breakdown or {}).get("accounts")
@@ -236,7 +243,7 @@ def _with_deleted(
             converted = (
                 Decimal(str(recorded))
                 if stored.currency == point.currency and recorded is not None
-                else book.to_target(amount, currency, point.on)
+                else None
             )
             kept.append(
                 AccountValue(

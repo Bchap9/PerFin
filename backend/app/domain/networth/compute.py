@@ -587,10 +587,6 @@ class NetWorthBook:
                 days.append(entry.loan_origination)
         return min(days) if days else None
 
-    def to_target(self, amount: Decimal, currency: str, day: date) -> Decimal | None:
-        """``amount`` in the target currency on ``day`` (None: no rate)."""
-        return self._to_target.try_convert(amount, currency, day)
-
     def _converter(self, currency: str) -> FxConverter:
         found = self._to_account.get(currency)
         if found is None:
