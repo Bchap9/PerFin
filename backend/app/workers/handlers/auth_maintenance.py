@@ -3,8 +3,9 @@
 
 * ``user_session`` rows that ended (expired or revoked) more than
   :data:`SESSION_RETENTION` ago; the list/revoke UI only shows live ones.
-* ``rate_limit_event`` rows older than the longest default window
-  (``app.auth.ratelimit``); each key's own window is also trimmed on use.
+* ``rate_limit_event`` rows older than ``PRUNE_HORIZON``, the longest
+  window any limit may have (``app.auth.ratelimit``; the recovery-code
+  limit's hour included); each key's own window is also trimmed on use.
 
 Neither table is household-scoped, so no RLS context is needed.
 """
@@ -18,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete
 
 from app.auth.models import RateLimitEvent
-from app.auth.ratelimit import DEFAULT_LIMITS
+from app.auth.ratelimit import PRUNE_HORIZON
 from app.auth.sessions import prune_sessions
 from app.core import clock
 from app.core.logging import get_logger
@@ -42,9 +43,8 @@ def auth_prune(ctx: JobContext, payload: AuthPrunePayload) -> None:
     ctx.check_cancelled()
     now = clock.utcnow()
     sessions = prune_sessions(ctx.session, older_than=SESSION_RETENTION, now=now)
-    horizon = max(limit.window for limit in DEFAULT_LIMITS)
     events = ctx.session.execute(
-        delete(RateLimitEvent).where(RateLimitEvent.created_at < now - horizon)
+        delete(RateLimitEvent).where(RateLimitEvent.created_at < now - PRUNE_HORIZON)
     )
     log.info(
         "auth bookkeeping pruned",

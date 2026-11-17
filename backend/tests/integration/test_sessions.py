@@ -4,6 +4,7 @@ idle/absolute expiry, rotation, revocation and the cookie attributes."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -290,3 +291,48 @@ def test_auth_prune_job(db: Session) -> None:
         .all()
     )
     assert remaining == []
+
+
+def test_auth_prune_keeps_events_inside_every_window(db: Session) -> None:
+    """A recovery-code attempt 30 minutes old still counts (its window is an hour)."""
+    import threading
+
+    from app.auth.mfa.stepup import RECOVERY_PER_ACCOUNT
+    from app.auth.models import RateLimitEvent
+    from app.core import clock
+    from app.workers.handlers.auth_maintenance import AuthPrunePayload, auth_prune
+    from app.workers.registry import JobContext
+
+    now = clock.utcnow()
+    inside = RECOVERY_PER_ACCOUNT.window - timedelta(minutes=5)
+    db.add(
+        RateLimitEvent(scope=RECOVERY_PER_ACCOUNT.scope, key_hash="1" * 64, created_at=now - inside)
+    )
+    db.flush()
+    ctx = JobContext(
+        job_id=uuid.uuid4(),
+        job_type="auth_prune",
+        attempt=1,
+        max_attempts=3,
+        household_id=None,
+        session=db,
+        deadline=now + timedelta(minutes=5),
+        cancelled=threading.Event(),
+    )
+    auth_prune(ctx, AuthPrunePayload())
+    db.expire_all()
+    kept = db.execute(
+        select(RateLimitEvent).where(
+            RateLimitEvent.scope == RECOVERY_PER_ACCOUNT.scope,
+            RateLimitEvent.key_hash == "1" * 64,
+        )
+    ).scalars()
+    assert len(list(kept)) == 1
+
+
+def test_no_limit_outlives_the_prune_horizon() -> None:
+    from app.auth.ratelimit import PRUNE_HORIZON, Limit
+
+    with pytest.raises(ValueError, match="window"):
+        Limit("test:too-long", 1, PRUNE_HORIZON + timedelta(seconds=1))
+    assert Limit("test:longest", 1, PRUNE_HORIZON).window == PRUNE_HORIZON

@@ -120,7 +120,7 @@ PASSWORD_INPUT_MAX: Final = 1024
 
 PASSWORD_CHANGE_PER_ACCOUNT: Final = Limit("password:account", 5, timedelta(minutes=15))
 SETUP_PER_IP: Final = Limit("setup:ip", 10, timedelta(minutes=15))
-# Windows stay within the longest default window: auth_prune trims older events.
+# Windows stay within ratelimit.PRUNE_HORIZON (enforced by Limit): auth_prune trims older events.
 RESET_REQUEST_PER_ACCOUNT: Final = Limit("reset:account", 3, timedelta(minutes=15))
 RESET_CONFIRM_PER_IP: Final = Limit("reset_confirm:ip", 10, timedelta(minutes=15))
 

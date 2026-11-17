@@ -20,7 +20,10 @@ a delay that doubles per failure (no sleeping in a request thread), and from
 locked account exactly like a wrong password (A2) and notify the user (Phase
 7 channels).
 
-:func:`prune` deletes events older than the longest window in use.
+:func:`prune` deletes events older than :data:`PRUNE_HORIZON`; a
+:class:`Limit` with a longer window is refused when it is defined, so the
+hourly prune can never shorten a window (a limit defined in a module the
+worker never imports included).
 """
 
 from __future__ import annotations
@@ -43,6 +46,9 @@ from app.core.request_context import client_ip
 
 _LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 7305))")
 
+#: The longest window any :class:`Limit` may have; ``auth_prune`` keeps events this long.
+PRUNE_HORIZON: Final = timedelta(hours=1)
+
 
 @dataclass(frozen=True)
 class Limit:
@@ -57,6 +63,8 @@ class Limit:
             raise ValueError("scope must be 1..64 characters")
         if self.max_events < 1 or self.window <= timedelta(0):
             raise ValueError("limit and window must be positive")
+        if self.window > PRUNE_HORIZON:
+            raise ValueError("window is longer than PRUNE_HORIZON (auth_prune would trim it)")
 
 
 # Defaults for the Phase 1 flows (login, MFA, reset, OIDC callback).
@@ -178,9 +186,9 @@ class RateLimiter:
             )
 
     def prune(self, older_than: timedelta | None = None, *, now: datetime | None = None) -> int:
-        """Delete events older than ``older_than`` (default: longest default window)."""
+        """Delete events older than ``older_than`` (default: :data:`PRUNE_HORIZON`)."""
         now = now or clock.utcnow()
-        horizon = older_than or max(limit.window for limit in DEFAULT_LIMITS)
+        horizon = older_than or PRUNE_HORIZON
         with self._factory() as db, db.begin():
             result = db.execute(
                 delete(RateLimitEvent).where(RateLimitEvent.created_at < now - horizon)
