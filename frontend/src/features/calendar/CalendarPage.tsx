@@ -27,19 +27,19 @@ export function CalendarPage() {
     <PlanningPage title="Upcoming" titleHidden>
       <Tabs
         label="Upcoming"
-        {...(tab === "calendar"
-          ? {
-              aside: (
-                <Field label="Look ahead">
-                  <Select
-                    value={String(days)}
-                    onChange={(event) => { setDays(Number(event.target.value)); }}
-                    options={LOOK_AHEAD_DAYS.map((value) => ({ value: String(value), label: `Next ${String(value)} days` }))}
-                  />
-                </Field>
-              ),
-            }
-          : {})}
+        // Always passed (null off the calendar) so the tab row keeps its
+        // wrapper and the focused tab button is not remounted on a switch.
+        aside={
+          tab === "calendar" ? (
+            <Field label="Look ahead">
+              <Select
+                value={String(days)}
+                onChange={(event) => { setDays(Number(event.target.value)); }}
+                options={LOOK_AHEAD_DAYS.map((value) => ({ value: String(value), label: `Next ${String(value)} days` }))}
+              />
+            </Field>
+          ) : null
+        }
         selectedId={tab}
         onSelect={(id) => { setTab(id === "recurring" ? "recurring" : "calendar"); }}
         tabs={[

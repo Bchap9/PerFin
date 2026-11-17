@@ -70,6 +70,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
 
 ### Fixed
 
+- **Plan › Upcoming keeps focus on the tab.** Switching between the
+  calendar and the recurring items with the arrow keys or a click left
+  keyboard focus on the page body.
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.

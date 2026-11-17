@@ -121,6 +121,24 @@ describe("calendar", () => {
     await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/upcoming"); });
   });
 
+  it("keeps keyboard focus on the tab chosen with the arrow keys", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming");
+    const user = userEvent.setup();
+    (await screen.findByRole("tab", { name: "Cash-flow calendar", selected: true })).focus();
+    await user.keyboard("{ArrowRight}");
+    await screen.findByRole("table", { name: "Recurring items" });
+    expect(screen.getByRole("tab", { name: "Recurring items", selected: true })).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    expect(screen.getByRole("tab", { name: "Cash-flow calendar", selected: true })).toHaveFocus();
+  });
+
   it("opens on the recurring items when the address asks for them", async () => {
     mockApi({
       ...ownerSession(),
