@@ -629,6 +629,31 @@ def test_an_import_has_net_worth_rewritten_from_its_first_day(env: Env) -> None:
     assert _net_worth_since(env) == ["2026-03-01", "2026-03-01"]
 
 
+_RUNNING = (
+    "Date,Description,Amount,Balance\n"
+    "2026-07-01,Willow Court Rent,-1210.00,1630.00\n"
+    "2026-07-03,Harbor Lane Grocery,-74.60,1555.40\n"
+    "2026-07-08,Northgate Fuel Stop,-45.10,1510.30\n"
+    "2026-07-15,Marlow Design Payroll,2840.00,4350.30\n"
+)
+
+
+def test_a_csv_whose_running_balance_does_not_add_up_records_no_balance(env: Env) -> None:
+    """The last balance printed is the account's only when every one before it follows."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    good = env.ingest(_RUNNING.encode("ascii"), account=account, name="july.csv")
+    assert env.document(good).status is DocumentStatus.PROCESSED, env.open_reviews(good)
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == [
+        (date(2026, 7, 15), Decimal("4350.30"))
+    ]
+    other = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    broken = _RUNNING.replace("4350.30", "4300.30") + "2026-07-19,Tin Roof Diner,-33.25,4317.05\n"
+    document_id = env.ingest(broken.encode("ascii"), account=other, name="july.csv")
+    reasons = {i.payload.get("reason") for i in env.open_reviews(document_id)}
+    assert "balance_mismatch" in reasons
+    assert env.snapshots(other) == []
+
+
 def test_qif_record_made_of_column_names_waits_for_review(env: Env) -> None:
     """A record whose text is the header's words keeps its money, pending."""
     account = env.ledger.account(env.household_id)  # QIF names no account number

@@ -1629,7 +1629,13 @@ def _commit_statement(
     )
     # An accepted statement whose reading adds up is checked against the
     # ledger first (:func:`_settle_standing`): its rows may have been edited.
-    if parsed.reconciled and not (standing is not None and standing.vouched):
+    # A table whose own running balance does not follow from its amounts
+    # vouches for no balance (its ``balance_mismatch`` item says so).
+    if (
+        parsed.reconciled
+        and not parsed.balance_mismatches
+        and not (standing is not None and standing.vouched)
+    ):
         _write_snapshot(run, parsed, account)
     if created:
         run.changed.add(account.id)
