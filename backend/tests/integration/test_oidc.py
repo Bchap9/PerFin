@@ -728,6 +728,19 @@ def test_claim_refresh_keeps_sessions_while_the_jwks_is_unavailable(
         def keys_down(kid: str | None, algorithm: str) -> Any:
             raise DiscoveryError("JWKS unavailable (refetch rate limited)")
 
+        def stored_tokens() -> list[bytes]:
+            return [
+                bytes(
+                    rows(
+                        admin_engine,
+                        "SELECT refresh_token_encrypted FROM oidc_session WHERE session_id = :i",
+                        i=session_row(admin_engine, web).id,
+                    )[0].refresh_token_encrypted
+                )
+                for web in (first, second)
+            ]
+
+        before = stored_tokens()
         client = _ProbingClient(OidcClient(env.settings, resolver=resolver()), lambda: None)
         client.keys = keys_down  # type: ignore[attr-defined]
         try:
@@ -742,6 +755,8 @@ def test_claim_refresh_keeps_sessions_while_the_jwks_is_unavailable(
         finally:
             client.inner.close()
         assert stats.refreshed == 0
+        # The one token call made rotated its token (stored); the other was not asked.
+        assert sum(a != b for a, b in zip(before, stored_tokens(), strict=True)) == 1
         assert first.get(SESSION_URL).status_code == 200
         assert second.get(SESSION_URL).status_code == 200
         assert _refresh(env, app_engine, 7).refreshed >= 2

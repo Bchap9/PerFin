@@ -23,7 +23,9 @@
   **successful** JWKS fetch: a failed refetch neither refreshes nor extends
   them, and once they are older every token is refused (``jwks-unavailable``)
   until a fetch succeeds. Every attempt, failed or not, counts for the
-  minimum refresh interval, so a down IdP is asked at most that often.
+  unknown-``kid`` refetch interval; keys that reached their max age are
+  refetched at once unless the last fetch failed, so a down IdP is asked at
+  most once per minimum refresh interval and a healthy one never waits.
 """
 
 from __future__ import annotations
