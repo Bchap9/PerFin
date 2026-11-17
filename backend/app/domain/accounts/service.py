@@ -717,7 +717,8 @@ def record_manual_balance(
     account = _editable(db, principal, account_id)
     if data.balance.currency != account.currency:
         raise _currency_mismatch(account.currency)
-    if data.as_of_date > today():
+    # A day of slack: a browser east of UTC is already on tomorrow's date.
+    if data.as_of_date > today() + timedelta(days=1):
         raise ProblemError(
             422, "balance-in-future", "Balance date in the future", "as_of_date is after today."
         )
