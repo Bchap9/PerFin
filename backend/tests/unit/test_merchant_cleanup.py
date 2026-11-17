@@ -1133,6 +1133,7 @@ def test_an_automatic_withdrawal_is_a_debit(raw: str, kind: str, core: str) -> N
         ("Withdrawal Debit Card PINEGATE GROCERY", "purchase", "pinegate grocery"),
         ("WITHDRAWAL DEBIT CARD PURCHASE PINEGATE GROCERY", "purchase", "pinegate grocery"),
         ("Withdrawal POS #0042 PINEGATE GROCERY", "purchase", "pinegate grocery"),
+        ("WITHDRAWAL POS PURCHASE PINEGATE GROCERY", "purchase", "pinegate grocery"),
         # A number without "#" may begin the name.
         ("WITHDRAWAL POS 365 WILLOWMERE MARKET", "purchase", "365 willowmere market"),
         # Between the household's own accounts.

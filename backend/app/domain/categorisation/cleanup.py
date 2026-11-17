@@ -269,7 +269,7 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
     # a number behind it goes only with its "#" ("WITHDRAWAL POS 365 MARKET").
     _p(rf"WITHDRAWAL (?:ACH|BILL ?PAY(?:MENT)?)(?: #\d{{1,12}})?{_END}", "ach_debit"),
     _p(
-        rf"WITHDRAWAL (?:DEBIT CARD(?: PURCHASE| PUR| DEBIT)?|POS)(?: #\d{{1,12}})?{_END}",
+        rf"WITHDRAWAL (?:DEBIT CARD|POS)(?: PURCHASE| PUR| DEBIT)?(?: #\d{{1,12}})?{_END}",
         "purchase",
     ),
     # Between people: the service is the only name the line may keep (:data:`_P2P`).

@@ -93,7 +93,7 @@ CASH_CORE_WORDS: Final = frozenset(
 #: The words some banks wrap around a teller's cash ("WITHDRAWAL MADE IN A
 #: BRANCH/STORE", "CUSTOMER WITHDRAWAL IMAGE", "OVER THE COUNTER WITHDRAWAL").
 #: They name nobody only beside a word for money taken out or paid in
-#: (:data:`CASH_MOVE_WORDS`): around CASH alone they are a shop ("THE CASH STORE").
+#: (:data:`CASH_MOVE_WORDS`): around CASH alone they may be a shop ("CASH IN A BRANCH").
 CASH_FILLER_WORDS: Final = frozenset(
     {"made", "in", "a", "the", "store", "customer", "image", "over"}
 )

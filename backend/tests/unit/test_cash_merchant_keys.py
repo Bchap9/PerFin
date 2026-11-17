@@ -105,7 +105,7 @@ def test_cheque_wording_is_a_cheque_and_names_no_merchant(raw: str) -> None:
         ("CHEQUERS PUB", "chequers pub"),
         ("CHECK CASHING PLACE", "check cashing place"),
         # Those words around CASH alone name a shop.
-        ("THE CASH STORE", "the cash store"),
+        ("CASH OVER THE COUNTER", "cash over the counter"),
         ("CASH IN A BRANCH", "cash in a branch"),
     ],
 )
