@@ -36,7 +36,7 @@ from app.core.archive_crypto import (
     new_salt,
 )
 from app.core.settings import Settings
-from app.db.models import Job
+from app.db.models import Job, JobState
 from app.db.rls import set_context
 from app.domain.accounts.balances import balances_as_of
 from app.domain.accounts.models import Account
@@ -46,7 +46,7 @@ from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import Blob, Document, DocumentLink
 from app.domain.portability import service
 from app.domain.portability.entities import ENTITIES
-from app.domain.portability.models import PortabilityArchive
+from app.domain.portability.models import ArchiveState, PortabilityArchive
 from app.domain.portability.schemas import (
     EXPIRE_JOB_TYPE,
     EXPORT_JOB_TYPE,
@@ -543,6 +543,76 @@ def test_one_export_at_a_time_and_idempotency(actors: Actors) -> None:
     assert replay.json() == first.json()
     second = owner.post(EXPORT, json={})
     assert (second.status_code, problem_type(second)) == (409, "export-in-progress")
+
+
+def _set_job(factories: Factories, household_id: uuid.UUID, job_id: str, state: str | None) -> None:
+    """Put the archive's job in ``state`` (``None``: the row was pruned)."""
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        job = db.execute(select(Job).where(Job.id == uuid.UUID(job_id))).scalar_one()
+        if state is None:
+            db.delete(job)
+        else:
+            job.state = JobState(state)
+
+
+def _archive(factories: Factories, household_id: uuid.UUID, job_id: str) -> PortabilityArchive:
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        row = db.execute(
+            select(PortabilityArchive).where(PortabilityArchive.job_id == uuid.UUID(job_id))
+        ).scalar_one()
+        db.expunge(row)
+        return row
+
+
+@pytest.mark.parametrize("job_state", ["dead", None])
+def test_a_dead_export_job_does_not_block_the_next_one(
+    actors: Actors, factories: Factories, job_state: str | None
+) -> None:
+    owner = actors.new(role="owner")
+    first = owner.post(EXPORT, json={"passphrase": "correct horse battery staple"})
+    assert first.status_code == 202, first.text
+    job_id = first.json()["job_id"]
+    # Queued (even if not due yet): still in progress.
+    blocked = owner.post(EXPORT, json={})
+    assert (blocked.status_code, problem_type(blocked)) == (409, "export-in-progress")
+    _set_job(factories, household(owner), job_id, job_state)
+    again = owner.post(EXPORT, json={})
+    assert again.status_code == 202, again.text
+    stale = _archive(factories, household(owner), job_id)
+    assert (stale.state, stale.error, stale.passphrase_key) == (
+        ArchiveState.FAILED,
+        "job-failed",
+        None,
+    )
+    assert owner.get(f"{EXPORT}/{job_id}").json()["state"] == "failed"
+    assert household_audit(factories, household(owner), "export.fail")
+
+
+def test_a_dead_import_job_is_cleaned_up_without_a_new_request(
+    actors: Actors,
+    factories: Factories,
+    port_settings: Settings,
+    deps: PortabilityDeps,
+    base_export: bytes,
+) -> None:
+    """The sweep fails the archive and shreds its upload even if nobody comes back."""
+    import app.workers.handlers.portability as handlers
+
+    owner = actors.new(role="owner")
+    files = {"file": ("export.zip", base_export, "application/zip")}
+    queued = owner.post(IMPORT, files=files)
+    assert queued.status_code == 202, queued.text
+    job_id = queued.json()["job_id"]
+    assert files_in(port_settings.quarantine_dir)
+    _set_job(factories, household(owner), job_id, "dead")
+    with factories.transaction() as db:
+        assert handlers.sweep_orphaned_archives(db, deps) >= 1
+    stale = _archive(factories, household(owner), job_id)
+    assert (stale.state, stale.error, stale.blob_id) == (ArchiveState.FAILED, "job-failed", None)
+    assert files_in(port_settings.quarantine_dir) == []
+    assert owner.post(IMPORT, files=files).status_code == 202
 
 
 def test_export_contents_and_csv_neutralisation(

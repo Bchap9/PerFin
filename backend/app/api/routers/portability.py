@@ -133,7 +133,12 @@ def post_export(
         scope="POST /export",
         payload=fingerprint,
         run=lambda: service.request_export(
-            db, principal, body, keyring=get_keyring(request), request=request
+            db,
+            principal,
+            body,
+            keyring=get_keyring(request),
+            store=blob_store(get_app_settings(request)),
+            request=request,
         ),
         status_code=status.HTTP_202_ACCEPTED,
     )
@@ -213,10 +218,10 @@ def post_import(
 ) -> ImportQueuedOut:
     settings = get_app_settings(request)
     boundary_of(request.headers.get("content-type"))
-    service.check_import_allowed(db, principal)
+    store = blob_store(settings)
+    service.check_import_allowed(db, principal, store=store)
     # Nothing below needs the request's transaction: end it before the transfer.
     db.commit()
-    store = blob_store(settings)
     keyring = get_keyring(request)
     upload = MultipartFile(request.headers.get("content-type"), _request_body(request))
     stored = service.store_import(
@@ -231,7 +236,7 @@ def post_import(
         with factory() as session, session.begin():
             apply_rls_context(session, principal)
             return service.record_import(
-                session, principal, stored, keyring=keyring, request=request
+                session, principal, stored, keyring=keyring, store=store, request=request
             )
     except BaseException:
         # Also when the commit fails: the object's key was never stored.

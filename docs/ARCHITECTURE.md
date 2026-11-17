@@ -105,7 +105,8 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
 - `transactions.auto_pair`: after an import, pair transfers between the
   accounts the document's uploader may import into (Phase 2).
 - `portability.export`, `portability.import`, `portability.expire`: full
-  export and import archives (Phase 2, PORTABILITY.md).
+  export and import archives (Phase 2, PORTABILITY.md); `portability.sweep`
+  (every 15 minutes) fails archives whose job died while they were pending.
 - `watch_dropfolder`: long-running; inotify where available, polling fallback.
   (Built in Phase 3 as a recurring instance-level job, one bounded run a
   minute that watches while files settle and commits what it took;

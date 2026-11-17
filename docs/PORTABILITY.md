@@ -45,6 +45,14 @@ the download belong to the user who requested it; anyone else gets `404`.
    wrong passphrase or a damaged file is refused at once (`422`). The job
    `portability.import` then validates and applies the archive and destroys
    the upload either way. One pending import per household.
+5. "Pending" means the archive's job is still queued or running. When the
+   job was dead-lettered (every attempt failed, timed out or killed its
+   worker) or already pruned, the archive is failed with `job-failed`
+   (upload or partial blob and the wrapped passphrase key shredded,
+   `export.fail` / `import.fail` audited) by the next `POST /export` or
+   `POST /import` of the household, and within 15 minutes by the
+   instance-level `portability.sweep` job, so a dead job never blocks the
+   household with `409` or keeps its upload.
 
 Every step is audited (`export.request|complete|fail|download|expire`,
 `import.request|complete|fail`; ids, counts, sizes and error slugs only) and
