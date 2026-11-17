@@ -472,7 +472,7 @@ describe("transactions grid", () => {
     renderApp("/transactions");
     // Under 720px the header row shows only its checkbox, labelled "Select
     // all" (transactions.css), so it is a focus stop with something to see.
-    const all = await screen.findByLabelText("Select all loaded transactions");
+    const all = await screen.findByLabelText<HTMLInputElement>("Select all loaded transactions");
     expect(all).not.toHaveAttribute("tabindex");
     const shown = screen.getByText("Select all");
     expect(shown).toHaveClass("tx-select-all");
