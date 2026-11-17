@@ -13,7 +13,7 @@ import "./review.css";
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
@@ -173,11 +173,26 @@ export function ReviewCardList({
   empty?: ReactNode;
 }) {
   const entries = useCardEntries(documentId, sort);
+  // An answer replaces the card's question (or the card), and the pressed
+  // button with it: focus then moves to the card's item, not the page body.
+  const last = useRef("");
+  const keys = entries.map((entry) => entry.key).join();
+  useEffect(() => {
+    if (document.activeElement === document.body && last.current !== "") {
+      document.getElementById(last.current)?.focus();
+    }
+  }, [keys]);
   if (entries.length === 0 && after.length === 0) {
     return empty;
   }
   return (
-    <ul className="review-list" aria-label={label}>
+    <ul
+      className="review-list"
+      aria-label={label}
+      onFocus={(event) => {
+        last.current = event.target.closest(".review-list__item")?.id ?? "";
+      }}
+    >
       {entries.map((entry) => (
         <li key={entry.key} id={entry.anchor} tabIndex={-1} className="review-list__item">
           {entry.node}

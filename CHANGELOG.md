@@ -75,6 +75,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
   keyboard focus on the page body.
 - **Inbox › Documents offers "Upload files" only to those who can upload.**
   A read-only member was sent to an uploader that only said so.
+- **Answering an Inbox card keeps your place.** The pressed button went
+  away with the question and focus fell to the page body; focus now moves
+  to the card.
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.
