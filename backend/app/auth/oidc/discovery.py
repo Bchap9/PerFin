@@ -19,6 +19,11 @@
   per ``PERFIN_OIDC_JWKS_MIN_REFRESH_SECONDS``; otherwise it is rejected
   (:class:`app.auth.oidc.tokens` never accepts unsigned tokens). JWKS keys
   are filtered to signing keys of a pinned type (RSA >= 2048 bits, EC P-256).
+* Keys are trusted for at most the max age counted from the last
+  **successful** JWKS fetch: a failed refetch neither refreshes nor extends
+  them, and once they are older every token is refused (``jwks-unavailable``)
+  until a fetch succeeds. Every attempt, failed or not, counts for the
+  minimum refresh interval, so a down IdP is asked at most that often.
 """
 
 from __future__ import annotations
@@ -228,7 +233,9 @@ class ProviderCache:
         self._metadata: ProviderMetadata | None = None
         self._metadata_at: datetime | None = None
         self._keys: list[SigningKey] = []
+        #: Last successful JWKS fetch (max-age trust) and last attempt (rate limit).
         self._keys_at: datetime | None = None
+        self._keys_tried_at: datetime | None = None
 
     def _fetch_json(self, url: str, what: str) -> object:
         try:
@@ -254,7 +261,7 @@ class ProviderCache:
             doc = self._fetch_json(discovery_url(self._issuer), "discovery")
             metadata = parse_metadata(doc, issuer=self._issuer, auth_method=self._auth_method)
             if self._metadata is not None and metadata.jwks_uri != self._metadata.jwks_uri:
-                self._keys, self._keys_at = [], None
+                self._keys, self._keys_at, self._keys_tried_at = [], None, None
             self._metadata, self._metadata_at = metadata, now
             return metadata
 
@@ -262,22 +269,30 @@ class ProviderCache:
         """Keys that may verify a token with this ``kid`` and ``alg``.
 
         An unknown ``kid`` refetches the JWKS at most once per minimum refresh
-        interval; an expired cache (max age) is always refetched.
+        interval; an expired cache (max age) is dropped and refetched, at most
+        as often (``DiscoveryError`` in between: stale keys are never used).
         """
         with self._lock:
             now = self._now()
             if self._keys_at is None or now - self._keys_at >= self._max_age:
+                # Expired keys are dropped, never used while the IdP is down.
+                self._keys, self._keys_at = [], None
+                if not self._may_refetch(now):
+                    raise DiscoveryError("JWKS unavailable (refetch rate limited)")
                 self._unlocked_refresh(now)
             found = _matching(self._keys, kid, algorithm)
-            fetched = self._keys_at
-            stale = fetched is None or now - fetched >= self._jwks_min_refresh
-            if not found and kid is not None and stale:
+            if not found and kid is not None and self._may_refetch(now):
                 self._unlocked_refresh(now)
                 found = _matching(self._keys, kid, algorithm)
             return found
 
+    def _may_refetch(self, now: datetime) -> bool:
+        tried = self._keys_tried_at
+        return tried is None or now - tried >= self._jwks_min_refresh
+
     def _unlocked_refresh(self, now: datetime) -> None:
         """Refetch the JWKS (and stale metadata); the caller holds the lock."""
+        self._keys_tried_at = now  # counts even when the fetch fails (rate limit, B9)
         metadata = self._metadata
         if (
             metadata is None
@@ -287,8 +302,8 @@ class ProviderCache:
             doc = self._fetch_json(discovery_url(self._issuer), "discovery")
             metadata = parse_metadata(doc, issuer=self._issuer, auth_method=self._auth_method)
             self._metadata, self._metadata_at = metadata, now
-        self._keys_at = now  # counts even when the fetch fails (rate limit, B9)
-        self._keys = parse_jwks(self._fetch_json(metadata.jwks_uri, "JWKS"))
+        keys = parse_jwks(self._fetch_json(metadata.jwks_uri, "JWKS"))
+        self._keys, self._keys_at = keys, now
 
     def clear(self) -> None:
         with self._lock:
