@@ -35,6 +35,13 @@ Adding a factor needs step-up once the user has one. Confirming a new factor
 proves possession of it, so the session rotates and counts as freshly
 verified; the first factor also returns the initial ten recovery codes.
 Removing the last factor is refused while MFA is required instance-wide.
+
+Adding or removing a factor and regenerating recovery codes revoke the
+user's **other** sessions (like a password change): a session opened
+before the change, perhaps by whoever the change locks out, does not
+survive it. The acting session stays: rotated where the response carries
+the new CSRF token (a new factor), unchanged otherwise (``204`` removals,
+recovery codes), since the CSRF token is bound to the session id.
 """
 
 from __future__ import annotations
@@ -87,6 +94,7 @@ from app.auth.sessions import (
     load_session,
     raw_session_id,
     record_step_up,
+    revoke_other_sessions,
     set_session_cookie,
 )
 from app.core import clock
@@ -356,14 +364,18 @@ def _factor_added(
     principal: Principal,
     method: MfaMethod,
 ) -> FactorAddedOut:
-    """Audit, first recovery codes, rotate (possession just proven)."""
+    """Rotate (possession just proven), end other sessions, audit, first recovery codes."""
+    settings = get_app_settings(request)
+    current = _lock_live(db, _session_of(principal))
+    issued = record_step_up(db, current, policy=SessionPolicy.from_settings(settings))
+    revoked = _end_other_sessions(db, principal.user_id, keep=issued.row.id)
     audit_user_event(
         db,
         user_id=principal.user_id,
         action="auth.mfa.enrolled",
         target_type="mfa_method",
         target_id=method.id,
-        after={"type": method.type.value, "name": method.name},
+        after={"type": method.type.value, "name": method.name, "sessions_revoked": revoked},
         request=request,
     )
     codes: list[str] | None = None
@@ -376,9 +388,6 @@ def _factor_added(
             after={"count": len(codes)},
             request=request,
         )
-    settings = get_app_settings(request)
-    current = _lock_live(db, _session_of(principal))
-    issued = record_step_up(db, current, policy=SessionPolicy.from_settings(settings))
     csrf_token = _issue(request, response, issued)
     verified_at = issued.row.mfa_verified_at or clock.utcnow()
     return FactorAddedOut(
@@ -387,6 +396,11 @@ def _factor_added(
         csrf_token=csrf_token,
         recovery_codes=codes,
     )
+
+
+def _end_other_sessions(db: Session, user_id: uuid.UUID, *, keep: uuid.UUID) -> int:
+    """Revoke every session of the user but ``keep`` (module doc)."""
+    return revoke_other_sessions(db, user_id, keep_session_id=keep, reason="mfa_changed")
 
 
 def _ensure_can_remove(db: Session, request: Request, user_id: uuid.UUID, count: int) -> None:
@@ -401,13 +415,18 @@ def _ensure_can_remove(db: Session, request: Request, user_id: uuid.UUID, count:
         )
 
 
-def _after_removal(db: Session, request: Request, user_id: uuid.UUID, method_id: uuid.UUID) -> None:
+def _after_removal(
+    db: Session, request: Request, principal: Principal, method_id: uuid.UUID
+) -> None:
+    user_id = principal.user_id
+    revoked = _end_other_sessions(db, user_id, keep=_session_of(principal).id)
     audit_user_event(
         db,
         user_id=user_id,
         action="auth.mfa.removed",
         target_type="mfa_method",
         target_id=method_id,
+        after={"sessions_revoked": revoked},
         request=request,
     )
     if not _primary_methods(db, user_id):
@@ -623,7 +642,7 @@ def delete_totp(request: Request, db: DbSession, principal: SteppedUp) -> Respon
     _ensure_can_remove(db, request, principal.user_id, len(methods))
     for method in methods:
         totp.remove(db, principal.user_id, method.id)
-        _after_removal(db, request, principal.user_id, method.id)
+        _after_removal(db, request, principal, method.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -714,7 +733,7 @@ def delete_webauthn_credential(
         raise ProblemError(404, "mfa-method-not-found", "Security key not found")
     _ensure_can_remove(db, request, principal.user_id, 1)
     webauthn_mfa.remove(db, principal.user_id, method_id)
-    _after_removal(db, request, principal.user_id, method_id)
+    _after_removal(db, request, principal, method_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -737,11 +756,12 @@ def post_recovery_codes(request: Request, db: DbSession, principal: SteppedUp) -
             "Set up an authenticator app or security key first.",
         )
     codes = recovery.regenerate(db, principal.user_id)
+    revoked = _end_other_sessions(db, principal.user_id, keep=_session_of(principal).id)
     audit_user_event(
         db,
         user_id=principal.user_id,
         action="auth.mfa.recovery_generated",
-        after={"count": len(codes)},
+        after={"count": len(codes), "sessions_revoked": revoked},
         request=request,
     )
     return RecoveryCodesOut(codes=codes)

@@ -124,7 +124,9 @@ can run with both, or be locked to OIDC only.
 - Session id rotates on login, on privilege change and on MFA completion
   (prevents fixation).
 - Users can list and revoke their sessions. Password change revokes all other
-  sessions.
+  sessions, and so do adding or removing a second factor and regenerating
+  recovery codes (the acting session stays: rotated when a factor is added,
+  unchanged otherwise, since its CSRF token is bound to the session id).
 - Implementation notes (`app/auth/sessions.py`): a remembered device is not
   logged out for being idle (only its 30-day absolute lifetime applies); a
   password-accepted session waiting for the second factor (`mfa_pending`)
