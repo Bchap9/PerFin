@@ -463,6 +463,19 @@ describe("transactions grid", () => {
     expect(await screen.findByText("2 transactions changed")).toBeInTheDocument();
   });
 
+  it("takes the hidden Select all out of the tab order where the table is cards", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({ matches: query === "(max-width: 719px)", media: query, addEventListener: () => undefined, removeEventListener: () => undefined })),
+    );
+    setup();
+    renderApp("/transactions");
+    // Under 720px the header row is clipped to nothing: a focus stop there
+    // would show nothing. Screen readers still reach it; each row keeps its box.
+    expect(await screen.findByLabelText("Select all loaded transactions")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getAllByLabelText(/^Select (?!all)/, { selector: "input" })[0]).not.toHaveAttribute("tabindex");
+  });
+
   it("says in the delete dialog why a bulk delete failed", async () => {
     const api = setup();
     api.on("POST /api/v1/transactions/bulk", () => problem(403, "forbidden"));
