@@ -298,7 +298,7 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
-### 1.0.0 (not released yet)
+### 1.0.0-rc.12
 
 The release review. No migration (Alembic head stays `0014`), no new
 setting, no new container, no new outbound connection, and no response of
