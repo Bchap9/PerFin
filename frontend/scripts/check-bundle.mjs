@@ -40,10 +40,11 @@ export const BUDGET = Object.freeze({
   initialJs: 250_000,
   largestLazyJs: 160_000,
   /**
-   * The Start baseline plus 5%, plus 64 bytes the coordinator allowed for
-   * per-page document titles (WCAG 2.4.2, release review).
+   * The Start baseline plus 5%, plus 320 bytes the coordinator allowed in
+   * the release review: per-page document titles (WCAG 2.4.2) and the
+   * Inbox's words for an opening balance that was not recorded.
    */
-  totalJs: Math.floor(BASELINE_TOTAL_JS * 1.05) + 64,
+  totalJs: Math.floor(BASELINE_TOTAL_JS * 1.05) + 320,
   totalCss: 20_000,
   /** The Latin `woff2` files a page loads. */
   fonts: 120_000,
