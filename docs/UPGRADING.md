@@ -322,7 +322,10 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   the row stays as it was, so the balance is the same as before. A file
   imported for the first time into an account that already has a balance
   or transactions from before its opening record does not record the
-  figure: an Inbox item names it, to enter by hand if it is right. The
+  figure unless the account's balance that day already is it: an Inbox
+  item ("Some values were read with low confidence") then holds the
+  document, and the figure can be entered by hand as a balance if it is
+  right. The
   same holds for a CSV's opening balance row. A record of column names
   keeps its date and amount and waits in the Inbox for review. A closing
   balance record is left out and counted in the document's warnings.
@@ -332,7 +335,10 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   upgrade rewrites every stored day once (valuation version 2). This
   corrects history inside an account's first brokerage statement period,
   which counted the opening positions twice. Nothing needs to be run by
-  hand; a stored day keeps what it recorded for an account deleted since.
+  hand; a stored day keeps what it recorded for an account deleted since,
+  and a day stored in a former base currency is left as it is. A daily job
+  still queued when going back to rc.11 runs there as before; a rewrite an
+  import queued is refused by the rc.11 worker, which is harmless.
 - **Some merchant keys clear themselves.** A line that leaves fewer than
   three letters and digits (`E`, `XY #0042`) and bare cash wording
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with

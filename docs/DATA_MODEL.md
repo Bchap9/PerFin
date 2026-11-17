@@ -782,7 +782,8 @@ the daily job, the backfill and recomputed views):
   removed a row, balance or investment row on; the job also rewrites from
   the first stored day valued by older rules (`breakdown.valuation`, the
   valuation version, below the current one; 2 since 1.0.0). A rewritten day
-  keeps the entries it recorded for accounts deleted since.
+  keeps the entries it recorded for accounts deleted since; a day stored in
+  a former base currency is left as recorded.
 
 Recurring detection (`app/domain/recurring/`) feeds `scheduled_transaction`
 with `origin = detected`: transactions of the last 1100 days (transfers
@@ -1000,7 +1001,7 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `spec_digest`), `possible_duplicate` (`near_match`:
   `transaction_id`, `candidates`), `low_confidence_field` (`rows_skipped`,
   `balance_mismatch`, `date_order_assumed`, `currency_mismatch`,
-  `truncated`). The latest import's counts are the `log` of the document's
+  `truncated`, `opening_balance_not_recorded`). The latest import's counts are the `log` of the document's
   last finished `parse` `ingest_job`.
 - PDF and image statements (document parsers, Phases 3-4; INGESTION.md
   "Parse"): the parsed statements are `extraction.statements` with

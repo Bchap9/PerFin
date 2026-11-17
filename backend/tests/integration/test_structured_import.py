@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
+from app.core.money import MoneyIn
 from app.core.settings import Settings
 from app.db.models import AuditLog, Event, Household, Job
 from app.db.rls import set_context
@@ -609,6 +610,88 @@ def test_a_csv_opening_balance_row_is_the_balance_of_an_existing_account(env: En
         (date(2026, 3, 19), Decimal("787.60")),
     ]
     assert _balance(env, account) == Decimal("787.60")
+
+
+def test_a_csv_opening_balance_the_ledger_already_has_raises_nothing(env: Env) -> None:
+    """The next month opens with the balance the last one closed with: agreed, not asked."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    march = (
+        "Date,Description,Amount,Balance\n"
+        "2026-03-01,Opening Balance,,500.00\n"
+        "2026-03-04,Harbor Lane Bakery,-12.40,487.60\n"
+        "2026-03-19,Northfield Payroll,300.00,787.60\n"
+    )
+    april = (
+        "Date,Description,Amount,Balance\n"
+        "2026-04-01,Opening Balance,,787.60\n"
+        "2026-04-06,Corner Cafe,-7.60,780.00\n"
+    )
+    env.ingest(march.encode("ascii"), account=account, name="march.csv")
+    document_id = env.ingest(april.encode("ascii"), account=account, name="april.csv")
+    assert _opening_items(env, document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+
+
+def test_a_qif_moved_to_another_account_takes_its_opening_balance_along(env: Env) -> None:
+    first = env.ledger.account(env.household_id)
+    second = env.ledger.account(env.household_id)
+    document_id = env.ingest(_QIF_OPENING, account=first, name="export.qif")
+    assert len(env.snapshots(first)) == 1
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        imports_service.import_extraction(db, document, result, account_id=second.id)
+    assert env.transactions(first) == []
+    assert env.snapshots(first) == []
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(second)] == [
+        (_OPENED, Decimal("500.00"))
+    ]
+    assert _balance(env, second) == Decimal("787.60")
+
+
+def _accounts(env: Env) -> list[Account]:
+    for db in env.db():
+        rows = list(db.execute(select(Account)).scalars())
+        db.expunge_all()
+        return rows
+    raise AssertionError  # pragma: no cover
+
+
+def test_a_qif_account_set_up_from_its_proposal_counts_its_opening_once(env: Env) -> None:
+    document_id = env.ingest(_QIF_OPENING, name="export.qif")
+    (found,) = _detected(env, document_id)
+    proposal = found.proposal
+    assert proposal is not None
+    assert (proposal.opening_balance, proposal.opening_balance_date) == ("500.00", _OPENED)
+    choice = AccountChoice(
+        target=found.target,
+        index=found.index,
+        create=AccountCreate(
+            type=AccountType.CHECKING,
+            name=proposal.name,
+            currency="USD",
+            opening_balance=MoneyIn.model_validate(
+                {"amount": proposal.opening_balance, "currency": "USD"}
+            ),
+            opening_balance_date=proposal.opening_balance_date,
+        ),
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        (created,) = proposals.apply_accounts(
+            db, env.principal(), document_id, DocumentAccountsApply(items=[choice]), request=None
+        ).created
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    account = next(a for a in _accounts(env) if a.id == created)
+    snapshots = env.snapshots(account)
+    assert [(s.as_of_date, s.balance, s.source) for s in snapshots] == [
+        (_OPENED, Decimal("500.00"), BalanceSource.MANUAL)
+    ]
+    assert _balance(env, account) == Decimal("787.60")
+    assert _opening_items(env, document_id) == []
 
 
 def _qif_1(env: Env, document_id: uuid.UUID, *, posted: date | None = None) -> ExtractResult:

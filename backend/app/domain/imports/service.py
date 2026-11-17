@@ -290,6 +290,7 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
+from app.domain.accounts.balances import balance_as_of
 from app.domain.accounts.models import (
     LIABILITY_TYPES,
     Account,
@@ -3281,9 +3282,9 @@ def _settle_openings(run: _Run, account: Account, *, settled: bool) -> None:
     so the opening is counted once either way. With something already on
     or before the day, nothing is written: the row of an earlier reading
     stays, and without one an item names the figure
-    (:data:`OPENING_BALANCE_NOT_RECORDED`), unless the very
-    balance is already recorded for the day (an account created from the
-    document's proposal).
+    (:data:`OPENING_BALANCE_NOT_RECORDED`), unless the account's balance
+    that day already is the figure (an account created from the document's
+    proposal, the previous statement's closing balance).
     """
     openings = run.openings.pop(account.id, [])
     if not openings:
@@ -3350,7 +3351,9 @@ def _settle_openings(run: _Run, account: Account, *, settled: bool) -> None:
             # The earlier reading's row stands in for the figure: kept.
             read.update(row.import_hash for row in old if row.import_hash is not None)
             continue
-        if any(s.as_of_date == opening.as_of and s.balance == opening.amount for s in snapshots):
+        # The ledger already says so (the balance a proposal recorded, the
+        # previous statement's closing balance): nothing to ask.
+        if balance_as_of(db, account, opening.as_of) == opening.amount:
             continue
         wanted.append(
             {
@@ -3432,6 +3435,15 @@ def _settle_moved(run: _Run) -> None:
         ).first()
         if left is None:
             drop_stale_records(db, run.document, account, ())
+            # The balances the statement recorded there went with it.
+            db.execute(
+                delete(BalanceSnapshot).where(
+                    BalanceSnapshot.household_id == run.household_id,
+                    BalanceSnapshot.account_id == account.id,
+                    BalanceSnapshot.source_document_id == run.document.id,
+                    BalanceSnapshot.source == BalanceSource.STATEMENT,
+                )
+            )
 
 
 def _open_items(db: Session, document: Document) -> int:
