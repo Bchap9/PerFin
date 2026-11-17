@@ -24,6 +24,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { labelOf } from "../investments/format";
 import { SeriesChart } from "../networth/SeriesChart";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
+import { ConfirmDelete } from "../planning/ConfirmDelete";
 import { useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import {
@@ -123,6 +124,7 @@ function Valuations({
   const invalidate = [queryRoots.assets, queryRoots.accounts, queryRoots.netWorth, queryRoots.dashboard];
   const add = useAction((body: Parameters<typeof addValuation>[1]) => addValuation(asset.id, body), { invalidate, success: "Value saved" });
   const remove = useAction((id: string) => deleteValuation(asset.id, id), { invalidate, success: "Value deleted" });
+  const [deleting, setDeleting] = useState<Valuation | null>(null);
   const rows = query.data ?? [];
   const change = valueChange(rows);
 
@@ -137,7 +139,7 @@ function Valuations({
       header: <span className="visually-hidden">Delete</span>,
       align: "end",
       cell: (v) => (
-        <Button size="sm" variant="danger" aria-label={`Delete the value of ${v.valued_on}`} onClick={() => void remove.run(v.id)}>
+        <Button size="sm" variant="danger" aria-label={`Delete the value of ${v.valued_on}`} onClick={() => { setDeleting(v); }}>
           Delete
         </Button>
       ),
@@ -198,6 +200,16 @@ function Valuations({
         ) : null}
         <Table caption="Valuation history" columns={columns} rows={rows} rowKey={(v) => v.id} maxHeight="md" empty="No values recorded." />
       </QueryState>
+      {deleting === null ? null : (
+        <ConfirmDelete
+          title="Delete this value?"
+          description={`The value of ${formatDate(deleting.valued_on) ?? deleting.valued_on} leaves this asset's history.`}
+          label="Delete value"
+          action={remove}
+          confirm={() => remove.run(deleting.id)}
+          onClose={() => { setDeleting(null); }}
+        />
+      )}
     </div>
   );
 }

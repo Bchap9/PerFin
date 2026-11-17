@@ -294,5 +294,13 @@ describe("calendar", () => {
     await vi.waitFor(() => { expect(api.callsTo("PATCH", "/api/v1/recurring/:id")).toHaveLength(1); });
     expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.path).toBe("/api/v1/recurring/s-4");
     expect(api.callsTo("PATCH", "/api/v1/recurring/:id")[0]?.body).toEqual({ active: true });
+
+    // One the person added is deleted only once they say so.
+    await user.click(within(within(table).getByRole("row", { name: /Garden Club/ })).getByRole("button", { name: "Delete Garden Club" }));
+    const confirm = await screen.findByRole("dialog", { name: "Delete Garden Club?" });
+    expect(api.callsTo("DELETE", "/api/v1/recurring/:id")).toHaveLength(1);
+    await user.click(within(confirm).getByRole("button", { name: "Delete item" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/recurring/:id")).toHaveLength(2); });
+    expect(api.callsTo("DELETE", "/api/v1/recurring/:id")[1]?.path).toBe("/api/v1/recurring/s-6");
   });
 });

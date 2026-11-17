@@ -84,8 +84,10 @@ export function Dialog({
       aria-labelledby={titleId}
       aria-describedby={description === undefined ? undefined : descriptionId}
       onCancel={(event) => {
-        // Escape: let the parent decide (it owns `open`).
+        // Escape: let the parent decide (it owns `open`). React bubbles
+        // `cancel`, so a dialog inside another does not close that one too.
         event.preventDefault();
+        event.stopPropagation();
         onCloseRef.current();
       }}
     >

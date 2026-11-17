@@ -149,6 +149,34 @@ describe("goals page", () => {
     expect(within(dialog).queryByRole("button", { name: /^Remove contribution/ })).toBeNull();
   });
 
+  it("asks before removing a contribution", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/goals": () => json({ items: [goal()], next_cursor: null }),
+      "GET /api/v1/goals/:id/contributions": () =>
+        json({ items: [{ id: "k-1", goal_id: "g-1", amount: money("100.00"), contributed_on: "2026-10-01", memo: null, created_at: STAMP }], next_cursor: null }),
+      "DELETE /api/v1/goals/:id/contributions/:cid": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/plan/goals");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Contributions to Emergency fund" }));
+    const dialog = await screen.findByRole("dialog", { name: "Contributions to Emergency fund" });
+    const remove = await within(dialog).findByRole("button", { name: "Remove contribution of 100.00 on 2026-10-01" });
+    await user.click(remove);
+    let confirm = await screen.findByRole("dialog", { name: "Remove this contribution?" });
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    // Cancelling leaves the contributions open, with focus back on Remove.
+    expect(screen.getByRole("dialog", { name: "Contributions to Emergency fund" })).toBeInTheDocument();
+    expect(remove).toHaveFocus();
+    expect(api.callsTo("DELETE", "/api/v1/goals/:id/contributions/:cid")).toHaveLength(0);
+    await user.click(remove);
+    confirm = await screen.findByRole("dialog", { name: "Remove this contribution?" });
+    await user.click(within(confirm).getByRole("button", { name: "Remove contribution" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/goals/:id/contributions/:cid")).toHaveLength(1); });
+    expect(api.callsTo("DELETE", "/api/v1/goals/:id/contributions/:cid")[0]?.path).toBe("/api/v1/goals/g-1/contributions/k-1");
+  });
+
   it("has no axe violations", async () => {
     mockApi({
       ...ownerSession(),

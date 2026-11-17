@@ -89,6 +89,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
   transaction, goal, budget and recurring item dialogs, focus now goes to
   the first field with an error, which reads it out; before, nothing was
   said and focus stayed on the button.
+- **Deleting a value, a recurring item or a goal contribution asks first.**
+  Their row buttons deleted on the first click, unlike every other delete;
+  they now ask in a dialog, and after the delete focus goes to the table.
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.

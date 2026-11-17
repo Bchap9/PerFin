@@ -95,6 +95,36 @@ describe("assets", () => {
     expect(api.callsTo("POST", "/api/v1/assets/:id/valuations")[0]?.body).toMatchObject({ value: { amount: "335000", currency: "USD" } });
   });
 
+  it("asks before deleting a value", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
+      "DELETE /api/v1/assets/:id/valuations/:vid": () => new Response(null, { status: 204 }),
+    });
+    renderApp(`${HUB}?tab=valuations`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete the value of 2025-06-01" }));
+    let dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Delete this value?" })).not.toBeInTheDocument();
+    expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Delete the value of 2025-06-01" }));
+    dialog = await screen.findByRole("dialog", { name: "Delete this value?" });
+    api.on("GET /api/v1/assets/:id/valuations", () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete value" }));
+    await vi.waitFor(() => { expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")).toHaveLength(1); });
+    expect(api.callsTo("DELETE", "/api/v1/assets/:id/valuations/:vid")[0]?.path).toBe(`/api/v1/assets/${ASSET}/valuations/v1`);
+    await vi.waitFor(() => { expect(screen.queryByRole("dialog", { name: "Delete this value?" })).not.toBeInTheDocument(); });
+    // The row and its button are gone: focus goes to the history table, not the page body.
+    await vi.waitFor(() => { expect(screen.queryByRole("button", { name: "Delete the value of 2025-06-01" })).not.toBeInTheDocument(); });
+    await vi.waitFor(() => { expect(screen.getByRole("region", { name: "Valuation history" })).toHaveFocus(); });
+  });
+
   it("offers Add valuation, not Add transaction, as an asset account's main action", async () => {
     mockApi({
       ...ownerSession(),
