@@ -106,6 +106,8 @@ describe("add a transaction", () => {
     expect(within(dialog).getByText("Choose an account.")).toBeInTheDocument();
     expect(within(dialog).getByText("Enter an amount such as 12.50.")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/^Amount/)).toBeInvalid();
+    // The first field with an error takes focus, so its error is read out.
+    expect(within(dialog).getByLabelText(/^Account/)).toHaveFocus();
     // Correcting a field clears its message straight away.
     await user.selectOptions(within(dialog).getByLabelText(/^Account/), "a-2");
     expect(within(dialog).queryByText("Choose an account.")).not.toBeInTheDocument();

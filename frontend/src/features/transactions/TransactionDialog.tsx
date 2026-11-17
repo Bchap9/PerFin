@@ -13,7 +13,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "../../components/Button";
 import { CategoryPicker } from "../../components/CategoryPicker";
 import { Dialog } from "../../components/Dialog";
-import { Field } from "../../components/Field";
+import { Field, useFocusInvalid } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { useToast } from "../../components/Toast";
@@ -120,6 +120,7 @@ export function TransactionDialog({ transaction, defaultAccountId, onClose }: Tr
   const categories = useCategories();
   const payees = usePayees();
   const formId = useId();
+  const focusInvalid = useFocusInvalid(formId);
   const directionName = useId();
   const firstControl = useRef<HTMLSelectElement | HTMLInputElement | null>(null);
   const editing = transaction !== undefined;
@@ -198,6 +199,7 @@ export function TransactionDialog({ transaction, defaultAccountId, onClose }: Tr
     if (save.isPending) {
       return;
     }
+    focusInvalid();
     const found = new Map<FieldName, string>();
     if (!editing && account === undefined) {
       found.set("account", "Choose an account.");

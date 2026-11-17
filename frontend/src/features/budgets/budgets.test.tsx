@@ -303,6 +303,8 @@ describe("budget list", () => {
     const dialog = await screen.findByRole("dialog", { name: "New budget" });
     await user.click(within(dialog).getByRole("button", { name: "Create budget" }));
     expect(await within(dialog).findByText("Enter a name.")).toBeInTheDocument();
+    // The first field with an error takes focus, so its error is read out.
+    expect(within(dialog).getByLabelText(/^Name/)).toHaveFocus();
     await user.type(within(dialog).getByLabelText(/^Name/), "Household");
     // Enter in a field creates it: the footer button is the submit button of
     // the fields' form (user-event only presses a submit button inside the form).

@@ -5,7 +5,7 @@
  * control inside it (Input, Select) through context, so a field is always
  * labelled and its error is announced with it.
  */
-import { createContext, useContext, useId, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useState, type ReactNode } from "react";
 
 import { cx } from "./cx";
 
@@ -61,6 +61,23 @@ export function Field({ label, children, hint, error, required = false, id, clas
       )}
     </div>
   );
+}
+
+/**
+ * After a failed submit, focuses the first control marked invalid in the form
+ * `formId`, which then reads its error out. Call the returned function from
+ * the submit handler, with the errors set in the same event.
+ */
+export function useFocusInvalid(formId: string): () => void {
+  const [tries, setTries] = useState(0);
+  useEffect(() => {
+    if (tries > 0) {
+      document.getElementById(formId)?.querySelector<HTMLElement>("[aria-invalid=true]")?.focus();
+    }
+  }, [tries, formId]);
+  return () => {
+    setTries((count) => count + 1);
+  };
 }
 
 interface ControlAria {

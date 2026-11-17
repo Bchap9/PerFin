@@ -4,6 +4,7 @@ import "./planning.css";
 import type { ReactNode } from "react";
 
 import type { Crumb } from "../../components/Breadcrumbs";
+import { useFocusInvalid } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { Spinner } from "../../components/Spinner";
 import { errorMessage } from "../../lib/api/client";
@@ -79,9 +80,10 @@ export function ErrorLine({ message }: { message: string | null }) {
 /**
  * A planning dialog's fields as a form, so Enter in a field saves: the
  * dialog's footer button is `type="submit" form={id}`. `submit` checks the
- * fields itself (`noValidate`).
+ * fields itself (`noValidate`); the first field it marks invalid then takes focus.
  */
 export function PlanForm({ id, submit, children }: { id: string; submit: () => Promise<void>; children: ReactNode }) {
+  const focusInvalid = useFocusInvalid(id);
   return (
     <form
       id={id}
@@ -89,6 +91,7 @@ export function PlanForm({ id, submit, children }: { id: string; submit: () => P
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
+        focusInvalid();
         void submit();
       }}
     >

@@ -85,6 +85,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
   over it.
 - **Enter saves the goal, budget and recurring item dialogs.** Their fields
   were not a form, so Enter in a field did nothing.
+- **A form that cannot be saved moves to its first problem.** In the
+  transaction, goal, budget and recurring item dialogs, focus now goes to
+  the first field with an error, which reads it out; before, nothing was
+  said and focus stayed on the button.
 - **Plan › Upcoming shows its name once.** The page drew a second
   "Upcoming" heading under the Plan section's Upcoming tab; the heading is
   now for screen readers only, as on Plan › Subscriptions.

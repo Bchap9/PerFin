@@ -69,6 +69,8 @@ describe("goals page", () => {
     const dialog = await screen.findByRole("dialog", { name: "New goal" });
     await user.click(within(dialog).getByRole("button", { name: "Save goal" }));
     expect(await within(dialog).findByText("Enter a name.")).toBeInTheDocument();
+    // The first field with an error takes focus, so its error is read out.
+    expect(within(dialog).getByLabelText(/^Name/)).toHaveFocus();
     await user.type(within(dialog).getByLabelText(/^Name/), "Holiday");
     await user.type(within(dialog).getByLabelText(/^Target amount/), "2400.50");
     await user.click(await within(dialog).findByRole("checkbox", { name: "Checking" }));
