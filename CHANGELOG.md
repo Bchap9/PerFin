@@ -66,9 +66,41 @@ Stage 4 of four on the way to 1.0.0: the release review.
 - **The same cash every month is only suggested.** A fixed monthly
   `WITHDRAWAL` or `CASH DEPOSIT` on lines that name nobody and that nobody
   gave a category was found as a running series; detection now only
-  suggests it, since it may be pocket money or a payment to somebody.
+  suggests it, since it may be pocket money or a payment to somebody. The
+  same ATM line every month (`ATM 0412 <town>`) is only suggested too.
 
 ### Fixed
+
+- **A first brokerage statement no longer doubles the account for its
+  month.** The value a statement opens with already holds the positions it
+  opens with; every day of the period counted them a second time, in net
+  worth and on the account's balance chart, until the closing day.
+- **Net worth history follows what you import.** Statements arrive after
+  the fact, and stored daily figures kept what was known on each day, so
+  the chart stayed flat through a month and jumped the day after its
+  statement was imported. Every import now has the stored days from its
+  first date on recalculated, and history is recalculated once after the
+  upgrade.
+- **A QIF or CSV opening balance counts on an existing account.** It was
+  dropped when the file went into an account that already existed, and
+  "Process again" removed the Opening Balance transaction an earlier
+  version had imported, lowering the balance. It is now the account's
+  balance on the day before, or an Inbox item asks about it when the
+  account already has a different balance from before.
+- **A CSV whose running balance does not add up no longer sets the
+  account's balance.** A card export printing the amount owed as positive
+  put the card in credit.
+- **An account set up from a PDF statement counts the first day's
+  transactions.** Its opening balance was recorded on the period's first
+  day, leaving that day's rows out of the balance.
+- **Recording today's balance works east of UTC.** The balance form's date
+  was refused as "in the future" for the first hours of the day.
+- **A credit union's `Withdrawal …` line names who was paid.** `Withdrawal
+  ACH …`, `Withdrawal Debit Card …`, `Withdrawal POS #n …` and `Withdrawal
+  Bill Payment …` name the company or shop behind the bank's words, so the
+  merchant list finds it and `WITHDRAWAL` there suggests no cash.
+  `Withdrawal Home Banking Transfer To Share …` is a transfer; `Withdrawal
+  by Check` and `Share Draft` lines are cheques (clean-up version 4).
 
 - **Plan › Upcoming keeps focus on the tab.** Switching between the
   calendar and the recurring items with the arrow keys or a click left
@@ -145,17 +177,19 @@ Stage 4 of four on the way to 1.0.0: the release review.
   Such a line now has no merchant key, like a transfer; a brand the
   merchant list knows by two letters (`BP`) keeps its own. Rows keyed
   before lose the key in the refresh that follows the upgrade (the hourly
-  `categorise.dispatch` queues it; clean-up version 3); their categories
+  `categorise.dispatch` queues it; clean-up version 4); their categories
   stay, and what was learned under such a key no longer answers.
 - **Bare cash wording names no merchant.** `WITHDRAWAL`, `CASH DEPOSIT`,
-  `TELLER DEPOSIT` and a line that starts with `ATM` became a merchant key,
+  `TELLER DEPOSIT`, a line that starts with `ATM` and a teller's withdrawal
+  (`WITHDRAWAL MADE IN THE STORE`, `CUSTOMER WITHDRAWAL IMAGE`, `OVER THE
+  COUNTER WITHDRAWAL`) became a merchant key,
   so all of a household's cash lines were one merchant, though the data
   model says a cash line has none. They now have no key; the suggestion of
   cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
   before lose the key in the same refresh after the upgrade. A recurring
   series of such rows loses its key with them, so one a person dismissed
   under the old key stays dismissed instead of coming back as a new
-  suggestion; a merchant rule on such a key stops applying
+  suggestion (an ATM series named after its old key, `Atm`, too); a merchant rule on such a key stops applying
   (docs/UPGRADING.md).
 - **A cheque in the `CHEQUE` or `CHQ` spelling is a cheque.** Clean-up read
   only `CHECK 0042` as a cheque, so `CHEQUE #0042`, `CHQ 0042`, a bare
@@ -212,6 +246,36 @@ Stage 4 of four on the way to 1.0.0: the release review.
 - **Suggested categories never group rows by text of fewer than three
   letters and digits.** Rows printed as `#1`, `-` or nothing each stand
   alone in the Inbox, so one Accept covers only rows of the same merchant.
+
+### Security
+
+- **A dead export or import job no longer blocks the household.** Its
+  archive stayed pending forever, so every later export or import was
+  refused. It is now failed (`job-failed`), its upload and wrapped
+  passphrase key are shredded, and the household can export or import
+  again, on the next request or by the new 15-minute `portability.sweep`
+  job.
+- **`POST /import` refuses an encrypted archive asking for more Argon2id
+  memory than PerFin's own exports use** (256 MiB), before deriving
+  anything; a crafted header could make the API allocate up to 1 GiB.
+- **Adding or removing a second factor, and new recovery codes, end the
+  user's other sessions.** A stolen session survived the very change made
+  to lock it out.
+- **OIDC signing keys are not trusted past their max age.** When a JWKS
+  refetch failed, the old keys were kept as if fresh. Expired keys are now
+  refused until a fetch succeeds; a failing IdP is asked at most once per
+  minimum refresh interval, and claim refresh keeps sessions (instead of
+  ending them) while the keys cannot be fetched.
+- **OIDC claim refresh no longer holds session rows locked while it calls
+  the IdP,** and runs one at a time.
+- **Email intake bounds what it fetches.** It asks the server for at most
+  one byte over the message cap; without UIDPLUS it no longer runs a bare
+  `EXPUNGE` that deleted other mail already flagged deleted, and it reads
+  the server's capabilities again after login (MOVE and UIDPLUS were
+  missed on servers that announce them only then).
+- **The recovery-code limit holds for its full hour.** The hourly prune
+  kept rate-limit events for 15 minutes only, so 5 tries an hour became 5
+  every 15 minutes.
 
 ## [1.0.0-rc.11] - 2026-11-16
 
