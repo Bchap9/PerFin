@@ -9,9 +9,10 @@
   snapshot.
 * :func:`latest_snapshot`: the most recent stored snapshot on or before a day.
 * :func:`snapshot_household` (the daily ``networth.snapshot`` job): computes
-  and upserts today's snapshot (``app.domain.networth.compute``) and fills
-  every missing day since the last stored one (or since the household's
-  first data, at most :data:`MAX_BACKFILL_DAYS` back). One row per household
+  and upserts today's snapshot (``app.domain.networth.compute``), rewrites
+  the last stored day and fills every missing day since (or since the
+  household's first data, at most :data:`MAX_BACKFILL_DAYS` back); one run
+  of a household at a time (a transaction-level advisory lock). One row per household
   and day (unique key, ``INSERT ... ON CONFLICT DO UPDATE``), so running it
   twice on a day changes nothing but the figures. Stored days are
   **rewritten** from the earliest day an import wrote or removed something
@@ -44,7 +45,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Final
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -87,6 +88,9 @@ from app.domain.reports.dates import add_months, iter_months, month_end, month_s
 
 #: Most days one job run fills (ten years).
 MAX_BACKFILL_DAYS: Final = 3660
+#: First key of the per-household ``pg_advisory_xact_lock`` the snapshot job
+#: takes ("PFNW"; the queue's own household lock uses another namespace).
+SNAPSHOT_LOCK_NAMESPACE: Final = 0x5046_4E57
 _AUTO_DAY_LIMIT: Final = 400
 _AUTO_WEEK_LIMIT: Final = 7 * 366
 
@@ -145,7 +149,7 @@ def snapshot_household(
 ) -> int:
     """Upsert the snapshot of ``on`` and fill or rewrite the days before it (module doc).
 
-    Written: every day after the last stored one (from the first data on a
+    Written: every day from the last stored one (from the first data on a
     first run, or when the data now starts before the first stored day),
     every day from ``since`` (the earliest day an import wrote
     or removed something on) and every day from the first stored row valued
@@ -154,6 +158,13 @@ def snapshot_household(
     today's is left as recorded (today's row excepted). Runs in the household's RLS context. Returns
     the number of days written.
     """
+    # One run of a household at a time (the queue lets two of its jobs run
+    # at once): a later run waits here and reads the book only once the
+    # earlier one committed, so it never writes back an older reading.
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, hashtext(CAST(:household AS text)))"),
+        {"namespace": SNAPSHOT_LOCK_NAMESPACE, "household": str(household_id)},
+    )
     base = base_currency(db, household_id)
     book = NetWorthBook.load(db, household_id, None, target=base, until=on)
     last = db.execute(
@@ -161,7 +172,9 @@ def snapshot_household(
             NetWorthSnapshot.household_id == household_id, NetWorthSnapshot.as_of_date < on
         )
     ).scalar_one_or_none()
-    start = last + timedelta(days=1) if last is not None else (book.first_day() or on)
+    # The last stored day again: what was written on it after it was stored
+    # (a row dated today, which asks for no rewrite) reaches it this way.
+    start = last if last is not None else (book.first_day() or on)
     valuation = NetWorthSnapshot.breakdown["valuation"].as_integer()
     # Nothing before the window is written, so nothing there counts as stale.
     window = on - timedelta(days=max_days - 1)

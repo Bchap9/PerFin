@@ -813,6 +813,11 @@ def test_an_import_has_net_worth_rewritten_from_its_first_day(env: Env) -> None:
     data = f"!Type:Bank\nD03/01/2026\nT-5.00\nPCorner Cafe\n^\n{rows}".encode("ascii")
     document_id = env.ingest(data, account=account, name="export.qif")
     assert _net_worth_since(env) == ["2026-03-01"]
+    # That job ran (one waiting would already cover the same days).
+    for db in env.db():
+        db.execute(
+            delete(Job).where(Job.type == "networth.snapshot", Job.household_id == env.household_id)
+        )
     # Read again without its first row: that row goes, so its day is rewritten.
     for db in env.db():
         document = db.get(Document, document_id)
@@ -828,7 +833,7 @@ def test_an_import_has_net_worth_rewritten_from_its_first_day(env: Env) -> None:
         )
         imports_service.import_extraction(db, document, shorter)
     assert len(env.transactions(account)) == 2
-    assert _net_worth_since(env) == ["2026-03-01", "2026-03-01"]
+    assert _net_worth_since(env) == ["2026-03-01"]
 
 
 _RUNNING = (

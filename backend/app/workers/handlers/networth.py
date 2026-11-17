@@ -12,8 +12,9 @@ per day even if the dispatcher runs twice.
 :func:`app.domain.networth.service.snapshot_household`: it upserts that day's
 ``net_worth_snapshot`` and fills the days missing since the last one (the
 backfill; at most ten years on a household's first run). Re-running it for
-the same day rewrites the same row. An import enqueues it with ``since``
-(``service.request_recompute``): the stored days from then on are rewritten.
+the same day rewrites the same row. A write on a past day enqueues it with
+``since`` (``app.domain.networth.recompute.request_recompute``, one waiting
+job per household): the stored days from then on are rewritten.
 """
 
 from __future__ import annotations

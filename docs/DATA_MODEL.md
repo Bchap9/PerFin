@@ -775,11 +775,13 @@ the daily job, the backfill and recomputed views):
   "amount_base"}], "unconverted": [{"account_id", "amount", "currency"}],
   "unpriced_security_ids"}`; amounts are decimal strings. Ids, types and
   amounts only: no names or free text.
-- The daily `networth.snapshot` job upserts the day's row and backfills the
-  days missing since the last snapshot (from the first data on a first run,
-  at most ten years). Statements arrive backdated, so every import queues
-  the job to **rewrite** the stored days from the first day it wrote or
-  removed a row, balance or investment row on; the job also rewrites from
+- The daily `networth.snapshot` job upserts the day's row, rewrites the
+  last stored day and backfills the days missing since (from the first data
+  on a first run, at most ten years); one run of a household at a time.
+  Statements arrive backdated, so every import queues the job to
+  **rewrite** the stored days from the first day it wrote or removed a
+  row, balance or investment row on (one waiting rewrite per household,
+  from the earliest day asked for); the job also rewrites from
   the first stored day valued by older rules (`breakdown.valuation`, the
   valuation version, below the current one; 2 since 1.0.0). A rewritten day
   holds only the accounts that exist: deleting an account queues the
