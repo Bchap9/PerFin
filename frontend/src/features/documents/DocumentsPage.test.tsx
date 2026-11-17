@@ -187,6 +187,8 @@ describe("document library", () => {
     renderApp("/inbox/documents");
     expect(await screen.findByText("march.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete march.pdf" })).not.toBeInTheDocument();
+    // A viewer's Inbox has no uploader, so the link would lead nowhere.
+    expect(screen.queryByRole("link", { name: "Upload files" })).not.toBeInTheDocument();
   });
 
   it("the library sits in the Inbox and links each file to its page there", async () => {

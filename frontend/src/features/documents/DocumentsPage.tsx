@@ -143,11 +143,14 @@ export function DocumentsPage() {
       </form>
       <Card
         title={searching ? "Search results" : "Documents"}
-        actions={
-          <Link to="/inbox" hash="inbox-add-documents">
-            Upload files
-          </Link>
-        }
+        // A viewer's Inbox has no uploader, so the action would lead nowhere.
+        {...(canWrite && {
+          actions: (
+            <Link to="/inbox" hash="inbox-add-documents">
+              Upload files
+            </Link>
+          ),
+        })}
       >
         {query.isPending ? <Spinner label="Loading documents" /> : null}
         {query.isError ? (
