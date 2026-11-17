@@ -41,7 +41,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Final
 
@@ -139,8 +139,9 @@ class _Found:
     #: The subtype the document prints (an account index's group, a PDF parser).
     subtype: str | None = None
     #: The day whose end ``opening_balance`` is the balance at, when the
-    #: source says (a table's opening row, the statement's ``as_of``); else
-    #: ``period_start``.
+    #: source says (a table's opening row, the statement's ``as_of``; one on
+    #: the period's first day is the day before: :func:`_opening_day`); else
+    #: the day before ``period_start``.
     opening_date: date | None = None
     #: Tables only: the header names a card export; the mapping's sign is on trust.
     card_named: bool = False
@@ -174,10 +175,25 @@ def _bank(index: int, statement: Statement) -> _Found:
         ),
         transactions=len(statement.transactions),
         subtype=account.subtype,
-        opening_date=(
-            statement.opening_balance.as_of if statement.opening_balance is not None else None
-        ),
+        opening_date=_opening_day(statement),
     )
+
+
+def _opening_day(statement: Statement) -> date | None:
+    """The day whose end the statement's opening balance is the balance at.
+
+    A balance snapshot is the end of its day and counts only rows posted
+    after it, so an opening balance is the day **before** the period: a
+    document parser dates it on the period's first day (the printed
+    period), which would leave that day's rows out of the account's
+    balance. A QIF's is already the day before its first record.
+    """
+    opening = statement.opening_balance
+    if opening is None or opening.as_of is None:
+        return None
+    if opening.as_of == statement.period_start:
+        return opening.as_of - timedelta(days=1)
+    return opening.as_of
 
 
 def _investment(index: int, statement: InvestmentStatement) -> _Found:
@@ -377,7 +393,12 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
     if found.last4 is not None and found.last4 not in name:
         name = f"{name} {found.last4}"
     opening_date = (
-        (found.opening_date or found.period_start) if found.opening_balance is not None else None
+        (
+            found.opening_date
+            or (found.period_start - timedelta(days=1) if found.period_start else None)
+        )
+        if found.opening_balance is not None
+        else None
     )
     return AccountProposal(
         name=name[:NAME_MAX],
