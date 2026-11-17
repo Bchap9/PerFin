@@ -341,6 +341,7 @@ export function NewInstitutionTools({
   actionable: boolean;
 }) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   const detail = useItemDetail(item);
   const [institution, setInstitution] = useState("");
   const [similar, setSimilar] = useState(true);
@@ -351,6 +352,7 @@ export function NewInstitutionTools({
     mutationFn: () =>
       rememberLayout(item.id, layoutRequest(institution, similar, replace)),
     onSuccess: () => {
+      answered();
       setError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });

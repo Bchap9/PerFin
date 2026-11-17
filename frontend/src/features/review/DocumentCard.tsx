@@ -339,6 +339,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
   const [settingUp, setSettingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resolve = useResolve(item, setError);
+  const answered = useContext(AnsweredContext);
   if (!actionable) {
     return null;
   }
@@ -406,6 +407,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
       {settingUp && item.document_id !== null ? (
         <DocumentAccountsDialog
           documentId={item.document_id}
+          onApplied={answered}
           onClose={() => {
             setSettingUp(false);
           }}
@@ -1408,6 +1410,7 @@ interface CardModel {
 
 function CardView({ model }: { model: CardModel }) {
   const queryClient = useQueryClient();
+  const answered = useContext(AnsweredContext);
   const [fixing, setFixing] = useState(false);
   const [teaching, setTeaching] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -1532,6 +1535,7 @@ function CardView({ model }: { model: CardModel }) {
                 }
               : {})}
             onDone={() => {
+              answered();
               setReconciling(false);
               void queryClient.invalidateQueries({ queryKey: queryRoots.review });
               void queryClient.invalidateQueries({
