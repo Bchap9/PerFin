@@ -6,16 +6,16 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.11`; the final `v1.0.0` follows the
-internal release review (Stage 4). No external security review or
+The current release candidate is `v1.0.0-rc.12`, after the internal release
+review (Stage 4). No external security review or
 penetration test has been done: run PerFin on a private network only
 (SECURITY.md). Every phase (0-7) is implemented. Alembic head is
-`0014`. On 2026-11-16: SPDX;
-backend ruff, ruff format, mypy --strict (806 source files), bandit, OpenAPI
-drift and 11916 pytest tests with `-n 4` (one worker crashed under load and
-its file, 71 tests, passed alone); the whole suite then passed in CI on the
-branch; frontend eslint, tsc, 1587 vitest tests in 112 files, the production
-build and the bundle budget. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0014`. On 2026-11-17: SPDX;
+backend ruff, ruff format, mypy --strict (800 source files), bandit, OpenAPI
+drift and 12224 pytest tests with `-n 3` (the sandbox memory-bomb test
+failed under load and its file, 43 tests, passed alone); the whole suite
+then passed in CI on the branch; frontend eslint, tsc, 1653 vitest tests in
+115 files, the production build and the bundle budget. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -25,9 +25,11 @@ fs`, and the shipped image built and passing `trivy image` with an SBOM).
 
 What remains (details in docs/ROADMAP.md):
 
-- The Stage 4 release review, then `v1.0.0`. An internal security review
-  was done every phase (docs/security/CONTROLS.md); by the owner's
-  decision no external review is a gate for 1.0.
+- `v1.0.0`: the held eslint and typescript-eslint update (it clears a
+  moderate minimatch advisory in dev tooling) once those releases are a
+  week old, then the tag. The Stage 4 release review is done; an internal
+  security review was done every phase (docs/security/CONTROLS.md); by the
+  owner's decision no external review is a gate for 1.0.
 - The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
   #8). `v1.0.0-rc.3` also publishes the new `perfin-ml` image.
 - Not exercised: the optional local-model containers (`ml`/`ml-cuda`
@@ -40,7 +42,17 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Stage 4 of four on the way to 1.0.0: the release review.
+Nothing yet.
+
+## [1.0.0-rc.12] - 2026-11-17
+
+The release review, the last of four stages on the way to 1.0.0. A first
+brokerage statement no longer doubles the account, stored net worth
+history follows every backdated change, opening balances from QIF and CSV
+files count on existing accounts, a credit union's withdrawal lines name
+who was paid, and a second security pass closed its findings. No
+migration, no new setting, no new container, nothing new leaves the host
+(docs/UPGRADING.md "1.0.0-rc.12").
 
 ### Changed
 

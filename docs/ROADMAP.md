@@ -440,7 +440,20 @@ The road from the release candidates to `v1.0.0` (owner's decision,
       editor, the budget and the calendar forms (it is used in
       Transactions: the drawer, the bulk bar, the edit dialog and "Always
       categorise").
-- [ ] Stage 4, the release review.
+- [x] Stage 4, the release review (rc.12). A final review on the
+      stronger model across money, categorisation, the frontend, security
+      and docs, each finding confirmed by a second reviewer and each fix
+      lane reviewed again: a first brokerage statement no longer doubles
+      the account, stored net worth history is rewritten after any
+      backdated change and leaves deleted accounts out, QIF and CSV
+      opening balances count on existing accounts, a credit union's
+      withdrawal lines name who was paid, and a second security pass
+      (auth, OIDC, sessions, the sandbox, intake, portability, backup
+      crypto, Helm) found no blocker or high finding and its medium and
+      seven low ones were fixed. Deferred past 1.0 by decision: a
+      customisable Home, inline category editing in the grid, focus and an
+      announcement on navigation, and the OIDC claim refresh and stale-day
+      edge cases listed in the review notes.
 
 Release verification before rc.1 (2026-11-04): the ten steps in
 `docs/RELEASE_CHECKLIST.md` (image build, bootstrap, MFA and step-up,
