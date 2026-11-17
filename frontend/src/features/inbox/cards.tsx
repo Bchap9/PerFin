@@ -13,6 +13,8 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Chip } from "../../components/Chip";
 import { Spinner } from "../../components/Spinner";
+import { formatDate } from "../../lib/dates";
+import { formatMoney } from "../../lib/money";
 import type { LearnedCategory } from "../categories/api";
 import type { Subscription, SubscriptionDecision } from "../subscriptions/api";
 import { merchantName, type Transaction } from "../transactions/api";
@@ -166,7 +168,8 @@ function groupable(printed: string): boolean {
  * The suggested rows by merchant, most rows first, at most `max`. A row with
  * no merchant groups by its printed text ("raw:"), unless that text has
  * fewer than three letters and digits ("#1", "-", none): such a row stands
- * alone, so one Accept never covers unrelated rows.
+ * alone, so one Accept never covers unrelated rows, and is named with its
+ * date and amount, so its line and its Accept say which row it is.
  */
 export function groupSuggestions(rows: readonly Transaction[], max = 5): MerchantGroup[] {
   const groups = new Map<string, { name: string; ids: string[]; categories: Map<string, number> }>();
@@ -176,9 +179,12 @@ export function groupSuggestions(rows: readonly Transaction[], max = 5): Merchan
       continue;
     }
     const printed = row.raw_payee ?? "";
-    const key = row.merchant_key ?? (groupable(printed) ? `raw:${printed}` : `row:${row.id}`);
+    const alone = row.merchant_key === null && !groupable(printed);
+    const key = row.merchant_key ?? (alone ? `row:${row.id}` : `raw:${printed}`);
     const group = groups.get(key) ?? {
-      name: merchantName(row) ?? (printed === "" ? "No merchant" : printed),
+      name:
+        (merchantName(row) ?? (printed === "" ? "No merchant" : printed)) +
+        (alone ? `, ${formatDate(row.posted_date) ?? row.posted_date}, ${formatMoney(row.amount.amount, row.amount.currency) ?? row.amount.amount}` : ""),
       ids: [] as string[],
       categories: new Map<string, number>(),
     };
