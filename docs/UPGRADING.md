@@ -335,8 +335,9 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   upgrade rewrites every stored day once (valuation version 2). This
   corrects history inside an account's first brokerage statement period,
   which counted the opening positions twice. Nothing needs to be run by
-  hand; a stored day keeps what it recorded for an account deleted since,
-  and a day stored in a former base currency is left as it is. A daily job
+  hand. An account deleted before the upgrade leaves the rewritten days
+  (deleting an account now takes it out of the history; closing it keeps
+  it there), and a day stored in a former base currency is left as it is. A daily job
   still queued when going back to rc.11 runs there as before; a rewrite an
   import queued is refused by the rc.11 worker, which is harmless.
 - **Some merchant keys clear themselves.** A line that leaves fewer than

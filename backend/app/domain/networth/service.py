@@ -19,7 +19,9 @@
   backdated, so a stored day would otherwise keep what was known on it) and
   from the first stored day valued by older rules (``breakdown["valuation"]``
   below :data:`~app.domain.networth.compute.VALUATION_VERSION`). A rewritten
-  day keeps what it recorded for accounts deleted since.
+  day holds the accounts that exist: deleting an account removes everything
+  recorded on it, its place in the history too, and queues the rewrite of
+  every stored day that names it (closing an account is how it stays).
 * :func:`history` (``GET /networth?range=&granularity=``): one point per
   bucket end (every day, every 7 days back from today, or every month end),
   oldest first, the last point always today. With household scope a stored
@@ -51,28 +53,25 @@ from app.auth.principal import Principal
 from app.core import clock
 from app.core.errors import ProblemError
 from app.core.events import emit
-from app.core.money import Money, to_storage
-from app.db.queue import enqueue
-from app.domain.accounts.models import Account, AccountType
+from app.core.money import Money
+from app.domain.accounts.models import Account
 from app.domain.accounts.visibility import sees_all_accounts, visible_account_ids
 from app.domain.fx.service import base_currency
 from app.domain.investments.performance import range_start
 from app.domain.investments.schemas import Range
 from app.domain.networth import projection as model
+from app.domain.networth import recompute
 from app.domain.networth.compute import (
     VALUATION_VERSION,
-    AccountValue,
     NetWorthBook,
     NetWorthPoint,
 )
 from app.domain.networth.models import NetWorthSnapshot
 from app.domain.networth.schemas import (
     MAX_POINTS,
-    SNAPSHOT_JOB_TYPE,
     AccountValueOut,
     ClassTotals,
     Granularity,
-    HouseholdSnapshotPayload,
     NetWorthHistory,
     NetWorthLatest,
     NetWorthPointOut,
@@ -199,7 +198,6 @@ def snapshot_household(
             )
         ).scalars()
     }
-    live = set(db.execute(select(Account.id).where(Account.household_id == household_id)).scalars())
     day = start
     written = 0
     while day <= on:
@@ -209,10 +207,7 @@ def snapshot_household(
             # (reads use only rows in today's base currency).
             day += timedelta(days=1)
             continue
-        point = book.on(day)
-        if found is not None:
-            point = _with_deleted(point, found, live)
-        upsert_snapshot(db, household_id, point)
+        upsert_snapshot(db, household_id, book.on(day))
         written += 1
         day += timedelta(days=1)
     # No payload: the event names no account, so only owners and admins hear it.
@@ -220,74 +215,9 @@ def snapshot_household(
     return written
 
 
-def _with_deleted(
-    point: NetWorthPoint, stored: NetWorthSnapshot, live: set[uuid.UUID]
-) -> NetWorthPoint:
-    """``point`` with what ``stored`` recorded for accounts deleted since (kept as recorded).
-
-    Deleting an account removes everything recorded on it, but not its
-    place in the stored history: rewriting a day keeps those entries, in
-    their stored base amount (``stored`` is in ``point``'s currency, today
-    excepted). An entry that does not read is left out.
-    """
-    kept: list[AccountValue] = []
-    entries = (stored.breakdown or {}).get("accounts")
-    for entry in entries if isinstance(entries, list) else []:
-        try:
-            account_id = uuid.UUID(str(entry["account_id"]))
-            if account_id in live:
-                continue
-            amount = Decimal(str(entry["amount"]))
-            currency = str(entry["currency"])
-            recorded = entry.get("amount_base")
-            converted = (
-                Decimal(str(recorded))
-                if stored.currency == point.currency and recorded is not None
-                else None
-            )
-            kept.append(
-                AccountValue(
-                    account_id=account_id,
-                    type=AccountType(entry["type"]),
-                    klass=str(entry["class"]),
-                    side="asset" if amount > 0 else "liability",
-                    amount=amount,
-                    currency=currency,
-                    amount_base=to_storage(converted) if converted is not None else None,
-                )
-            )
-        except (KeyError, TypeError, ValueError, ArithmeticError):
-            continue
-    if not kept:
-        return point
-    assets, liabilities = point.assets, point.liabilities
-    for value in kept:
-        if value.amount_base is not None and value.amount_base > 0:
-            assets += value.amount_base
-        elif value.amount_base is not None:
-            liabilities -= value.amount_base
-    return NetWorthPoint(
-        on=point.on,
-        currency=point.currency,
-        assets=to_storage(assets),
-        liabilities=to_storage(liabilities),
-        accounts=point.accounts + tuple(kept),
-        unpriced_security_ids=point.unpriced_security_ids,
-    )
-
-
 def request_recompute(db: Session, household_id: uuid.UUID, since: date) -> None:
-    """Enqueue the snapshot job to rewrite the stored days from ``since`` (an import's).
-
-    In the caller's transaction and RLS context; no dedupe key (a key is
-    held for good, and a later import may need the same days again).
-    """
-    enqueue(
-        db,
-        SNAPSHOT_JOB_TYPE,
-        HouseholdSnapshotPayload(as_of=today(), since=since),
-        household_id=household_id,
-    )
+    """Have the stored days from ``since`` rewritten (``recompute.request_recompute``)."""
+    recompute.request_recompute(db, household_id, since)
 
 
 # ---------------------------------------------------------------------------

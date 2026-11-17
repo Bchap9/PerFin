@@ -782,8 +782,10 @@ the daily job, the backfill and recomputed views):
   removed a row, balance or investment row on; the job also rewrites from
   the first stored day valued by older rules (`breakdown.valuation`, the
   valuation version, below the current one; 2 since 1.0.0). A rewritten day
-  keeps the entries it recorded for accounts deleted since; a day stored in
-  a former base currency is left as recorded.
+  holds only the accounts that exist: deleting an account queues the
+  rewrite of every stored day that names it, so it leaves the history
+  (closing it keeps it there); a day stored in a former base currency, or
+  older than the ten-year window, is left as recorded.
 
 Recurring detection (`app/domain/recurring/`) feeds `scheduled_transaction`
 with `origin = detected`: transactions of the last 1100 days (transfers

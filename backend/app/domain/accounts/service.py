@@ -81,6 +81,7 @@ from app.domain.accounts.visibility import (
 )
 from app.domain.households import repo as households_repo
 from app.domain.households import service as households_service
+from app.domain.networth import recompute
 from app.domain.networth.compute import INVESTMENT_TYPES, NetWorthBook
 from app.domain.transactions.import_hash import normalize_payee
 from app.ingestion.match.institutions import pick
@@ -619,11 +620,18 @@ def reopen_account(
 def delete_account(
     db: Session, principal: Principal, account_id: uuid.UUID, *, request: HTTPConnection | None
 ) -> None:
-    """Delete an account and everything recorded on it (owner/admin)."""
+    """Delete an account and everything recorded on it (owner/admin).
+
+    Its place in the stored net worth history goes too: the days that name
+    it are rewritten without it (``networth.recompute``).
+    """
     _require_role(principal, HouseholdRole.ADMIN)
     account = get_visible_account(db, principal, account_id, need="edit", lock=True)
     state = _audit_state(account)
+    stored = recompute.first_stored_with(db, account.household_id, account.id)
     repo.delete_account(db, account)
+    if stored is not None:
+        recompute.request_recompute(db, account.household_id, stored)
     _record(
         db,
         principal,

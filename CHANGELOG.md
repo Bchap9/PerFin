@@ -80,7 +80,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
   the chart stayed flat through a month and jumped the day after its
   statement was imported. Every import now has the stored days from its
   first date on recalculated, and history is recalculated once after the
-  upgrade.
+  upgrade. Deleting an account takes it out of the stored history too, so
+  a statement imported into the wrong account, deleted with it and
+  imported again counts once (close an account to keep it in the history).
 - **A QIF or CSV opening balance counts on an existing account.** It was
   dropped when the file went into an account that already existed, and
   "Process again" removed the Opening Balance transaction an earlier

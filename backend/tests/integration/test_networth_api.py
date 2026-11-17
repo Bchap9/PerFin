@@ -30,7 +30,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.models import GrantLevel
@@ -39,8 +39,11 @@ from app.db.models import Job
 from app.db.rls import set_context
 from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import Account, AccountType, BalanceSource
+from app.domain.documents.models import Document
+from app.domain.imports import service as imports_service
 from app.domain.investments.models import InvestmentTxnType, opening_import_hash
 from app.domain.loans import service as loans_service
+from app.domain.networth import recompute as networth_recompute
 from app.domain.networth import service as networth_service
 from app.domain.networth.compute import NetWorthBook
 from app.domain.networth.models import NetWorthSnapshot
@@ -50,6 +53,7 @@ from app.workers.registry import JobContext
 from app.workers.scheduler import SCHEDULE
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, problem_type
+from tests.fixtures.imports import make_extracted_document, make_import_mapping, table_result
 from tests.fixtures.ledger import (
     LedgerFactories,
     household_context,
@@ -94,6 +98,7 @@ def actors(settings: Settings, factories: Factories) -> Iterator[Actors]:
 
 def freeze(monkeypatch: pytest.MonkeyPatch, day: date = TODAY) -> None:
     monkeypatch.setattr(networth_service, "today", lambda: day)
+    monkeypatch.setattr(networth_recompute, "today", lambda: day)
     monkeypatch.setattr(reports_service, "today", lambda: day)
 
 
@@ -695,31 +700,87 @@ def test_stored_days_valued_by_older_rules_are_rewritten(world: World) -> None:
     assert _snapshot(world) == 1
 
 
-def test_a_rewritten_day_keeps_what_it_recorded_for_a_deleted_account(world: World) -> None:
+def _live(world: World) -> dict[date, Decimal]:
+    """What every stored day is worth by the data held now."""
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        book = NetWorthBook.load(db, world.household_id, None, target="USD", until=TODAY)
+        return {day: book.on(day).net for day in _stored(world)}
+
+
+def _named(row: NetWorthSnapshot) -> list[str]:
+    return [a["account_id"] for a in row.breakdown["accounts"]]
+
+
+def test_deleting_an_account_takes_it_out_of_the_stored_history(world: World) -> None:
     _snapshot(world)
     before = _stored(world)
     hidden = world.hidden
+    response = world.owner.delete(f"{API}/accounts/{hidden.id}")
+    assert response.status_code == 204, response.text
+    _run_job(world, world.household_id)
+    # Deleting removes everything recorded on it, its place in the history
+    # too (closing an account is how it stays): 5000.00 from 06-01 is gone.
+    stored = _stored(world)
+    assert stored == {
+        day: net - (D("5000.00") if day >= date(2026, 6, 1) else 0) for day, net in before.items()
+    }
+    assert stored == _live(world)
+    assert all(str(hidden.id) not in _named(row) for row in _snapshots(world))
+
+
+_STATEMENT_ROWS = [
+    ["Date", "Description", "Amount"],
+    ["06/05/2026", "Northfield Payroll", "10000.00"],
+]
+_STATEMENT_SPEC = {
+    "date_column": 0,
+    "date_format": "MM/DD/YYYY",
+    "payee_column": 1,
+    "amount_column": 2,
+}
+
+
+def _import_statement(world: World, account: Account) -> None:
+    """Import a June statement (10000.00 on 06-05) into ``account``, as the importer would."""
+    ledger, hid = world.ledger, world.household_id
+    mapping = ledger.run(
+        make_import_mapping, hid, spec=_STATEMENT_SPEC, rows=_STATEMENT_ROWS, account=account
+    )
+    result = table_result(_STATEMENT_ROWS)
+    document = ledger.run(make_extracted_document, hid, account=account, result=result)
     with world.factories.transaction() as db:
-        set_context(db, world.household_id)
-        db.execute(
-            delete(Account).where(
-                Account.household_id == world.household_id, Account.id == hidden.id
-            )
+        set_context(db, hid)
+        found = db.get(Document, document.id)
+        assert found is not None
+        imports_service.import_extraction(
+            db, found, result, mapping_id=mapping.id, account_id=account.id
         )
-    with world.factories.transaction() as db:
-        set_context(db, world.household_id)
-        networth_service.snapshot_household(db, world.household_id, TODAY, since=date(2026, 6, 1))
-    rows = {row.as_of_date: row for row in _snapshots(world)}
-    # Still counted as it was recorded (5000.00 from 06-01), listed once;
-    # its live figures are gone.
-    assert {day: row.net for day, row in rows.items()} == before
-    assert _amount(_get(world.owner, f"{NW}/latest")["net"]) == D("156600.00")
-    accounts = [a["account_id"] for a in rows[TODAY].breakdown["accounts"]]
-    assert accounts.count(str(hidden.id)) == 1
-    # A day it had nothing on records nothing for it.
-    assert str(hidden.id) not in [
-        a["account_id"] for a in rows[date(2026, 5, 31)].breakdown["accounts"]
-    ]
+
+
+def test_a_statement_moved_to_another_account_by_deleting_the_first_counts_once(
+    world: World,
+) -> None:
+    # Imported into the wrong account, which is then deleted, and imported
+    # again into the right one: every stored day says what the ledger does.
+    _snapshot(world)
+    before = _stored(world)
+    wrong = world.ledger.account(world.household_id, type=AccountType.CHECKING, name="Wrong")
+    _import_statement(world, wrong)
+    _run_job(world, world.household_id)
+    assert _stored(world)[date(2026, 6, 5)] == before[date(2026, 6, 5)] + D("10000.00")
+    response = world.owner.delete(f"{API}/accounts/{wrong.id}")
+    assert response.status_code == 204, response.text
+    _run_job(world, world.household_id)
+    right = world.ledger.account(world.household_id, type=AccountType.CHECKING, name="Right")
+    _import_statement(world, right)
+    _run_job(world, world.household_id)
+    stored = _stored(world)
+    assert stored == {
+        day: net + (D("10000.00") if day >= date(2026, 6, 5) else 0) for day, net in before.items()
+    }
+    assert stored == _live(world)
+    assert all(str(wrong.id) not in _named(row) for row in _snapshots(world))
 
 
 def test_other_household_sees_none_of_it(world: World, actors: Actors) -> None:
