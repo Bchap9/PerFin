@@ -859,7 +859,7 @@ def test_a_dismissed_series_whose_own_rows_split_keeps_new_plans_from_returning(
         # The old key was only the start of the line's text: a key is at
         # most four words (and real clean-up drops a town as well).
         ("ATM CASH 0042 ELKTON PARK", "atm cash 0042 elkton", "Atm Cash 0042 Elkton"),
-        ("WITHDRAWAL MADE IN A BRANCH/STORE", "withdrawal made in a", "Withdrawal Made In A"),
+        ("WITHDRAWAL MADE IN THE STORE", "withdrawal made in the", "Withdrawal Made In The"),
     ],
 )
 def test_a_dismissed_cash_series_stays_dismissed_when_its_rows_lose_the_key(

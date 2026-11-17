@@ -336,8 +336,8 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
 - **Some merchant keys clear themselves.** A line that leaves fewer than
   three letters and digits (`E`, `XY #0042`) and bare cash wording
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
-  `ATM`, and a teller's withdrawal such as `WITHDRAWAL MADE IN A
-  BRANCH/STORE`, `CUSTOMER WITHDRAWAL IMAGE` or `OVER THE COUNTER
+  `ATM`, and a teller's withdrawal such as `WITHDRAWAL MADE IN THE
+  STORE`, `CUSTOMER WITHDRAWAL IMAGE` or `OVER THE COUNTER
   WITHDRAWAL`) no longer have a merchant key, nor a cheque written with the
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
   or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed

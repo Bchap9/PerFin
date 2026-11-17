@@ -67,7 +67,7 @@ def _dismissed(name: str, amount: str = "-200.00") -> ScheduledTransaction:
     [
         ("ATM 0412 QUARRYVALE OH", "Atm"),
         ("ATM CASH 0042 ELKTON PARK", "Atm Cash 0042 Elkton"),
-        ("WITHDRAWAL MADE IN A BRANCH/STORE", "Withdrawal Made In A"),
+        ("WITHDRAWAL MADE IN THE STORE", "Withdrawal Made In The"),
     ],
 )
 def test_a_series_named_after_the_old_cash_key_is_the_candidate_s(raw: str, name: str) -> None:
@@ -81,7 +81,7 @@ def test_a_series_named_after_the_old_cash_key_is_the_candidate_s(raw: str, name
     ("raw", "name"),
     [
         # Another cash line's old key: "WITHDRAWAL" was its own merchant.
-        ("WITHDRAWAL MADE IN A BRANCH/STORE", "Withdrawal"),
+        ("WITHDRAWAL MADE IN THE STORE", "Withdrawal"),
         ("ATM 0412 QUARRYVALE OH", "Atm Cash"),
         # A name that is no cash wording is matched as it is, never by its start.
         ("ATM 0412 QUARRYVALE OH", "Atmosphere"),

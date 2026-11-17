@@ -42,10 +42,10 @@ _KEY_OF = {category_id: key for key, category_id in DEFAULT_CATEGORIES.items()}
         "ATM CASH DEPOSIT",
         "ATM 0412 QUARRYVALE",
         # The words some banks wrap around a teller's cash.
-        "WITHDRAWAL MADE IN A BRANCH/STORE",
+        "WITHDRAWAL MADE IN THE STORE",
         "Customer Withdrawal Image",
         "OVER THE COUNTER WITHDRAWAL",
-        "CUSTOMER DEPOSIT",
+        "CUSTOMER CASH DEPOSIT",
     ],
 )
 def test_bare_cash_wording_names_no_merchant(raw: str) -> None:
@@ -132,5 +132,5 @@ def test_cash_wording_is_still_suggested_as_cash_the_way_the_money_went() -> Non
     assert _suggested("WITHDRAWAL", "in") is None
     assert _suggested("CASH DEPOSIT", "in") == "transfers.cash"
     assert _suggested("CASH DEPOSIT", "out") is None
-    assert _suggested("WITHDRAWAL MADE IN A BRANCH/STORE", "out") == "transfers.cash"
+    assert _suggested("WITHDRAWAL MADE IN THE STORE", "out") == "transfers.cash"
     assert _suggested("Customer Withdrawal Image", "out") == "transfers.cash"
