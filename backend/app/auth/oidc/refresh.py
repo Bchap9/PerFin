@@ -12,7 +12,10 @@ claims are older than that interval is refreshed at the token endpoint:
   ``PERFIN_OIDC_REQUIRE_GROUP`` revokes the session, a changed group updates
   the household role (never instance admin, B6);
 * a rotated refresh token replaces the stored one;
-* the IdP being unreachable changes nothing (retried on the next run).
+* the IdP being unreachable changes nothing (retried on the next run); a
+  JWKS that cannot be fetched counts as unreachable: the token call already
+  happened, so a rotated refresh token is still stored, the claims are not
+  stamped as refreshed, and the IdP is not asked again in that run.
 
 **No row locks across the IdP.** A run first reads the due sessions without
 locking them and makes every token call (and validates every ID token)
@@ -74,7 +77,8 @@ class _Outcome:
     session_id: uuid.UUID
     #: The stored ciphertext the decision was made for (applied only if unchanged).
     token_seen: bytes | None
-    action: Literal["revoke", "apply"]
+    #: ``keep``: only store a rotated refresh token (the ID token could not be checked).
+    action: Literal["revoke", "apply", "keep"]
     reason: str = ""
     response: TokenResponse | None = None
     validated: ValidatedToken | None = None
@@ -106,7 +110,7 @@ def _ask_idp(
     seen = oidc.refresh_token_encrypted
 
     def outcome(
-        action: Literal["revoke", "apply"],
+        action: Literal["revoke", "apply", "keep"],
         reason: str = "",
         response: TokenResponse | None = None,
         validated: ValidatedToken | None = None,
@@ -134,6 +138,8 @@ def _ask_idp(
                 access_token=response.access_token,
             )
         except TokenValidationError as exc:
+            if exc.reason == "jwks-unavailable":
+                return outcome("keep", response=response)
             return outcome("revoke", f"idp_refresh_invalid:{exc.reason}")
         if validated.subject != oidc.subject:
             return outcome("revoke", "idp_refresh_subject_changed")
@@ -172,21 +178,25 @@ def _apply(
     keyring: Keyring,
     settings: Settings,
     now: datetime,
-) -> bool:
-    """Apply one outcome to the locked rows; ``True`` when the session was revoked."""
+) -> Literal["revoked", "refreshed", "kept"]:
+    """Apply one outcome to the locked rows."""
     if outcome.action == "revoke":
         _revoke(db, oidc, session_row, outcome.reason)
-        return True
+        return "revoked"
+    if outcome.action == "keep":
+        _store_refresh_token(oidc, outcome.response, keyring)
+        oidc.updated_at = now
+        return "kept"
     validated = outcome.validated
     if validated is not None:
         user = db.get(User, oidc.user_id)
         role = map_groups(validated.groups, settings)
         if user is None or not user.is_active:
             _revoke(db, oidc, session_row, "account_disabled")
-            return True
+            return "revoked"
         if role is None and settings.oidc_require_group:
             _revoke(db, oidc, session_row, "not_in_group")
-            return True
+            return "revoked"
         change = sync_membership(db, oidc.user_id, role, settings)
         if change is not None:
             audit_auth(
@@ -204,14 +214,19 @@ def _apply(
             )
         if validated.sid is not None:
             oidc.sid = validated.sid
-    response = outcome.response
+    _store_refresh_token(oidc, outcome.response, keyring)
+    oidc.claims_refreshed_at = now
+    oidc.updated_at = now
+    return "refreshed"
+
+
+def _store_refresh_token(
+    oidc: OidcSession, response: TokenResponse | None, keyring: Keyring
+) -> None:
     if response is not None and response.refresh_token is not None:
         oidc.refresh_token_encrypted = keyring.encrypt_str(
             response.refresh_token, ad=refresh_token_ad(oidc.id)
         )
-    oidc.claims_refreshed_at = now
-    oidc.updated_at = now
-    return False
 
 
 def refresh_claims(
@@ -262,6 +277,10 @@ def refresh_claims(
             stats.skipped += 1
             continue
         outcomes.append(result)
+        if result.action == "keep":
+            log.warning("OIDC claim refresh skipped: JWKS unavailable")
+            stats.skipped += len(candidates) - index - 1
+            break
     # Phase 2: apply each under a short lock, if nothing changed meanwhile.
     for outcome in outcomes:
         try:
@@ -270,10 +289,13 @@ def refresh_claims(
                 if locked is None:
                     stats.skipped += 1
                     continue
-                if _apply(db, outcome, *locked, keyring, settings, now):
+                applied = _apply(db, outcome, *locked, keyring, settings, now)
+                if applied == "revoked":
                     stats.revoked += 1
-                else:
+                elif applied == "refreshed":
                     stats.refreshed += 1
+                else:
+                    stats.skipped += 1
                 db.flush()
         except DBAPIError as exc:
             log.warning(

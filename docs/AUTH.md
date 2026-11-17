@@ -395,7 +395,10 @@ Code: `app/auth/oidc/` (`client`, `discovery`, `tokens`, `provisioning`,
   each due live session: `invalid_grant` revokes the session; a new ID token
   (same `iss`/`sub`) re-applies the group mapping, revoking the session when
   `PERFIN_OIDC_REQUIRE_GROUP` finds no mapped group or the account is
-  inactive; a rotated refresh token is stored. The token calls are made
+  inactive; a rotated refresh token is stored. An unreachable IdP, the JWKS
+  included, revokes nothing: when the ID token cannot be checked for want
+  of keys, the rotated refresh token is still stored and the run stops
+  asking the IdP until the next one. The token calls are made
   with no row locked (a request or logout on those sessions never waits for
   the IdP); each answer is then applied under a short lock only if the
   session is still live and still holds the token that was sent, and one

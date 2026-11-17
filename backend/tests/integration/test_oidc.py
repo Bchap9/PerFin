@@ -710,6 +710,51 @@ def test_claim_refresh_does_not_act_on_a_token_replaced_meanwhile(
         assert web.get(SESSION_URL).status_code == 200
 
 
+def test_claim_refresh_keeps_sessions_while_the_jwks_is_unavailable(
+    oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine, admin_engine: Engine
+) -> None:
+    """An unreachable JWKS is the IdP being unreachable: nothing is revoked (B8).
+
+    The token call already rotated the refresh token, so the new one is kept
+    and the next run (JWKS back) refreshes with it.
+    """
+    from app.auth.oidc.discovery import DiscoveryError
+
+    env = oidc(oidc_claim_refresh_minutes=5)
+    with browser(env.app) as first, browser(env.app) as second:
+        login_via_idp(first, idp, claims(new_sub(), GROUP_MEMBER))
+        login_via_idp(second, idp, claims(new_sub(), GROUP_MEMBER))
+
+        def keys_down(kid: str | None, algorithm: str) -> Any:
+            raise DiscoveryError("JWKS unavailable (refetch rate limited)")
+
+        client = _ProbingClient(OidcClient(env.settings, resolver=resolver()), lambda: None)
+        client.keys = keys_down  # type: ignore[attr-defined]
+        try:
+            with sessionmaker(app_engine)() as db, db.begin():
+                stats = refresh_claims(
+                    db,
+                    client,  # type: ignore[arg-type]
+                    Keyring.from_settings(env.settings),
+                    env.settings,
+                    now=clock.utcnow() + timedelta(minutes=6),
+                )
+        finally:
+            client.inner.close()
+        assert stats.refreshed == 0
+        assert first.get(SESSION_URL).status_code == 200
+        assert second.get(SESSION_URL).status_code == 200
+        assert _refresh(env, app_engine, 7).refreshed >= 2
+        for web in (first, second):
+            assert web.get(SESSION_URL).status_code == 200
+            (oidc_row,) = rows(
+                admin_engine,
+                "SELECT claims_refreshed_at FROM oidc_session WHERE session_id = :i",
+                i=session_row(admin_engine, web).id,
+            )
+            assert oidc_row.claims_refreshed_at is not None
+
+
 def test_claim_refresh_runs_once_at_a_time(
     oidc: Callable[..., OidcEnv], idp: FakeIdP, app_engine: Engine
 ) -> None:
