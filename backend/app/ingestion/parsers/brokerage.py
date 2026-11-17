@@ -591,6 +591,12 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "participant contribution": "deposit",
     "employer contr": "deposit",
     "employer contribution": "deposit",
+    # An IRA's own contribution wording (``CASH CONTRIBUTION CURRENT YEAR``).
+    "cash contribution": "deposit",
+    "ira contribution": "deposit",
+    "roth contribution": "deposit",
+    "employee contribution": "deposit",
+    "employee contr": "deposit",
     "credit interest": "interest",
     "margin interest": "fee",
     "margin interest paid": "fee",

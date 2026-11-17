@@ -94,6 +94,11 @@ def _with(*rows: list[str]) -> Table:
         ("FED TAX WITHHELD", "fee"),
         ("NON-RESIDENT TAX", "fee"),
         ("PARTIC CONTR CURRENT YEAR", "deposit"),
+        ("CASH CONTRIBUTION CURRENT YEAR (Cash)", "deposit"),
+        ("CASH CONTRIBUTION PRIOR YEAR (Cash)", "deposit"),
+        ("ROTH CONTRIBUTION CURRENT YEAR", "deposit"),
+        ("IRA CONTRIBUTION PRIOR YEAR", "deposit"),
+        ("EMPLOYEE CONTRIBUTION SYNTHETIC PLAN", "deposit"),
         ("RETURN OF CAPITAL SYNTHETIC FUND", "deposit"),
         ("REDEMPTION FROM CORE ACCOUNT SYNTHETIC MONEY MARKET (SMMXX)", "sell"),
         ("PURCHASE INTO CORE ACCOUNT SYNTHETIC MONEY MARKET (SMMXX)", "buy"),
@@ -101,6 +106,25 @@ def _with(*rows: list[str]) -> Table:
 )
 def test_cash_management_and_retirement_words(text: str, kind: str) -> None:
     assert activity_type(text) == kind
+
+
+def test_a_cash_contribution_row_imports_as_a_deposit() -> None:
+    found = read_activity_table(
+        _with(
+            _row(
+                "CASH CONTRIBUTION CURRENT YEAR (Cash)",
+                name="ROTH IRA",
+                account="Z3xxxxxxxx",
+                quantity="0",
+                price="0",
+                amount="275",
+            )
+        )
+    )
+    assert found is not None
+    assert found.unknown_activity == 0
+    (statement,) = found.statements
+    assert [(a.type, a.amount) for a in statement.activity] == [("deposit", Decimal("275"))]
 
 
 def test_signed_words_take_their_direction_from_the_row() -> None:

@@ -42,7 +42,12 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A Fidelity activity CSV for an IRA now imports `CASH CONTRIBUTION CURRENT
+  YEAR` (and `PRIOR YEAR`) rows as deposits. They were skipped as an unknown
+  action. `ROTH CONTRIBUTION`, `IRA CONTRIBUTION` and `EMPLOYEE CONTRIBUTION`
+  read the same way.
 
 ## [1.0.0-rc.12] - 2026-11-17
 

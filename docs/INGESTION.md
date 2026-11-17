@@ -1909,7 +1909,8 @@ table; never a PDF's page table) before it looks for a column mapping:
   and a non-zero quantity, else cash; Fidelity's cash-management and
   retirement wording: `DEBIT CARD PURCHASE`, `CHECK PAID`, `BILL PAYMENT`,
   `DIRECT DEBIT` as withdrawals, `PARTIC CONTR`, `EMPLOYER CONTRIBUTION`,
-  `RETURN OF CAPITAL`, `CASH IN LIEU` as deposits, `MARGIN INTEREST` and
+  an IRA's `CASH CONTRIBUTION CURRENT/PRIOR YEAR` (and `ROTH`/`IRA`/
+  `EMPLOYEE CONTRIBUTION`), `RETURN OF CAPITAL`, `CASH IN LIEU` as deposits, `MARGIN INTEREST` and
   the tax withholdings as fees, `REDEMPTION FROM`/`PURCHASE INTO CORE
   ACCOUNT` as a sale/buy of the core fund). `JOURNALED`, `TRANSFER`,
   `ROLLOVER`, `CONVERSION` take their direction from the row: units in or
