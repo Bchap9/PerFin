@@ -104,9 +104,9 @@ judged against what was uploaded, never against today.
     :data:`ACTIVE_MIN` and the unreduced ``min_count`` is met; else
     ``suggested``. A habit, a person-to-person series, a merchant seen once
     and cash that names nobody (rows without a merchant key that nobody
-    filed, whose suggested category is :data:`CASH_KEY`: the same
-    ``WITHDRAWAL`` or ``CASH DEPOSIT`` every month) are ``suggested``
-    whatever the confidence.
+    filed, whose suggested category is :data:`CASH_KEY` or whose text begins
+    with the word ATM: the same ``WITHDRAWAL``, ``CASH DEPOSIT`` or ``ATM
+    0412 <town>`` every month) are ``suggested`` whatever the confidence.
 
 Amounts are exact ``Decimal``; no floats. No regular expression is applied to
 a merchant key; :func:`normalize_payee` (the letters-only ``text_key``) uses
@@ -189,6 +189,8 @@ BILL_KEYS: Final = (
 )
 #: The suggestion of a withdrawal or a cash deposit (step 10).
 CASH_KEY: Final = "transfers.cash"
+#: The group of rows without a merchant key whose text begins with the word ATM (step 10).
+_ATM_TEXT: Final = "text:atm"
 #: Names the dictionary may use for a yearly cadence (``Observed.cadence_hints``).
 ANNUAL_HINTS: Final = frozenset({"annual", "yearly"})
 
@@ -440,11 +442,14 @@ class _Group:
 
     @property
     def cash(self) -> bool:
-        """Cash that names nobody (step 10): no merchant key, unfiled, suggested as cash."""
+        """Cash that names nobody (step 10): no merchant key, unfiled, suggested as cash.
+
+        Or an ATM line: no word of "ATM 0412 <town>" suggests cash, the ATM says it.
+        """
         return (
             self.merchant_key is None
             and self.category_key is None
-            and self.suggested_key == CASH_KEY
+            and (self.suggested_key == CASH_KEY or self.key.partition(" ")[0] == _ATM_TEXT)
         )
 
     @property

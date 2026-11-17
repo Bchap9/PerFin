@@ -90,6 +90,16 @@ CASH_WORDS: Final = frozenset(
 CASH_CORE_WORDS: Final = frozenset(
     {"atm", "cash", "deposit", "deposits", "withdrawal", "withdrawals", "withdraw", "withdrwl"}
 )
+#: The words some banks wrap around a teller's cash ("WITHDRAWAL MADE IN A
+#: BRANCH/STORE", "CUSTOMER WITHDRAWAL IMAGE", "OVER THE COUNTER WITHDRAWAL").
+#: They name nobody only beside a word for money taken out or paid in
+#: (:data:`CASH_MOVE_WORDS`): around CASH alone they are a shop ("THE CASH STORE").
+CASH_FILLER_WORDS: Final = frozenset(
+    {"made", "in", "a", "the", "store", "customer", "image", "over"}
+)
+CASH_MOVE_WORDS: Final = frozenset(
+    {"deposit", "deposits", "withdrawal", "withdrawals", "withdraw", "withdrwl"}
+)
 
 _PLACES: Final = Decimal("0.01")
 
@@ -264,13 +274,20 @@ class Summary:
 
 
 def cash_wording(core: str) -> bool:
-    """Whether ``core`` says only that cash went in or out (:data:`CASH_WORDS`)."""
+    """Whether ``core`` says only that cash went in or out (:data:`CASH_WORDS`).
+
+    Also with :data:`CASH_FILLER_WORDS`, when a word of :data:`CASH_MOVE_WORDS`
+    is among them.
+    """
     words = [token for token in core.split() if not token.isdigit()]
     if not words:
         return False
     if words[0] == "atm":
         return True
-    return all(w in CASH_WORDS for w in words) and any(w in CASH_CORE_WORDS for w in words)
+    filler = any(w in CASH_FILLER_WORDS for w in words)
+    return all(w in CASH_WORDS or w in CASH_FILLER_WORDS for w in words) and any(
+        w in (CASH_MOVE_WORDS if filler else CASH_CORE_WORDS) for w in words
+    )
 
 
 def _key_of(core: str) -> str | None:

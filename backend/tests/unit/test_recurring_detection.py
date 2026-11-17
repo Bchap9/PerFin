@@ -653,6 +653,24 @@ def test_a_fixed_monthly_cash_line_naming_nobody_is_only_suggested(text: str, am
 
 
 @pytest.mark.parametrize(
+    ("text", "amount"),
+    [("atm quarryvale oh", "-200.00"), ("atm cash deposit elkton", "500.00")],
+)
+def test_a_fixed_monthly_atm_line_naming_nobody_is_only_suggested(text: str, amount: str) -> None:
+    # An ATM line with a town behind it names nobody either, and its core
+    # ("atm") holds no word that suggests cash: the ATM is enough.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, amount, key=None, text=text, kind="unknown")
+    assert only(detect(ledger)).status == "suggested"
+
+
+def test_a_name_that_only_begins_with_atm_is_no_atm() -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, "-200.00", key=None, text="atmosphere studio", kind="unknown")
+    assert only(detect(ledger)).status == "active"
+
+
+@pytest.mark.parametrize(
     ("key", "suggested", "category"),
     [
         # A merchant key names somebody.

@@ -341,8 +341,9 @@ What the columns and the two tables mean to a person is in
   the line names nobody (a transfer, a card payment, cash, a cheque in any
   spelling clean-up reads, `CHECK 0042`, `CHEQUE #0042`, `CHQ 0042` or the
   word alone, a fee, interest, a deposit; also a line of bare cash wording such as
-  `WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT` or one that starts with
-  `ATM`, `engine.CASH_WORDS`), or when those tokens hold fewer than three letters
+  `WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, `OVER THE COUNTER
+  WITHDRAWAL` or one that starts with `ATM`, `engine.CASH_WORDS` and
+  `engine.CASH_FILLER_WORDS`), or when those tokens hold fewer than three letters
   and digits (`engine.KEY_CHARS_MIN`; a dictionary key is never held to
   this). `raw_payee` itself is never changed. The descriptor
   kind and the display name are not stored: both are recomputed when

@@ -324,7 +324,9 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
 - **Some merchant keys clear themselves.** A line that leaves fewer than
   three letters and digits (`E`, `XY #0042`) and bare cash wording
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
-  `ATM`) no longer have a merchant key, nor a cheque written with the
+  `ATM`, and a teller's withdrawal such as `WITHDRAWAL MADE IN A
+  BRANCH/STORE`, `CUSTOMER WITHDRAWAL IMAGE` or `OVER THE COUNTER
+  WITHDRAWAL`) no longer have a merchant key, nor a cheque written with the
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
   or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed
   before lose it in the refresh the hourly `categorise.dispatch` job
@@ -339,15 +341,16 @@ with no stop needed; from rc.9 or earlier follow the rc.10 note first.
   replace it with a rule on the payee text if it is still wanted. A
   recurring series of such rows loses its key too, and a dismissed one
   stays dismissed as long as detection can tell it is the same: by its
-  name or payee and an amount in its range (a dismissed series that was
+  name (an ATM series named after its old key, `Atm`, included) or payee
+  and an amount in its range (a dismissed series that was
   renamed may come back once as a suggestion). Detection no longer finds
   a series of cheques. The same refresh suggests rent, water, a sewer
   district and tuition for more lines, and the next daily detection then
   shows a recurring series of such rows as a bill instead of "other",
   unless somebody set its kind. Detection no longer finds a new running
-  series of the same withdrawal or cash deposit every month, only a
-  suggested one; one already running stays as it is until dismissed or
-  ended. A lesson school (`DANCE SCHOOL`, `MUSIC
+  series of the same withdrawal, cash deposit or ATM line every month,
+  only a suggested one; one already running stays as it is until dismissed
+  or ended. A lesson school (`DANCE SCHOOL`, `MUSIC
   SCHOOL`, `KARATE`, `MARTIAL ARTS`, `SWIMMING SCHOOL`) is suggested as a
   hobby instead of education, so such a series is no longer called a bill.
 - **A credit union's withdrawal names who was paid.** A line such as

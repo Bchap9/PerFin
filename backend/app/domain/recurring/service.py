@@ -646,8 +646,9 @@ def _match_rank(
 
     The same account and direction are required; the cadence is not looked
     at. Then: 0 the same merchant key and overlapping amount ranges; 1 the
-    same merchant key; 2 a series without a key that has the same payee or
-    the same normalised name, and overlapping ranges; 3 ``row`` holds most of
+    same merchant key; 2 a series without a key that has the same payee, the
+    same normalised name or the cash key the line once had
+    (:func:`_once_keyed_as`), and overlapping ranges; 3 ``row`` holds most of
     the candidate's charges that are linked to a series at all
     (``holds_most``).
     """
@@ -660,13 +661,28 @@ def _match_rank(
         return 0 if overlaps else 1
     if row.merchant_key is None and overlaps:
         same_payee = candidate.payee_id is not None and row.payee_id == candidate.payee_id
-        same_name = (
-            candidate.text_key is not None
-            and detection.normalize_payee(row.name) == candidate.text_key
-        )
-        if same_payee or same_name:
+        name = detection.normalize_payee(row.name)
+        same_name = candidate.text_key is not None and name == candidate.text_key
+        if same_payee or same_name or _once_keyed_as(name, candidate):
             return 2
     return 3 if holds_most else None
+
+
+def _once_keyed_as(name: str, candidate: Candidate) -> bool:
+    """Whether ``name`` is the cash key an older release gave the candidate's line.
+
+    Bare cash wording had a merchant key once ("ATM 0412 <town>" was ``atm``)
+    and a detected series was named after it; the refresh took the key off
+    (``categorisation.service``). Such a series is the candidate's when its
+    name is still that key: the first words of the line's core.
+    """
+    if candidate.merchant_key is not None or not candidate.label or not name:
+        return False
+    if not categorisation.cash_wording(name):
+        return False
+    core = categorisation.identify(candidate.label).core
+    once = " ".join(core.split()[: categorisation.KEY_TOKENS])
+    return detection.normalize_payee(once) == name
 
 
 def _existing(

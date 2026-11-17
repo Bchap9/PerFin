@@ -79,8 +79,8 @@ from app.domain.transactions.models import PAYEE_MAX
 #: engine makes of it (3: no key of fewer than three letters and digits, nor
 #: of bare cash wording; the CHEQUE and CHQ spellings are a cheque; 4: a
 #: credit union's WITHDRAWAL in front of ACH, a card, bill pay, a transfer or
-#: a cheque); a household whose rows were keyed with an older version is
-#: refreshed.
+#: a cheque, and no key of a teller's cash wording, ``engine.CASH_FILLER_WORDS``);
+#: a household whose rows were keyed with an older version is refreshed.
 CLEANER_VERSION: Final = 4
 
 DescriptorKind = Literal[
@@ -141,8 +141,9 @@ _REFERENCE_TO: Final = r"(?: #?\d{4,17}(?= TO ))?"
 
 #: What a bank puts in front of TRANSFER; by itself none makes a line a transfer.
 _TRANSFER_LEAD: Final = (
-    "ONLINE|MOBILE|INTERNET|HOME|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL|AUTOMATIC|SCHEDULED"
-    "|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO|OVERDRAFT PROTECTION"
+    "ONLINE|MOBILE|INTERNET|HOME(?= BANKING)|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL"
+    "|AUTOMATIC|SCHEDULED|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO"
+    "|OVERDRAFT PROTECTION"
 )
 _TRANSFER_WORD: Final = r"(?:BANKING )?(?:TRANSFER|XFER)(?: (?:DEBIT|CREDIT|OUTGOING|INCOMING))?"
 #: A transfer the bank calls a wire: WIRE among the words in front of TRANSFER.

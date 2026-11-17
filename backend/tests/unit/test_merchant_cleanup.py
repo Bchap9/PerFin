@@ -1148,6 +1148,8 @@ def test_an_automatic_withdrawal_is_a_debit(raw: str, kind: str, core: str) -> N
         ("WITHDRAWAL POSTERN BAKERY", "unknown", "withdrawal postern bakery"),
         ("WITHDRAWAL ACHERLY TILE", "unknown", "withdrawal acherly tile"),
         ("SHARE DRAFT HOUSE", "unknown", "share draft house"),
+        # HOME is the bank's word only before BANKING.
+        ("HOME TRANSFER 0042", "unknown", "home transfer"),
     ],
 )
 def test_a_credit_union_withdrawal_says_how_the_money_went(raw: str, kind: str, core: str) -> None:
