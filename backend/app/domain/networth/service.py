@@ -163,9 +163,12 @@ def snapshot_household(
     ).scalar_one_or_none()
     start = last + timedelta(days=1) if last is not None else (book.first_day() or on)
     valuation = NetWorthSnapshot.breakdown["valuation"].as_integer()
+    # Nothing before the window is written, so nothing there counts as stale.
+    window = on - timedelta(days=max_days - 1)
     stale = db.execute(
         select(func.min(NetWorthSnapshot.as_of_date)).where(
             NetWorthSnapshot.household_id == household_id,
+            NetWorthSnapshot.as_of_date >= window,
             NetWorthSnapshot.as_of_date < on,
             or_(valuation.is_(None), valuation < VALUATION_VERSION),
         )
@@ -178,11 +181,12 @@ def snapshot_household(
     ).scalar_one_or_none()
     # Data now reaching back before the first stored day (a loan or account
     # added with its history after the first run): those days are missing too.
-    front = first if first is not None and earliest is not None and first < earliest else None
+    front = max(first, window) if first is not None else None
+    front = front if front is not None and earliest is not None and front < earliest else None
     for earlier in (since, stale, front):
         if earlier is not None:
             start = min(start, earlier)
-    start = min(max(start, on - timedelta(days=max_days - 1)), on)
+    start = min(max(start, window), on)
     stored = {
         row.as_of_date: row
         for row in db.execute(

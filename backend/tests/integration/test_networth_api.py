@@ -631,6 +631,18 @@ def test_a_backdated_import_rewrites_the_stored_days_from_its_first_day(
     assert queued == 1
 
 
+def test_data_older_than_the_backfill_window_is_not_rewritten_every_day(world: World) -> None:
+    # The mortgage reaches back before a 30-day window: the first run fills
+    # the window, the next one only its own day.
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 30
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 1
+        # A row from older rules before the window stays as it is.
+        make_net_worth_snapshot(db, world.household_id, as_of_date=date(2026, 1, 2))
+        assert networth_service.snapshot_household(db, world.household_id, TODAY, max_days=30) == 1
+
+
 def test_stored_days_valued_by_older_rules_are_rewritten(world: World) -> None:
     # A row from before this version (no "valuation" in its breakdown) and
     # one from it: the job rewrites from the older one on.
