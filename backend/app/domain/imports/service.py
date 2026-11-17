@@ -3053,17 +3053,30 @@ def _supersede(run: _Run, answered: Callable[[ReviewItem], bool]) -> int:
     return len(found)
 
 
-def _answered_before(run: _Run, finding: Mapping[str, Any]) -> bool:
-    """A resolved finding of the document says exactly what ``finding`` says."""
-    resolved = run.db.execute(
-        select(ReviewItem.payload).where(
+def _answered_before(run: _Run, finding: Mapping[str, Any], *, dismissed: bool = False) -> bool:
+    """A resolved finding of the document says exactly what ``finding`` says.
+
+    With ``dismissed``, one a person dismissed counts too (not one a run or
+    "Process again" superseded), and the statement reference is not compared
+    (:func:`_comparable`).
+    """
+    states = [ReviewItemState.RESOLVED] + ([ReviewItemState.DISMISSED] if dismissed else [])
+    answered = run.db.execute(
+        select(ReviewItem.payload, ReviewItem.resolution).where(
             ReviewItem.household_id == run.household_id,
             ReviewItem.document_id == run.document.id,
-            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.state.in_(states),
             ReviewItem.kind == ReviewKind.LOW_CONFIDENCE_FIELD,
         )
-    ).scalars()
-    return any(payload == finding for payload in resolved)
+    ).all()
+    if not dismissed:
+        return any(payload == finding for payload, _ in answered)
+    wanted = _comparable(finding)
+    return any(
+        _comparable(payload or {}) == wanted
+        and (resolution or {}).get("action") != _SUPERSEDED["action"]
+        for payload, resolution in answered
+    )
 
 
 def _person_linked(run: _Run, ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
@@ -3284,7 +3297,8 @@ def _settle_openings(run: _Run, account: Account, *, settled: bool) -> None:
     stays, and without one an item names the figure
     (:data:`OPENING_BALANCE_NOT_RECORDED`), unless the account's balance
     that day already is the figure (an account created from the document's
-    proposal, the previous statement's closing balance).
+    proposal, the previous statement's closing balance) or a person already
+    resolved or dismissed that very item (:func:`_answered_before`).
     """
     openings = run.openings.pop(account.id, [])
     if not openings:
@@ -3380,7 +3394,9 @@ def _settle_openings(run: _Run, account: Account, *, settled: bool) -> None:
 
     _supersede(run, answered)
     for payload in wanted:
-        run.review(ReviewKind.LOW_CONFIDENCE_FIELD, payload)
+        if not _answered_before(run, payload, dismissed=True):
+            # A person who resolved or dismissed it is not asked on every run.
+            run.review(ReviewKind.LOW_CONFIDENCE_FIELD, payload)
 
 
 def _settle_moved(run: _Run) -> None:

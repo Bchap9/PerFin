@@ -90,7 +90,8 @@ Stage 4 of four on the way to 1.0.0: the release review.
   version had imported, lowering the balance. It is now the account's
   balance on the day before, or an Inbox item ("Opening balance not
   recorded", with the amount and the day) asks about it when the account
-  already has a different balance from before.
+  already has a different balance from before; once resolved or
+  dismissed, "Process again" does not ask about the same figure again.
 - **A CSV whose running balance does not add up no longer sets the
   account's balance.** A card export printing the amount owed as positive
   put the card in credit.

@@ -55,6 +55,7 @@ from app.domain.imports.schemas import (
     DocumentAccountsApply,
     MappingSpec,
 )
+from app.domain.review import service as review_service
 from app.domain.transactions.models import ReviewState, Transaction, TransactionSplit
 from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
@@ -591,6 +592,56 @@ def test_a_qif_opening_balance_is_not_written_over_what_the_account_knows(env: E
         "as_of": _OPENED.isoformat(),
     }
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize("answer", ["dismiss", "resolve"])
+def test_an_answered_opening_balance_item_is_not_asked_again(env: Env, answer: str) -> None:
+    """A person who dismissed or resolved the item is not asked on every "Process again"."""
+    account = env.ledger.account(env.household_id)
+    env.ledger.snapshot(account, as_of_date=date(2026, 2, 1), balance="450.00")
+    document_id = env.ingest(_QIF_OPENING, account=account, name="export.qif")
+    (item,) = _opening_items(env, document_id)
+    for db in env.db():
+        principal = env.principal()
+        if answer == "dismiss":
+            review_service.dismiss(db, principal, item.id, request=None)
+        else:
+            found = db.get(ReviewItem, item.id)
+            assert found is not None
+            review_service.close_item(db, principal, found, {"action": "keep"}, request=None)
+    current = env.document(document_id)
+    result = ExtractResult.model_validate(current.extraction)
+    _read_again(env, document_id, result)
+    assert _opening_items(env, document_id) == []
+    # Another figure is another question.
+    (statement,) = result.statements
+    assert statement.opening_balance is not None
+    other = result.model_copy(
+        update={
+            "statements": [
+                statement.model_copy(
+                    update={
+                        "opening_balance": statement.opening_balance.model_copy(
+                            update={"amount": Decimal("510.00")}
+                        )
+                    }
+                )
+            ]
+        }
+    )
+    _read_again(env, document_id, other)
+    (asked,) = _opening_items(env, document_id)
+    assert asked.payload["amount"] == "510.000000"
+    # An item "Process again" closed (superseded) was never answered: asked again.
+    for db in env.db():
+        found = db.get(ReviewItem, asked.id)
+        assert found is not None
+        found.state = ReviewItemState.DISMISSED
+        found.resolution = {"action": "superseded", "by": "document.reprocess"}
+        found.resolved_at = datetime.now(UTC)
+    _read_again(env, document_id, other)
+    (again,) = _opening_items(env, document_id)
+    assert again.payload["amount"] == "510.000000"
 
 
 def test_a_csv_opening_balance_row_is_the_balance_of_an_existing_account(env: Env) -> None:
