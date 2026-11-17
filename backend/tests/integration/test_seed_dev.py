@@ -122,12 +122,18 @@ def test_seed_creates_credentials_printed_once(seeded: Seeded) -> None:
     # Only a hash is stored.
     with seeded.admin.connect() as conn:
         stored = conn.execute(text("SELECT password_hash FROM credential")).scalars().all()
-        sessions = conn.execute(text("SELECT count(*) FROM user_session")).scalar_one()
+        # A rotation copies the user agent, so these are the seeding session
+        # and anything it became; a later real login is not among them.
+        seeding = conn.execute(
+            text("SELECT revoked_reason FROM user_session WHERE user_agent = 'seed_dev'")
+        ).all()
     assert len(stored) == 1
     assert password not in stored[0]
     assert stored[0].startswith("$argon2id$")
-    # The seeding session was ended (a login after the seed makes the only live one).
-    assert sessions == 1
+    # The seeding session was ended by its logout and none of it is left live.
+    assert seeding
+    assert all(row.revoked_reason is not None for row in seeding)
+    assert "logout" in {row.revoked_reason for row in seeding}
 
 
 def test_household_has_every_account_type(admin_client: TestClient) -> None:
