@@ -2822,7 +2822,8 @@ same database transaction.
   `low_confidence_field` item (`opening_balance_not_recorded`: account,
   currency, amount, `as_of`) names it, unless a reading's row stands in
   for it or that very balance is already recorded for the day. Not with
-  `balance_mismatch` rows; a closing balance row is dropped and stays on record only in the count.
+  `balance_mismatch` rows. A closing balance row is dropped and stays on
+  record only in the count.
   `Opening balance fee`, or a memo of its own, is a transaction. A grouped
   (multi-account) file's header and balance rows that belong to no group
   are counted in its first group. At most five unreadable rows after the table's last readable
