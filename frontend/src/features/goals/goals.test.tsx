@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
@@ -170,6 +170,12 @@ describe("goals page", () => {
     expect(screen.getByRole("dialog", { name: "Contributions to Emergency fund" })).toBeInTheDocument();
     expect(remove).toHaveFocus();
     expect(api.callsTo("DELETE", "/api/v1/goals/:id/contributions/:cid")).toHaveLength(0);
+    // Escape (the dialog's cancel event, which React bubbles) closes only the confirm.
+    await user.click(remove);
+    confirm = await screen.findByRole("dialog", { name: "Remove this contribution?" });
+    fireEvent(confirm, new Event("cancel", { cancelable: true }));
+    await vi.waitFor(() => { expect(screen.queryByRole("dialog", { name: "Remove this contribution?" })).not.toBeInTheDocument(); });
+    expect(screen.getByRole("dialog", { name: "Contributions to Emergency fund" })).toBeInTheDocument();
     await user.click(remove);
     confirm = await screen.findByRole("dialog", { name: "Remove this contribution?" });
     await user.click(within(confirm).getByRole("button", { name: "Remove contribution" }));
