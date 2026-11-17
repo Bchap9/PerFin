@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.auth.models import HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
@@ -54,6 +54,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE
 from app.domain.review import actions
 from app.domain.review import teach as teach_service
 from app.domain.review.schemas import Correction, TeachOut, TeachRequest
@@ -441,7 +442,13 @@ def test_balances_entered_for_a_held_statement_reconcile_it(env: Env) -> None:
     assert out.payload["status"] == "mismatch"
     assert out.payload["difference"] == "-1.00"
 
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        db.execute(delete(Job).where(Job.type == SNAPSHOT_JOB_TYPE))
     out = correct(stmt.closing_balance, resolve=True)
+    # The balance it records is on a past day: net worth from then is rewritten.
+    asked = env.query(select(Job).where(Job.type == SNAPSHOT_JOB_TYPE))
+    assert [job.payload.get("since") for job in asked] == [stmt.end.isoformat()]
     assert out.state is ReviewItemState.RESOLVED
     assert out.resolution is not None
     assert out.resolution["reconciled"] is True

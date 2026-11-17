@@ -123,9 +123,10 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
   `networth:<household>:<day>`), which upserts that day's
   `net_worth_snapshot` in the household's RLS context and backfills the
   days missing since the last one, rewriting the last one. Every import,
-  and every other write on a past day, also queues one, without a dedupe
-  key, that rewrites the stored days from the first day the write touched
-  (one waiting per household: `app/domain/networth/recompute.py`).)
+  and the other writes on a past day listed in DATA_MODEL.md "Net worth",
+  also queues one, without a dedupe key, that rewrites the stored days
+  from the first day the write touched (one waiting per household:
+  `app/domain/networth/recompute.py`).)
 - `detect_recurring`: daily (Phase 5, `app/workers/handlers/recurring.py`):
   one `recurring.detect` per household and day; writes `detected`
   scheduled transactions, never touches manual ones. Since 1.0.0-rc.10 the

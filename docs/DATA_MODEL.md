@@ -780,16 +780,19 @@ the daily job, the backfill and recomputed views):
   on a first run, at most ten years); one run of a household at a time.
   Statements arrive backdated, so every import queues the job to
   **rewrite** the stored days from the first day it wrote or removed a
-  row, balance, price or investment row on. So does every other write on
-  a day before today (`app/domain/networth/recompute.py`): a manual
+  row, balance, price or investment row on. So do these writes on a day
+  before today (`app/domain/networth/recompute.py`): a manual
   transaction added, deleted or changed in amount or date, a manual
   balance (also an account's opening balance), an asset valuation, an
   investment transaction, a manual price, a loan payment or a loan
   statement (from the first day the loan's computed balance changed), a
   statement confirmed or accepted in the reconcile view and a row put back
   there, a held statement accepted in the review queue, and a document
-  deleted with its data. One rewrite waits per household, from the
-  earliest day asked for. The job also rewrites from the first stored day
+  deleted with its data. Not (yet): closing or reopening an account,
+  changing its opening date or `include_in_net_worth`, exchange rates and
+  the daily price refresh, which change past days only from the next
+  rewrite on. One rewrite waits per household, from the earliest day asked
+  for. The job also rewrites from the first stored day
   valued by older rules (`breakdown.valuation`, the valuation version,
   below the current one; 2 since 1.0.0). A rewritten day
   holds only the accounts that exist: deleting an account queues the

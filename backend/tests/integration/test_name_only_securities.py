@@ -22,13 +22,17 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.models import Job
 from app.domain.accounts.models import Account
+from app.domain.imports import service as imports_service
 from app.domain.investments.models import Holding, Price, Security, security_name_key
 from app.domain.investments.statement_import import (
     InvestmentImport,
     import_investment_statements,
 )
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE
 from app.ingestion.sandbox.protocol import (
+    ExtractResult,
     InvestmentPosition,
     InvestmentStatement,
     SecurityRef,
@@ -331,3 +335,25 @@ def test_the_import_names_the_first_day_it_wrote_a_price_on(db: Session) -> None
     assert first.first_price == date(2024, 1, 31)
     later, _ = _import(db, account, _statement(3, _position(SecurityRef(name=PLAN), "10", "21")))
     assert later.first_price == date(2024, 3, 31)
+
+
+def test_an_import_has_net_worth_rewritten_from_a_price_before_its_rows(db: Session) -> None:
+    # A price dated before the statement's first row (the last close before
+    # its period) changes the days from then: the rewrite starts there.
+    hh = make_household(db)
+    account = make_brokerage(db, hh.id)
+    position = _position(SecurityRef(name=PLAN), "10", "20").model_copy(
+        update={"price_as_of": date(2023, 12, 29)}
+    )
+    result = ExtractResult(
+        kind="ofx", ok=True, extractor_version="ofx/1", investments=[_statement(1, position)]
+    )
+    document = make_extracted_document(db, hh.id, account=account, result=result)
+    with household_context(db, hh.id):
+        imports_service.import_extraction(db, document, result, account_id=account.id)
+        db.flush()
+        payloads = [
+            job.payload
+            for job in db.execute(select(Job).where(Job.type == SNAPSHOT_JOB_TYPE)).scalars()
+        ]
+    assert [p.get("since") for p in payloads] == ["2023-12-29"]

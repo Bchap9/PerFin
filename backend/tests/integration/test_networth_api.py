@@ -22,6 +22,7 @@ granted every account and so gets household figures.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -1042,3 +1043,29 @@ def test_a_write_on_a_past_day_has_the_stored_days_rewritten(world: World) -> No
         201,
     )
     assert _asked(world) == []
+
+
+def test_a_second_run_waits_for_the_first_past_the_lock_timeout(world: World) -> None:
+    # The connection's lock timeout bounds row locks, not this wait: the
+    # second run of the household waits for the first instead of failing.
+    outcome: list[object] = []
+
+    def second() -> None:
+        try:
+            with world.factories.transaction() as db:
+                set_context(db, world.household_id)
+                db.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                outcome.append(networth_service.snapshot_household(db, world.household_id, TODAY))
+                outcome.append(db.execute(text("SHOW lock_timeout")).scalar_one())
+        except Exception as error:  # noqa: BLE001 - reported below
+            outcome.append(error)
+
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        networth_service.snapshot_household(db, world.household_id, TODAY)
+        thread = threading.Thread(target=second)
+        thread.start()
+        thread.join(timeout=1.0)
+        assert thread.is_alive()  # waiting on the first run's lock
+    thread.join(timeout=30.0)
+    assert outcome == [2, "100ms"]

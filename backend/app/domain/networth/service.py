@@ -161,10 +161,17 @@ def snapshot_household(
     # One run of a household at a time (the queue lets two of its jobs run
     # at once): a later run waits here and reads the book only once the
     # earlier one committed, so it never writes back an older reading.
+    # The wait is bounded by the statement timeout (the job's own, set by
+    # the runner), not by the connection's lock timeout: an earlier run's
+    # backfill can take longer than that, and a timed-out wait would cost
+    # the job an attempt.
+    lock_timeout = db.execute(text("SELECT current_setting('lock_timeout')")).scalar_one()
+    db.execute(text("SELECT set_config('lock_timeout', '0', true)"))
     db.execute(
         text("SELECT pg_advisory_xact_lock(:namespace, hashtext(CAST(:household AS text)))"),
         {"namespace": SNAPSHOT_LOCK_NAMESPACE, "household": str(household_id)},
     )
+    db.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": lock_timeout})
     base = base_currency(db, household_id)
     book = NetWorthBook.load(db, household_id, None, target=base, until=on)
     last = db.execute(

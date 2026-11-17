@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.auth.models import GrantLevel
 from app.core.settings import Settings
@@ -38,7 +38,9 @@ from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.documents.search import update_search_index
 from app.domain.imports.models import ImportTombstone, StatementRecord
 from app.domain.investments.models import InvestmentTxn
-from app.domain.loans.models import LoanPayment
+from app.domain.loans.models import Loan, LoanPayment
+from app.domain.loans.service import sync_balance
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE
 from app.domain.transactions.models import ReviewState, Transaction
 from tests.fixtures.documents import SAMPLE_CSV, make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories
@@ -651,8 +653,29 @@ def test_delete_with_data_removes_the_imported_rows(
         "skipped_lines": 0,
     }
 
+    # The balance is the earliest of what goes (net worth is rewritten from it).
+    with factories.transaction() as db:
+        set_context(db, hh)
+        balance = db.get(BalanceSnapshot, rows["snapshot"])
+        assert balance is not None
+        balance.as_of_date = date(2025, 12, 31)
+        # The loan's balances as creating it through the API leaves them.
+        payment = db.get(LoanPayment, rows["payment"])
+        assert payment is not None
+        loan = db.get(Loan, payment.loan_id)
+        assert loan is not None
+        sync_balance(db, loan)
+        db.execute(delete(Job).where(Job.type == SNAPSHOT_JOB_TYPE))
+
     response = owner.delete(f"{DOCS}/{document.id}", params={"with_data": "true"})
     assert response.status_code == 204, response.text
+    with factories.transaction() as db:
+        set_context(db, hh)
+        asked = [
+            job.payload.get("since")
+            for job in db.execute(select(Job).where(Job.type == SNAPSHOT_JOB_TYPE)).scalars()
+        ]
+    assert asked == ["2025-12-31"]
     assert load(factories, hh, Document, document.id) is None
     assert load(factories, hh, Document, child.id) is None
     assert load(factories, hh, Transaction, rows["transaction"]) is None
