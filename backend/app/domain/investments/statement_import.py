@@ -395,6 +395,9 @@ class InvestmentImport:
     #: Activity lines of imported statements held back for a person (step 3).
     lines_held: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
+    #: The first day a price was written or changed on (prices name no
+    #: document: the importer asks for net worth to be rewritten from it).
+    first_price: date | None = None
     #: What the run read around rather than wrote (each code once).
     warnings: list[str] = field(default_factory=list)
 
@@ -1384,10 +1387,13 @@ def _record_price(
                 source=STATEMENT_PRICE_SOURCE,
             )
         )
-        ctx.result.prices += 1
     elif existing.source == STATEMENT_PRICE_SOURCE and existing.close != price:
         existing.close = price
-        ctx.result.prices += 1
+    else:
+        return
+    ctx.result.prices += 1
+    earliest = ctx.result.first_price
+    ctx.result.first_price = day if earliest is None else min(earliest, day)
 
 
 # ---------------------------------------------------------------------------

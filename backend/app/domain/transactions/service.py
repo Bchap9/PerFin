@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -83,6 +83,7 @@ from app.domain.accounts.visibility import (
     visible_account_filter,
 )
 from app.domain.imports import tombstones
+from app.domain.networth import recompute
 from app.domain.review.models import ImportHashAlias
 from app.domain.transactions import repo, transfers
 from app.domain.transactions.models import (
@@ -471,6 +472,7 @@ def create_transaction(
     )
     db.add(row)
     db.flush()
+    recompute.request_recompute(db, household_id, row.posted_date)
     if data.tag_ids:
         repo.add_tags(db, household_id, [row.id], data.tag_ids)
     after = _facts(row)
@@ -612,6 +614,7 @@ def update_transaction(
     )
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
+    posted_before = row.posted_date
     if "amount" in given and data.amount is not None:
         amount = _amount_in(data.amount.currency, data.amount.amount, row.currency)
         if amount != row.amount:
@@ -668,6 +671,8 @@ def update_transaction(
     if after:
         row.updated_at = clock.utcnow()
         db.flush()
+        if "amount" in after or "posted_date" in after:
+            recompute.request_recompute(db, household_id, min(posted_before, row.posted_date))
         _record(
             db,
             principal,
@@ -749,6 +754,7 @@ def delete_transaction(
         request=request,
     )
     repo.delete_transaction(db, row)
+    recompute.request_recompute(db, row.household_id, row.posted_date)
     db.expunge(row)
 
 
@@ -881,6 +887,8 @@ def bulk(
         i: BulkItemResult(id=i, result="not_found") for i in data.ids if i not in rows
     }
     changed: list[Transaction] = []
+    #: The first day a deleted row was on (net worth from then on is rewritten).
+    earliest: date | None = None
     now = clock.utcnow()
     if data.action == "categorise":
         split_ids = repo.split_transaction_ids(db, household_id, list(rows))
@@ -939,8 +947,11 @@ def bulk(
             repo.delete_transaction(db, row)
             db.expunge(row)
             changed.append(row)
+            earliest = row.posted_date if earliest is None else min(earliest, row.posted_date)
             results[tid] = BulkItemResult(id=tid, result="deleted")
     db.flush()
+    if earliest is not None:
+        recompute.request_recompute(db, household_id, earliest)
     if changed:
         accounts = sorted({str(r.account_id) for r in changed})
         emit(

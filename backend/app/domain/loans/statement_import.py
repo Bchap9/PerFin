@@ -58,6 +58,7 @@ from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import Document, DocumentKind, ReviewKind
 from app.domain.loans.models import Loan, LoanPayment
 from app.domain.loans.service import LOAN_ACCOUNT_TYPES, payment_state, rate_on, sync_balance
+from app.domain.networth import recompute
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.sandbox.protocol import LoanStatement
 
@@ -193,6 +194,7 @@ def _file_without_payment(
         BalanceSource.STATEMENT,
         source_document_id=document.id,
     )
+    recompute.request_recompute(db, loan.household_id, day)
     sync_balance(db, loan)
     emit(
         db,
@@ -245,6 +247,7 @@ def _record(
                 BalanceSource.STATEMENT,
                 source_document_id=document.id,
             )
+            recompute.request_recompute(db, loan.household_id, day)
     if duplicate is not None:
         outcome.summary["duplicate"] = True
     else:

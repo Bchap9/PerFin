@@ -45,6 +45,7 @@ from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
 from app.core.settings import Settings
+from app.db.models import Job
 from app.db.rls import set_context
 from app.domain.accounts.balances import balance_as_of
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
@@ -59,6 +60,8 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.loans.models import Loan, LoanPayment
+from app.domain.loans.service import sync_balance
+from app.domain.networth.schemas import SNAPSHOT_JOB_TYPE
 from app.ingestion.intake.upload import receive_upload
 from app.workers.handlers import ingest
 from tests.fixtures import synth_loans as synth
@@ -181,10 +184,34 @@ def env(
     ingest.default_deps.cache_clear()
 
 
+def _rewrites(env: Env, loan: Loan | None = None) -> list[str]:
+    """The ``since`` of the net worth rewrites waiting (then taken off the queue).
+
+    With ``loan``, its balances are synced first, as creating it through the
+    API does.
+    """
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        if loan is not None:
+            sync_balance(db, loan)
+        jobs = list(
+            db.execute(
+                select(Job).where(Job.type == SNAPSHOT_JOB_TYPE, Job.dedupe_key.is_(None))
+            ).scalars()
+        )
+        found = [str(job.payload.get("since")) for job in jobs]
+        for job in jobs:
+            db.delete(job)
+    return found
+
+
 def test_statements_record_payments_and_keep_the_balance(env: Env) -> None:
     account, loan = env.loan()
     first, second = synth.loan_series(2, extra={2: Decimal("1000.00")})
+    _rewrites(env, loan)
     document = env.ingest(synth.loan_statement_pdf(first), "mortgage-2024-04.pdf")
+    # Its balances and payment are on past days: net worth from then is rewritten.
+    assert _rewrites(env) == [(first.paid_on - timedelta(days=1)).isoformat()]
     assert document.status is DocumentStatus.PROCESSED, env.reasons(document)
     assert document.kind is DocumentKind.STATEMENT
     assert document.account_id == account.id
@@ -316,7 +343,9 @@ def _statement_snapshots(env: Env, account: Account) -> list[tuple[date, Decimal
 
 def test_statement_without_a_payment_files_the_balance(env: Env) -> None:
     account, loan = _periodic_loan(env)
+    _rewrites(env, loan)
     document = env.ingest(synth.periodic_statement_pdf(variant="no_payment"), "no-payment.pdf")
+    assert _rewrites(env) == ["2026-03-20"]
     assert env.reasons(document) == set()
     assert document.status is DocumentStatus.PROCESSED
     assert document.kind is DocumentKind.STATEMENT

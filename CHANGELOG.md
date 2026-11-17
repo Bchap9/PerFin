@@ -78,9 +78,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
 - **Net worth history follows what you import.** Statements arrive after
   the fact, and stored daily figures kept what was known on each day, so
   the chart stayed flat through a month and jumped the day after its
-  statement was imported. Every import now has the stored days from its
-  first date on recalculated, and history is recalculated once after the
-  upgrade. Deleting an account takes it out of the stored history too, so
+  statement was imported. Every import, and every edit on an earlier day
+  (a transaction, a balance, a valuation, a price, a loan payment, a
+  reconciled statement), now has the stored days from its first date on
+  recalculated, and history is recalculated once after the upgrade. Deleting an account takes it out of the stored history too, so
   a statement imported into the wrong account, deleted with it and
   imported again counts once (close an account to keep it in the history).
 - **A QIF or CSV opening balance counts on an existing account.** It was

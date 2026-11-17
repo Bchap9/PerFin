@@ -96,6 +96,7 @@ from app.domain.investments.schemas import (
     LotPickOut,
 )
 from app.domain.investments.service import LotLink, dump_lot_links, parse_lot_links
+from app.domain.networth import recompute
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -484,6 +485,7 @@ def create_txn(
     db.flush()
     _replay(db, account, {row.security_id})
     db.refresh(row)
+    recompute.request_recompute(db, household_id, row.trade_date)
     _record(db, principal, row, "create", after=_facts(row), request=request)
     return txn_out(row)
 
@@ -516,11 +518,12 @@ def update_txn(
     if draft.security_id is not None and draft.security_id != row.security_id:
         service.get_visible_security(db, principal, draft.security_id)
     _validate(draft, service.cost_method(db, household_id, account.id))
-    old_security = row.security_id
+    old_security, old_day = row.security_id, row.trade_date
     _apply(row, draft)
     db.flush()
     _replay(db, account, {old_security, row.security_id})
     db.refresh(row)
+    recompute.request_recompute(db, household_id, min(old_day, row.trade_date))
     _record(db, principal, row, "update", before=before, after=_facts(row), request=request)
     return txn_out(row)
 
@@ -540,9 +543,11 @@ def delete_txn(
     db.execute(
         delete(Lot).where(Lot.household_id == row.household_id, Lot.opening_txn_id == row.id)
     )
+    day = row.trade_date
     db.delete(row)
     db.flush()
     _replay(db, account, {security_id}, conflict_status=409)
+    recompute.request_recompute(db, account.household_id, day)
 
 
 # ---------------------------------------------------------------------------

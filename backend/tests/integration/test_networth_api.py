@@ -42,8 +42,9 @@ from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document
 from app.domain.imports import service as imports_service
-from app.domain.investments.models import InvestmentTxnType, opening_import_hash
+from app.domain.investments.models import InvestmentTxnType, Security, opening_import_hash
 from app.domain.loans import service as loans_service
+from app.domain.loans.models import Loan
 from app.domain.networth import recompute as networth_recompute
 from app.domain.networth import service as networth_service
 from app.domain.networth.compute import NetWorthBook
@@ -161,7 +162,11 @@ def world(
         ledger.grant(hid, member.record.id, account, GrantLevel.VIEW)
         ledger.grant(hid, viewer.record.id, account, GrantLevel.VIEW)
     ledger.grant(hid, viewer.record.id, hidden, GrantLevel.VIEW)
-    return World(owner, member, viewer, hid, accounts, hidden, ledger, factories)
+    world = World(owner, member, viewer, hid, accounts, hidden, ledger, factories)
+    # The rewrite building the household asked for (the loan's balances) is
+    # not under test: off the queue.
+    _asked(world)
+    return world
 
 
 def _get(client: AuthedClient, url: str, status: int = 200, **params: Any) -> Any:
@@ -883,3 +888,157 @@ def test_the_snapshot_job_holds_the_household_s_lock(world: World) -> None:
                 {"ns": networth_service.SNAPSHOT_LOCK_NAMESPACE, "h": str(world.household_id)},
             ).scalar_one()
     assert taken is False
+
+
+def _asked(world: World) -> list[str]:
+    """The ``since`` of the rewrites waiting (the jobs are then taken off the queue)."""
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        jobs = list(
+            db.execute(
+                select(Job).where(
+                    Job.type == networth_handler.SNAPSHOT_JOB_TYPE, Job.dedupe_key.is_(None)
+                )
+            ).scalars()
+        )
+        found = [str(job.payload.get("since")) for job in jobs]
+        for job in jobs:
+            db.delete(job)
+    return found
+
+
+def _usd(amount: str) -> dict[str, str]:
+    return {"amount": amount, "currency": "USD"}
+
+
+def _ok(response: Any, status: int = 200) -> Any:
+    assert response.status_code == status, response.text
+    return response.json() if response.content else None
+
+
+def test_a_write_on_a_past_day_has_the_stored_days_rewritten(world: World) -> None:
+    owner, checking = world.owner, world.accounts["checking"]
+    # A manual balance, and an account opened with a balance from before.
+    _ok(
+        owner.post(
+            f"{API}/accounts/{checking.id}/balances",
+            json={"as_of_date": "2026-06-10", "balance": _usd("900.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-10"]
+    body = {
+        "type": "checking",
+        "name": "Opened Earlier",
+        "currency": "USD",
+        "opening_balance": _usd("50.00"),
+        "opening_balance_date": "2026-05-01",
+    }
+    _ok(owner.post(f"{API}/accounts", json=body), 201)
+    assert _asked(world) == ["2026-05-01"]
+    # A transaction added, moved earlier, changed and deleted.
+    row = _ok(
+        owner.post(
+            f"{API}/transactions",
+            json={
+                "account_id": str(checking.id),
+                "posted_date": "2026-06-07",
+                "amount": _usd("-12.50"),
+                "raw_payee": "Synthetic Grocer",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-07"]
+    url = f"{API}/transactions/{row['id']}"
+    _ok(owner.patch(url, json={"posted_date": "2026-06-03"}))
+    assert _asked(world) == ["2026-06-03"]
+    _ok(owner.patch(url, json={"memo": "only words"}))
+    assert _asked(world) == []
+    _ok(owner.patch(url, json={"amount": _usd("-13.50")}))
+    assert _asked(world) == ["2026-06-03"]
+    _ok(owner.delete(url), 204)
+    assert _asked(world) == ["2026-06-03"]
+    # An investment transaction, a price.
+    brokerage = world.accounts["brokerage"]
+    txn = _ok(
+        owner.post(
+            f"{API}/investments/transactions",
+            json={
+                "account_id": str(brokerage.id),
+                "type": "interest",
+                "trade_date": "2026-06-08",
+                "amount": _usd("10.00"),
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-08"]
+    _ok(owner.delete(f"{API}/investments/transactions/{txn['id']}"), 204)
+    assert _asked(world) == ["2026-06-08"]
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        security_id = db.execute(select(Security.id)).scalar_one()
+        loan_id = db.execute(select(Loan.id)).scalar_one()
+    price = _ok(
+        owner.post(
+            f"{API}/securities/{security_id}/prices",
+            json={"price_date": "2026-06-09", "close": "130"},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-06-09"]
+    _ok(owner.delete(f"{API}/securities/{security_id}/prices/{price['id']}"), 204)
+    assert _asked(world) == ["2026-06-09"]
+    # A manual asset's valuations.
+    car = world.ledger.account(
+        world.household_id, type=AccountType.MANUAL_ASSET, asset_kind="vehicle", name="Car"
+    )
+    asset = _ok(
+        owner.post(
+            f"{API}/assets",
+            json={
+                "account_id": str(car.id),
+                "valuation_method": "manual",
+                "value": _usd("9000.00"),
+                "valued_on": "2026-04-01",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-04-01"]
+    valuation = _ok(
+        owner.post(
+            f"{API}/assets/{asset['id']}/valuations",
+            json={"valued_on": "2026-05-02", "value": _usd("8800.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-05-02"]
+    _ok(owner.delete(f"{API}/assets/{asset['id']}/valuations/{valuation['id']}"), 204)
+    assert _asked(world) == ["2026-05-02"]
+    # A loan payment: the balance owed changes from its day.
+    payment = _ok(
+        owner.post(
+            f"{API}/loans/{loan_id}/payments",
+            json={"paid_on": "2026-05-01", "principal": _usd("500.00"), "interest": _usd("1.00")},
+        ),
+        201,
+    )
+    assert _asked(world) == ["2026-05-01"]
+    _ok(owner.delete(f"{API}/loans/{loan_id}/payments/{payment['id']}"), 204)
+    assert _asked(world) == ["2026-05-01"]
+    # A row dated today asks for nothing.
+    _ok(
+        owner.post(
+            f"{API}/transactions",
+            json={
+                "account_id": str(checking.id),
+                "posted_date": TODAY.isoformat(),
+                "amount": _usd("-1.00"),
+                "raw_payee": "Synthetic Grocer",
+            },
+        ),
+        201,
+    )
+    assert _asked(world) == []

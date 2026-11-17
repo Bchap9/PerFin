@@ -60,6 +60,7 @@ from app.domain.investments.schemas import (
     SecurityPage,
     SecurityUpdate,
 )
+from app.domain.networth import recompute
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -397,6 +398,7 @@ def set_price(
     row.close = data.close
     row.source = MANUAL_SOURCE
     db.flush()
+    recompute.request_recompute(db, household_id, data.price_date)
     _record(
         db,
         principal,
@@ -440,5 +442,7 @@ def delete_price(
         before={"price_date": row.price_date.isoformat(), "close": format_units(row.close)},
         request=request,
     )
+    day = row.price_date
     db.delete(row)
     db.flush()
+    recompute.request_recompute(db, household_id, day)

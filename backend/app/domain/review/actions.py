@@ -88,6 +88,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.service import visible_document_filter
 from app.domain.imports.statement_answers import payload_key, statement_key
+from app.domain.networth import recompute
 from app.domain.review import service
 from app.domain.review.layout import derive_match, stored_result
 from app.domain.review.schemas import (
@@ -400,6 +401,7 @@ def accept_statement(
             BalanceSource.STATEMENT,
             source_document_id=document.id,
         )
+        recompute.request_recompute(db, item.household_id, balanced.as_of)
         emit(db, item.household_id, "balance.updated", {"account_id": str(account.id)})
         snapshot = True
     return {"reconciled": True, "confirmed": confirmed, "snapshot": snapshot}

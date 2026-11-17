@@ -462,6 +462,7 @@ def create_account(
     if data.opening_balance is not None:
         as_of = data.opening_balance_date or data.opened_on or today()
         repo.upsert_snapshot(db, account, as_of, data.opening_balance.amount, BalanceSource.MANUAL)
+        recompute.request_recompute(db, household_id, as_of)
     _record(
         db,
         principal,
@@ -733,6 +734,7 @@ def record_manual_balance(
     snapshot = repo.upsert_snapshot(
         db, account, data.as_of_date, data.balance.amount, BalanceSource.MANUAL
     )
+    recompute.request_recompute(db, account.household_id, data.as_of_date)
     _record(
         db,
         principal,

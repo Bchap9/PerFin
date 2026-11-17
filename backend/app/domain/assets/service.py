@@ -66,6 +66,7 @@ from app.domain.assets.schemas import (
     ValuationList,
     ValuationOut,
 )
+from app.domain.networth import recompute
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -274,6 +275,7 @@ def _upsert_valuation(db: Session, account: Account, valued_on: date, value: Any
     db.flush()
     sign = 1 if account.is_asset else -1
     accounts_repo.upsert_snapshot(db, account, valued_on, sign * value.amount, BalanceSource.MANUAL)
+    recompute.request_recompute(db, account.household_id, valued_on)
     return valuation
 
 
@@ -478,8 +480,10 @@ def delete_valuation(
                 BalanceSnapshot.balance == sign * valuation.value,
             )
         )
+    day = valuation.valued_on
     db.delete(valuation)
     db.flush()
+    recompute.request_recompute(db, account.household_id, day)
     _record(
         db,
         principal,

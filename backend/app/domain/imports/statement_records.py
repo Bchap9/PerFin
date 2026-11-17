@@ -71,6 +71,7 @@ from app.core.money import to_storage
 from app.domain.accounts.models import Account, BalanceSnapshot, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
 from app.domain.imports.models import StatementRecord
+from app.domain.networth import recompute
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     InvestmentStatement,
@@ -397,6 +398,7 @@ def withdraw_snapshot(
         return False
     db.delete(found)
     db.flush()
+    recompute.request_recompute(db, account.household_id, as_of)
     emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
     return True
 

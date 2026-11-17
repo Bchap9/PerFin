@@ -320,3 +320,14 @@ def test_the_name_key_is_exact_apart_from_case_spacing_and_width() -> None:
     assert security_name_key("\uff25xample Fund") == security_name_key("Example Fund")
     assert security_name_key("Example Fund LP") != security_name_key("Example Fund, LP")
     assert security_name_key("Example Fund") != security_name_key("Example Funds")
+
+
+def test_the_import_names_the_first_day_it_wrote_a_price_on(db: Session) -> None:
+    # Prices name no document: the importer asks for net worth to be
+    # rewritten from this day, even when the run writes nothing else.
+    hh = make_household(db)
+    account = make_brokerage(db, hh.id)
+    first, _ = _import(db, account, _statement(1, _position(SecurityRef(name=PLAN), "10", "20")))
+    assert first.first_price == date(2024, 1, 31)
+    later, _ = _import(db, account, _statement(3, _position(SecurityRef(name=PLAN), "10", "21")))
+    assert later.first_price == date(2024, 3, 31)

@@ -3542,6 +3542,7 @@ def import_extraction(
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
     _report_skipped(run, result)
     investments: dict[str, Any] | None = None
+    first_price: date | None = None
     if statements:
         # Brokerage statements (app.domain.investments.statement_import);
         # their cash deposits/withdrawals are ledger rows committed here.
@@ -3569,6 +3570,7 @@ def import_extraction(
             if investment_account not in run.accounts:
                 run.accounts.append(investment_account)
         investments = done.summary()
+        first_price = done.first_price
         # Brokerage cash rows are written from the lines a statement's own
         # checks let through: what an earlier reading wrote is left alone.
         run.unplaced = True
@@ -3580,7 +3582,7 @@ def import_extraction(
         if account is not None and account.institution_id is not None:
             document.institution_id = account.institution_id
     db.flush()
-    _recompute_net_worth(db, document, earlier)
+    _recompute_net_worth(db, document, earlier, first_price)
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     summary = run.summary()
     if investments is not None:
@@ -3611,14 +3613,19 @@ def _earliest_recorded(db: Session, document: Document) -> date | None:
     return min(found) if found else None
 
 
-def _recompute_net_worth(db: Session, document: Document, earlier: date | None) -> None:
+def _recompute_net_worth(
+    db: Session, document: Document, earlier: date | None, first_price: date | None = None
+) -> None:
     """Have the stored net worth rewritten from the first day this run could have changed.
 
     What the document holds now and what it held before the run (an
-    earlier reading's rows, removed or replaced): a stored day from then on
-    no longer says what the ledger does (``networth.request_recompute``).
+    earlier reading's rows, removed or replaced), and the first price its
+    brokerage statements wrote (a price names no document): a stored day
+    from then on no longer says what the ledger does
+    (``networth.request_recompute``).
     """
-    found = [d for d in (earlier, _earliest_recorded(db, document)) if d is not None]
+    days = (earlier, _earliest_recorded(db, document), first_price)
+    found = [d for d in days if d is not None]
     if found:
         networth.request_recompute(db, document.household_id, min(found))
 
