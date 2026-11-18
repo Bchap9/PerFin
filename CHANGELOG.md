@@ -42,7 +42,20 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A Fidelity activity CSV for an IRA now imports `CASH CONTRIBUTION CURRENT
+  YEAR` (and `PRIOR YEAR`) rows as deposits. They were skipped as an unknown
+  action. `ROTH CONTRIBUTION`, `IRA CONTRIBUTION` and `EMPLOYEE CONTRIBUTION`
+  read the same way.
+- A Fidelity Cash Management export now imports a debit card's `CASH ADVANCE
+  <bank> ...` (cash from another bank's ATM) and `ADJUST FEE CHARGED ATM FEE
+  REBATE`, each in the direction of its amount's sign.
+- A Fidelity Crypto export now imports `<quantity> BTC deposited` (and
+  `received`, `withdrawn`, `sent`) as coins moved in or out.
+- An activity CSV made up only of rows typed by their sign (`JOURNALED`,
+  `TRANSFER`, `CASH ADVANCE`) was not recognised as an activity export. It
+  is now.
 
 ## [1.0.0-rc.12] - 2026-11-17
 

@@ -960,7 +960,9 @@ def _typed_share(header: Header, body: Sequence[Sequence[str]]) -> float:
 
     def known(row: Sequence[str]) -> bool:
         action = _cell(row, column)
-        if activity_type(action) is not None:
+        # A phrase typed by the row's sign (``JOURNALED``, ``CASH ADVANCE``)
+        # is known whatever the sign: any sign stands in for it here.
+        if activity_type(action, cash_sign=1) is not None:
             return True
         # ``Expired``/``Assigned`` on an option row is typed by the rows around it.
         return (

@@ -1909,13 +1909,18 @@ table; never a PDF's page table) before it looks for a column mapping:
   and a non-zero quantity, else cash; Fidelity's cash-management and
   retirement wording: `DEBIT CARD PURCHASE`, `CHECK PAID`, `BILL PAYMENT`,
   `DIRECT DEBIT` as withdrawals, `PARTIC CONTR`, `EMPLOYER CONTRIBUTION`,
-  `RETURN OF CAPITAL`, `CASH IN LIEU` as deposits, `MARGIN INTEREST` and
+  an IRA's `CASH CONTRIBUTION CURRENT/PRIOR YEAR` (and `ROTH`/`IRA`/
+  `EMPLOYEE CONTRIBUTION`), `RETURN OF CAPITAL`, `CASH IN LIEU` as deposits, `MARGIN INTEREST` and
   the tax withholdings as fees, `REDEMPTION FROM`/`PURCHASE INTO CORE
   ACCOUNT` as a sale/buy of the core fund). `JOURNALED`, `TRANSFER`,
-  `ROLLOVER`, `CONVERSION` take their direction from the row: units in or
+  `ROLLOVER`, `CONVERSION`, a debit card's `CASH ADVANCE` (cash at another
+  bank's ATM) and `ADJUST FEE CHARGED` (a fee rebate) take their direction
+  from the row: units in or
   out by the quantity's sign when the row moves a security, else a deposit
   or withdrawal by the amount's sign; `EXCHANGED`, `ASSIGNED`, `EXPIRED` are
-  a buy or sale by the quantity's sign. Without a sign such a row is not
+  a buy or sale by the quantity's sign. A crypto account's `<quantity>
+  <symbol> deposited`/`received`/`withdrawn`/`sent` is units in or out (cash
+  when the row names no security). Without a sign such a row is not
   typed. An action no phrase types is
   **skipped and counted, never guessed** (its first three words, digits
   removed, are listed in the review item: `unknown_actions`); so is a row whose date or amount
