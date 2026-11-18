@@ -46,7 +46,12 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- The release image build hung in `npm ci` for the arm64 image, which runs
+  under emulation, so `v1.0.0-rc.14` was tagged but never published. The
+  frontend is now built once on the build machine's own platform; its output
+  is the same for both images.
 
 ## [1.0.0-rc.14] - 2026-11-18
 
