@@ -40,8 +40,17 @@ For each transaction, the first of these that has an answer wins:
 | 4 | The default category of the transaction's payee | "Payee default" | 0.95 |
 | 5 | What PerFin learned from your corrections for this merchant | "Learned from you" | 0.80, 0.90 or 0.95 after one, two, or three and more decisions, times the share of your decisions that agree |
 | 6 | The merchant list, or the kind of line (a card payment, an ATM withdrawal, a salary, interest, a bank fee) | "Merchant list" | 0.90 for a merchant; less in the cases below |
+| 6a | Your card issuer's own category, when the file has a category column whose words name none of your categories (American Express `Transportation-Fuel`, Chase `Food & Drink`, Capital One `Dining`, Discover `Supermarkets`), read as one of the default categories | "From the file" | 0.85 |
 | 7 | A telling word in the description ("pizza", "pharmacy"), or a bill's word (rent, a utility, insurance, taxes, childcare, tuition) or pay's word for money in (`DES:WAGES`), in a labelled ACH line's entry description (`DES:TUITION`) when the name has none | "Keyword" | 0.60 |
 | 8 | Nothing | no category | |
+
+Row 6a ranks below the merchant list on purpose: the merchant list knows the
+merchant itself, while an issuer files a fast-food chain under "Restaurant"
+and a grocer's online order under "Internet Purchase". An issuer word that
+says nothing about what was bought (`Other-Miscellaneous`, `Business
+Services-Other Services`) is not read. A file category that does name one of
+your categories exactly is still row 2. The word list is
+`backend/app/domain/categorisation/institution.py`.
 
 Categories a transaction had before PerFin recorded this (before
 1.0.0-rc.10) are counted as "From before this version". They are treated

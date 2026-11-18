@@ -536,6 +536,11 @@ FILE_SOURCE: Final = "file"
 RULE_SOURCE: Final = "rule"
 PERSON_SOURCE: Final = "person"
 FILE_CONFIDENCE: Final = Decimal("0.95")
+#: A card issuer's own category word (``file_hints``), read as a default key.
+ISSUER_CONFIDENCE: Final = Decimal("0.85")
+#: Guesses that beat an issuer's category: what the household set or taught,
+#: and the dictionary, which knows the merchant itself.
+ISSUER_YIELDS_TO: Final = frozenset({"payee", "learned", "dictionary"})
 CERTAIN: Final = Decimal(1)
 #: Sources of a fact the engine may look at again (a suggestion always is).
 GUESS_AGAIN_SOURCES: Final = ("dictionary", "keyword")
@@ -727,6 +732,7 @@ def categorise_rows(
     rows: Sequence[Transaction],
     *,
     file_categorised: Collection[uuid.UUID] = (),
+    file_hints: Mapping[uuid.UUID, str] | None = None,
     protect: Mapping[uuid.UUID, Collection[str]] | None = None,
     user_id: uuid.UUID | None = None,
     request: HTTPConnection | None = None,
@@ -745,7 +751,12 @@ def categorise_rows(
        ``protect[row.id]`` for what a person typed on a manual row. A row
        that had neither a category nor a split and has one afterwards is the
        rule's;
-    4. what is still undecided is guessed for (:func:`decide`).
+    4. what is still undecided is guessed for (:func:`decide`). A row in
+       ``file_hints`` carries the card issuer's category as a default key
+       (``app.domain.categorisation.institution``): it is written, source
+       ``file`` at :data:`ISSUER_CONFIDENCE`, unless the guess is a fact from
+       :data:`ISSUER_YIELDS_TO` or the descriptor's kind is never guessed
+       for, or the household has no category for the key.
 
     A row that arrives with a category the file did not give (a person typed
     it) is keyed and otherwise left as it is: recording that choice is
@@ -839,10 +850,26 @@ def categorise_rows(
                     )
                 )
     if still_open:
-        decided = _decisions(db, household_id, _known(db, household_id), still_open)
+        known = _known(db, household_id)
+        decided = _decisions(db, household_id, known, still_open)
+        hints = file_hints or {}
         for item in still_open:
             decision = decided[item.id]
-            if decision.source is not None:
+            hint_key = hints.get(item.id)
+            hint = resolve_category(known.categories, hint_key) if hint_key else None
+            if (
+                hint is not None
+                and item.identity.kind not in NEVER_GUESSED
+                and not (decision.category_id is not None and decision.source in ISSUER_YIELDS_TO)
+            ):
+                second[item.id] = {
+                    "category_id": hint,
+                    "suggested_category_id": None,
+                    "category_source": FILE_SOURCE,
+                    "category_confidence": ISSUER_CONFIDENCE,
+                }
+                _mark(summary, item.account_id, FILE_SOURCE)
+            elif decision.source is not None:
                 second[item.id] = _decision_values(decision)
                 _count(summary, item.account_id, decision)
     _write(db, household_id, second, by_id)

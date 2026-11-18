@@ -236,6 +236,39 @@ def test_a_file_category_is_kept_and_marked_file(db: Session, home: Home) -> Non
         assert stored["updated_at"] == stored["created_at"]
 
 
+def test_an_issuer_category_fills_in_where_the_dictionary_does_not_know(
+    db: Session, home: Home
+) -> None:
+    unknown = home.row("MOSSY BOOKSHOP")
+    # The dictionary knows the grocer: its fact beats the issuer's word.
+    grocer = home.row("CORNER GROCER 0417")
+    # A suggestion only: the issuer's word is the better answer.
+    barn = home.row("EVERYTHING BARN 22")
+    # A key the household has no category for answers nothing.
+    nowhere = home.row("QUIET HARBOUR")
+
+    summary = engine.categorise_rows(
+        db,
+        home.household_id,
+        [unknown, grocer, barn, nowhere],
+        file_hints={
+            unknown.id: "shopping.general",
+            grocer.id: "shopping.general",
+            barn.id: "food.groceries",
+            nowhere.id: "synthetic.nothing",
+        },
+    )
+
+    assert _provenance(db, unknown) == (home.shopping.id, None, "file", Decimal("0.85"))
+    assert _provenance(db, grocer) == (home.groceries.id, None, "dictionary", Decimal("0.90"))
+    assert _provenance(db, barn) == (home.groceries.id, None, "file", Decimal("0.85"))
+    assert _provenance(db, nowhere) == (None, None, None, None)
+    assert dict(summary.by_source) == {"file": 2, "dictionary": 1}
+    for row in (unknown, barn):
+        stored = _stored(db, row.id)
+        assert stored["updated_at"] == stored["created_at"]
+
+
 def test_a_rule_wins_over_a_guess_and_is_marked_rule(db: Session, home: Home) -> None:
     rule = make_rule(
         db,

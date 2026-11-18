@@ -382,6 +382,28 @@ def test_a_file_category_beats_a_rule_and_a_rule_beats_the_dictionary(env: Env) 
     assert [row.updated_at == row.created_at for row in rows.values()] == [True] * 3
 
 
+def test_an_issuers_category_words_are_read_as_a_default_category(env: Env) -> None:
+    fuel, cinema = env.keyed("transport.fuel"), env.keyed("leisure.cinema")
+    account = env.ledger.account(env.household_id, number_last4="5513", currency="USD")
+    entries: list[tuple[Any, ...]] = [
+        (3, "-41.20", "HARBOURSIDE 0042", "Transportation-Fuel"),
+        # The dictionary knows the cinema: the issuer's word does not change it.
+        (5, "-17.25", "LAMPLIGHT CINEMA", "Restaurant-Restaurant"),
+        # Words that say nothing about what was bought.
+        (7, "-9.99", "QUIET HARBOUR 17", "Other-Miscellaneous"),
+    ]
+
+    _, summary = _stored(env, _month("5513", entries))
+
+    rows = env.transactions(account)
+    assert _decided(rows["HARBOURSIDE 0042"]) == (fuel.id, "file")
+    assert rows["HARBOURSIDE 0042"].category_confidence == Decimal("0.85")
+    assert _decided(rows["LAMPLIGHT CINEMA"]) == (cinema.id, "dictionary")
+    assert _decided(rows["QUIET HARBOUR 17"]) == (None, None)
+    assert summary["categorised"] == {"dictionary": 1, "file": 1}
+    assert [row.updated_at == row.created_at for row in rows.values()] == [True] * 3
+
+
 def test_a_row_takes_its_payees_default_before_the_dictionary_answers(env: Env) -> None:
     env.keyed("food.groceries")
     weekly = env.ledger.category(env.household_id, name="Weekly shop")
