@@ -667,6 +667,23 @@ SIGNED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivit
     "funds paid": ("transfer_in", "transfer_out"),
     "funds received": ("transfer_in", "transfer_out"),
     "security transfer": ("transfer_in", "transfer_out"),
+    # A cash-management account's debit card: cash at another bank's ATM
+    # (``CASH ADVANCE <BANK> ...``, money out) and a fee put right (``ADJUST
+    # FEE CHARGED ATM FEE REBATE``, usually money back in).
+    "cash advance": ("transfer_in", "transfer_out"),
+    "adjust fee charged": ("transfer_in", "transfer_out"),
+}
+#: ``<quantity> <symbol> deposited`` (a crypto account's own wording, the
+#: quantity first): units in or out when the row moves a security, else cash.
+#: Read on the normalised text, where ``0.0123`` is ``0 0123``.
+_MOVED_BY_QUANTITY: Final = re.compile(
+    r"^\d+(?: \d+)? [a-z0-9]{1,12} (deposited|received|withdrawn|sent)(?: |$)"
+)
+MOVED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivityType]]] = {
+    "deposited": ("transfer_in", "deposit"),
+    "received": ("transfer_in", "deposit"),
+    "withdrawn": ("transfer_out", "withdrawal"),
+    "sent": ("transfer_out", "withdrawal"),
 }
 #: Brokers' abbreviations in an action text, as whole tokens, written out
 #: (:func:`expand_action`). ``pr`` is ``prior`` only before ``yr``/``year``.
@@ -805,8 +822,16 @@ def activity_type(
     units leave), else the sign of the amount (``cash_sign``, negative =
     cash leaves: ``withdrawal``, else ``deposit``). Without a sign it is
     None: the direction is never guessed.
+
+    ``<quantity> <symbol> deposited``/``received``/``withdrawn``/``sent``
+    (:data:`MOVED_TYPES`) is units in or out with ``moves_security``, else
+    cash in or out.
     """
     norm = expand_action(normalise(text))
+    moved = _MOVED_BY_QUANTITY.match(norm)
+    if moved is not None:
+        units, cash = MOVED_TYPES[moved[1]]
+        return units if moves_security else cash
     best: InvestmentActivityType | None = None
     best_len = 0
 

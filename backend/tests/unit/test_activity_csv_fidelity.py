@@ -127,6 +127,72 @@ def test_a_cash_contribution_row_imports_as_a_deposit() -> None:
     assert [(a.type, a.amount) for a in statement.activity] == [("deposit", Decimal("275"))]
 
 
+def test_atm_cash_and_fee_rebates_take_their_direction_from_the_amount() -> None:
+    assert activity_type("ADJUST FEE CHARGED ATM FEE REBATE (Cash)", cash_sign=1) == "deposit"
+    assert activity_type("ADJUST FEE CHARGED SYNTHETIC FEE (Cash)", cash_sign=-1) == "withdrawal"
+    advance = "CASH ADVANCE SYNTHETIC BANK SOMEWHERE ZZ 010126 AUTHID:000000 (Cash)"
+    assert activity_type(advance, cash_sign=-1) == "withdrawal"
+    assert activity_type("CASH ADVANCE SYNTHETIC BANK (Cash)") is None
+
+
+def test_atm_cash_and_fee_rebate_rows_import() -> None:
+    found = read_activity_table(
+        _with(
+            _row(
+                "ADJUST FEE CHARGED ATM FEE REBATE (Cash)",
+                name="Cash Management (Individual)",
+                price="0",
+                amount="3",
+            ),
+            _row(
+                "CASH ADVANCE SYNTHETIC BANK SOMEWHERE ZZ 010126 AUTHID:000000 (Cash)",
+                name="Cash Management (Individual)",
+                price="0",
+                amount="-123",
+            ),
+        )
+    )
+    assert found is not None
+    assert found.unknown_activity == 0
+    (statement,) = found.statements
+    assert sorted((a.type, a.amount) for a in statement.activity) == [
+        ("deposit", Decimal("3")),
+        ("withdrawal", Decimal("-123")),
+    ]
+
+
+def test_coins_moved_in_or_out_by_quantity_and_symbol() -> None:
+    assert activity_type("0.01234500 SYN deposited", moves_security=True) == "transfer_in"
+    assert activity_type("1 SYN received", moves_security=True) == "transfer_in"
+    assert activity_type("0.50000000 SYN withdrawn", moves_security=True) == "transfer_out"
+    assert activity_type("0.50000000 SYN sent", moves_security=True) == "transfer_out"
+    # Not a security on the row: cash in or out.
+    assert activity_type("12.00 USD deposited") == "deposit"
+    # A leading number before any other word is not this phrase.
+    assert activity_type("0.5 SYN staked") is None
+
+
+def test_a_crypto_deposit_row_imports_as_units_in() -> None:
+    row = _row(
+        "0.01234500 SYN deposited",
+        name="Synthetic Crypto",
+        symbol="SYN",
+        quantity="0.012345",
+        amount="321.50",
+    )
+    found = read_activity_table(_with(row))
+    assert found is not None
+    assert found.unknown_activity == 0
+    (statement,) = found.statements
+    (activity,) = statement.activity
+    assert activity.security is not None
+    assert (activity.type, activity.security.symbol, activity.quantity) == (
+        "transfer_in",
+        "SYN",
+        Decimal("0.012345"),
+    )
+
+
 def test_signed_words_take_their_direction_from_the_row() -> None:
     assert activity_type("JOURNALED CASH", cash_sign=-1) == "withdrawal"
     assert activity_type("JOURNALED CASH", cash_sign=1) == "deposit"
