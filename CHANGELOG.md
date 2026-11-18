@@ -6,7 +6,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.14` (card issuers' category
+The current release candidate is `v1.0.0-rc.15` (card issuers' category
 words and Fidelity activity-export fixes on top of `v1.0.0-rc.12`, the
 internal release review, Stage 4). No external security review or
 penetration test has been done: run PerFin on a private network only
@@ -19,7 +19,7 @@ then passed in CI on the branch; frontend eslint, tsc, 1653 vitest tests in
 115 files, the production build and the bundle budget. `pip-audit` finds no known vulnerabilities. Since 2026-11-17
 `npm audit --audit-level=high` fails on a high picomatch advisory
 (GHSA-fc5q-39xc-vjpf) in dev tooling only (vite, vitest), with no patched
-release yet; rc.13 and rc.14 were released past it by the owner's decision. The
+release yet; rc.13 and rc.15 were released past it by the owner's decision. The
 moderate minimatch advisory (eslint, typescript-eslint) remains until the
 held update.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -46,6 +46,14 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.0-rc.15] - 2026-11-18
+
+Publishes what rc.14 held (an issuer's category column; see 1.0.0-rc.14),
+whose release build hung and was never published, with the build fix. No
+migration and no configuration change.
+
 ### Fixed
 
 - The release image build hung in `npm ci` for the arm64 image, which runs
@@ -54,6 +62,9 @@ What remains (details in docs/ROADMAP.md):
   is the same for both images.
 
 ## [1.0.0-rc.14] - 2026-11-18
+
+Tagged, never published: its release build hung (fixed in 1.0.0-rc.15,
+which carries everything below).
 
 A card export's own category column now counts: American Express, Chase,
 Capital One and Discover category words are read as PerFin's default
