@@ -6,8 +6,8 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.12`, after the internal release
-review (Stage 4). No external security review or
+The current release candidate is `v1.0.0-rc.13` (Fidelity activity-export
+fixes on top of `v1.0.0-rc.12`, the internal release review, Stage 4). No external security review or
 penetration test has been done: run PerFin on a private network only
 (SECURITY.md). Every phase (0-7) is implemented. Alembic head is
 `0014`. On 2026-11-17: SPDX;
@@ -15,9 +15,12 @@ backend ruff, ruff format, mypy --strict (800 source files), bandit, OpenAPI
 drift and 12224 pytest tests with `-n 3` (the sandbox memory-bomb test
 failed under load and its file, 43 tests, passed alone); the whole suite
 then passed in CI on the branch; frontend eslint, tsc, 1653 vitest tests in
-115 files, the production build and the bundle budget. As of rc.2: `pip-audit` finds no known vulnerabilities and
-`npm audit --audit-level=high` passes with 10 moderate advisories in dev
-tooling (eslint, typescript-eslint, minimatch), none high.
+115 files, the production build and the bundle budget. `pip-audit` finds no known vulnerabilities. Since 2026-11-17
+`npm audit --audit-level=high` fails on a high picomatch advisory
+(GHSA-fc5q-39xc-vjpf) in dev tooling only (vite, vitest), with no patched
+release yet; rc.13 was released past it by the owner's decision. The
+moderate minimatch advisory (eslint, typescript-eslint) remains until the
+held update.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
 41927816446 (including the full backend pytest job) and `security` run
 41927816284 (gitleaks over every commit, pip-audit, npm audit, Semgrep, `trivy
@@ -41,6 +44,13 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.13] - 2026-11-18
+
+Fidelity activity exports: four kinds of row that were skipped as an
+unknown action now import. No migration and no configuration change.
 
 ### Fixed
 
