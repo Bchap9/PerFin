@@ -299,7 +299,7 @@ from app.domain.accounts.models import (
     BalanceSource,
 )
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
-from app.domain.categorisation import engine
+from app.domain.categorisation import engine, institution
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
     Document,
@@ -1565,9 +1565,16 @@ def _commit_statement(
     payees = run.payees() if plan.to_insert else None
     created: list[tuple[Transaction, bool]] = []
     split_lines: dict[int, list[dict[str, Any]]] = {}
+    #: The issuer's category for rows whose file category names none of the
+    #: household's (by position in ``created``): a guess for the engine.
+    issuer_keys: dict[int, str] = {}
     for index in plan.to_insert:
         txn = rows[index]
         category_id = None if txn.splits else _category_id(run, txn.category)
+        if category_id is None and not txn.splits:
+            issuer_key = institution.category_key(txn.category)
+            if issuer_key is not None:
+                issuer_keys[len(created)] = issuer_key
         row = Transaction(
             household_id=run.household_id,
             account_id=account.id,
@@ -1608,6 +1615,7 @@ def _commit_statement(
         run.household_id,
         [row for row, _ in created],
         file_categorised={row.id for row, categorised in created if categorised},
+        file_hints={created[position][0].id: key for position, key in issuer_keys.items()},
         user_id=run.user_id,
     )
     run.rules_changed += outcome.by_source["rule"]

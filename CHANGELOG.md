@@ -45,7 +45,17 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A card export's own category column (American Express `Restaurant-Bar &
+  Café`, `Transportation-Fuel`; Chase, Capital One and Discover's words) was
+  used only when its words matched one of your category names exactly, so
+  an American Express file brought in almost no categories. The issuer's
+  words are now read as a default category, below what you set or taught,
+  your payees' defaults and the merchant list, and above a keyword guess
+  (docs/CATEGORISATION.md, row 6a). Rows already imported are not changed:
+  to have them read, delete the document with its transactions and upload
+  it again. Categories you chose come back as learned from you.
 
 ## [1.0.0-rc.13] - 2026-11-18
 
