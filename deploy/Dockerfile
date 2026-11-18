@@ -33,8 +33,10 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.32
 FROM ${UV_IMAGE} AS uv
 
 # ---------------------------------------------------------------------------
-# Frontend: compile the SPA with the exact locked dependency tree.
-FROM ${NODE_IMAGE} AS frontend
+# Frontend: compile the SPA with the exact locked dependency tree. Built on
+# the runner's own platform: its output (HTML, JS, CSS) is the same for every
+# target, and `npm ci` under QEMU arm64 emulation hung for hours (rc.14).
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend
 WORKDIR /src
 ENV CI=true \
     NPM_CONFIG_AUDIT=false \
