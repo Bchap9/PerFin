@@ -890,6 +890,53 @@ describe("teach dialog", () => {
     );
   });
 
+  it("shows the lines a table import skipped, as the file prints them", async () => {
+    const detail = item({
+      kind: "low_confidence_field",
+      reason: "lines_skipped",
+      payload: {
+        reason: "lines_skipped",
+        count: 2,
+        unknown_activity: 1,
+        unknown_actions: [{ action: "mystery thing", rows: 1 }],
+        header_row: 1,
+        unknown_rows: [3],
+        unreadable_rows: [4],
+      },
+      next_step: null,
+    });
+    const api = reviewApi(detail, {
+      "GET /api/v1/imports/:id/preview": () =>
+        json({
+          tables: [
+            {
+              index: 0,
+              rows: [
+                ["Run Date", "Action", "Unused", "Amount"],
+                ["03/02/2026", "YOU BOUGHT SGRX", "", "-20"],
+                ["03/03/2026", "MYSTERY THING HAPPENED", "", "-3"],
+                ["03/04/2026", "DIVIDEND RECEIVED SGRX", "", "not a number"],
+              ],
+            },
+          ],
+          statements: [],
+        }),
+    });
+    renderApp("/inbox");
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+    // A column empty in the header and in every shown line is left out.
+    expect(within(table).queryByRole("columnheader", { name: "Unused" })).not.toBeInTheDocument();
+    const lines = within(table).getAllByRole("row").slice(1);
+    expect(lines.map((line) => line.textContent)).toEqual([
+      "Unknown action03/03/2026MYSTERY THING HAPPENED-3",
+      "Could not read03/04/2026DIVIDEND RECEIVED SGRXnot a number",
+    ]);
+    const call = api.callsTo("GET", "/api/v1/imports/:id/preview")[0];
+    expect(call?.search).toContain("offset=1");
+    expect(call?.search).toContain("limit=4");
+  });
+
   it("enters the balances of a statement that does not add up", async () => {
     // The balances are typed in the reconcile view the card opens: the card
     // itself has no balance form, and nothing is sent to the old correction route.

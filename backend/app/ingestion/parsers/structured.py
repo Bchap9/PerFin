@@ -156,6 +156,8 @@ class ParsedStatement:
     closing_balance: ClosingBalance | None = None
     #: Table rows (0-based) that could not be read with the mapping.
     skipped_rows: list[int] = field(default_factory=list)
+    #: The table row that holds the header (``None``: no header, or no table).
+    header_row: int | None = None
     #: Table rows that can never be a transaction (a disclaimer paragraph, a
     #: "Date downloaded" line, a row without a date and an amount): not
     #: reported as skipped.
@@ -855,6 +857,8 @@ def _read_rows(
     was.
     """
     parsed = ParsedStatement(source_format="csv", truncated=table.truncated)
+    if spec.has_header and spec.skip_rows < len(table.rows):
+        parsed.header_row = spec.skip_rows
     header = (
         _header_names(table.rows[spec.skip_rows])
         if spec.has_header and spec.skip_rows < len(table.rows)

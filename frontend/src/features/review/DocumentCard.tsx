@@ -70,6 +70,7 @@ import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
 import {
   AnsweredContext,
   CostBasisTools,
+  SkippedLines,
   HeldLines,
   LowConfidenceTools,
   NewInstitutionTools,
@@ -1348,6 +1349,7 @@ function Section({
     <article className="review-section" aria-label={explanation.title}>
       <h3 className="review-section__title">{explanation.title}</h3>
       <ExplanationBlock explanation={explanation} full={full} />
+      <SkippedLines item={item} />
       {body}
       <Refusal error={error} />
     </article>

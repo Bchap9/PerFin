@@ -207,6 +207,25 @@
   padding-left: var(--space-4);
 }
 
+/* The lines a table import skipped, as the file prints them. */
+.skipped-lines__scroll {
+  overflow-x: auto;
+  margin-bottom: var(--space-2);
+}
+
+.skipped-lines table {
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.skipped-lines th,
+.skipped-lines td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+}
+
 /* The Fix dialog: the document beside the explanation and controls. */
 .review-fix {
   display: grid;

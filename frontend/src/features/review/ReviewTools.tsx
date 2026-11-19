@@ -23,6 +23,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { useAccounts, accountLabel } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { PageViewer } from "../documents/PageViewer";
+import { getPreviewRows, importKeys } from "../imports/api";
 import { investmentKeys, listSecurities, updateInvestmentTxn, type Security } from "../investments/api";
 import { listMembers, settingsKeys } from "../settings/api";
 import { getTransaction, txKeys } from "../transactions/api";
@@ -38,6 +39,7 @@ import {
   mergeFix,
   ownerResolution,
   payloadLines,
+  payloadNumber,
   payloadPositions,
   payloadString,
   payloadTransactionIds,
@@ -1008,5 +1010,95 @@ export function HeldLines({
         </div>
       )}
     </>
+  );
+}
+
+/** A line a table import skipped: its row in the stored table and why. */
+interface SkippedLine {
+  row: number;
+  why: string;
+}
+
+/** Lines shown on a card; the rest are counted. */
+const SHOWN_LINES = 10;
+
+function rowsOf(item: ReviewItem, key: string, why: string): SkippedLine[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(key);
+  return Array.isArray(value)
+    ? value.filter((row): row is number => typeof row === "number").map((row) => ({ row, why }))
+    : [];
+}
+
+/** The skipped lines an item names (``rows`` of ``rows_skipped``; the activity reader's two lists). */
+export function skippedLines(item: ReviewItem): SkippedLine[] {
+  return [
+    ...rowsOf(item, "unknown_rows", "Unknown action"),
+    ...rowsOf(item, "unreadable_rows", "Could not read"),
+    ...rowsOf(item, "rows", "Could not read"),
+  ].sort((a, b) => a.row - b.row);
+}
+
+/**
+ * The lines a CSV or XLSX import skipped, as the file prints them, under the
+ * file's own header (``GET /imports/{id}/preview``: the stored table, not a
+ * re-read). Shown when the item says where the header is.
+ */
+export function SkippedLines({ item }: { item: ReviewItem }) {
+  const lines = skippedLines(item);
+  const header = payloadNumber(item, "header_row");
+  const documentId = item.document_id;
+  const shown = header === null ? [] : lines.filter((line) => line.row > header && line.row - header < 500);
+  const last = shown.slice(0, SHOWN_LINES).at(-1);
+  const limit = header === null || last === undefined ? 1 : last.row - header + 1;
+  const enabled = documentId !== null && header !== null && last !== undefined;
+  const query = useQuery({
+    queryKey: importKeys.rows(documentId ?? "", header ?? 0, limit),
+    queryFn: () => getPreviewRows(documentId ?? "", header ?? 0, limit),
+    enabled,
+  });
+  const rows = query.data?.tables[0]?.rows;
+  if (!enabled || rows === undefined) {
+    return null;
+  }
+  const head = rows.at(0) ?? [];
+  const body = shown.slice(0, SHOWN_LINES).flatMap((line) => {
+    const cells = rows.at(line.row - header);
+    return cells === undefined ? [] : [{ ...line, cells }];
+  });
+  const columns = head
+    .map((_, index) => index)
+    // Only columns the shown lines fill: an export's many blank columns stay out.
+    .filter((index) => body.some((line) => (line.cells.at(index) ?? "").trim() !== ""));
+  const more = lines.length - body.length;
+  return (
+    <div className="skipped-lines">
+      <p className="ledger-muted">
+        The lines PerFin skipped, as the file prints them{more > 0 ? ` (${String(more)} more not shown)` : ""}:
+      </p>
+      <div className="skipped-lines__scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Why</th>
+              {columns.map((index) => (
+                <th scope="col" key={index}>
+                  {head.at(index)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((line) => (
+              <tr key={line.row}>
+                <td>{line.why}</td>
+                {columns.map((index) => (
+                  <td key={index}>{line.cells.at(index)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

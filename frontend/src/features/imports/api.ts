@@ -25,6 +25,7 @@ export const importKeys = {
   documents: [...queryRoots.documents, "recent"],
   document: (id: string) => [...queryRoots.documents, "one", id],
   preview: (id: string) => [...queryRoots.documents, "preview", id],
+  rows: (id: string, offset: number, limit: number) => [...queryRoots.documents, "rows", id, offset, limit],
   mappings: [...queryRoots.documents, "mappings"],
 } as const;
 
@@ -46,6 +47,15 @@ export function getPreview(id: string): Promise<ImportPreview> {
   return unwrap(
     api.GET("/api/v1/imports/{document_id}/preview", {
       params: { path: { document_id: id }, query: { limit: 50 } },
+    }),
+  );
+}
+
+/** ``limit`` stored table rows from ``offset`` (the lines a review item names). */
+export function getPreviewRows(id: string, offset: number, limit: number): Promise<ImportPreview> {
+  return unwrap(
+    api.GET("/api/v1/imports/{document_id}/preview", {
+      params: { path: { document_id: id }, query: { offset, limit } },
     }),
   );
 }
