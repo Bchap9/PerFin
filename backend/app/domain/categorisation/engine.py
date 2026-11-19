@@ -892,6 +892,97 @@ def categorise_rows(
     return summary
 
 
+@dataclass(frozen=True)
+class FileCategory:
+    """What a file says of a row it carries: one of the household's categories by
+    name (``category_id``, the file's own) or a card issuer's word read as a
+    default key (``key``)."""
+
+    category_id: uuid.UUID | None = None
+    key: str | None = None
+
+
+def fill_from_file(
+    db: Session,
+    household_id: uuid.UUID,
+    account_id: uuid.UUID,
+    by_hash: Mapping[str, FileCategory],
+    *,
+    user_id: uuid.UUID | None = None,
+) -> Summary:
+    """Give rows already on ``account_id`` the category a file read again says.
+
+    For a file imported before its category column was read: the rows it
+    carries again are exact duplicates and are not written, so the rows
+    already there take the file's category here, by ``import_hash``. Only
+    rows :func:`reconsider` may look at are touched (no category, a
+    suggestion, a ``dictionary`` or ``keyword`` fact), and of those a
+    ``dictionary`` fact keeps its category against an issuer's word, as at
+    import. A row a person, a rule, a payee default or the memory decided,
+    and a split row, are left alone. The file's category by name is
+    written at :data:`FILE_CONFIDENCE`, an issuer's word at
+    :data:`ISSUER_CONFIDENCE`, both as source ``file``.
+    """
+    summary = Summary()
+    hashes = sorted(digest for digest, found in by_hash.items() if found.category_id or found.key)
+    if not hashes:
+        return summary
+    rows: list[Transaction] = []
+    for start in range(0, len(hashes), BATCH):
+        rows.extend(
+            db.execute(
+                select(Transaction).where(
+                    Transaction.household_id == household_id,
+                    Transaction.account_id == account_id,
+                    Transaction.import_hash.in_(hashes[start : start + BATCH]),
+                    reconsidered_clause(),
+                )
+            ).scalars()
+        )
+    summary.scanned = len(rows)
+    categories = category_ids_by_key(db, household_id) if rows else {}
+    changes: dict[uuid.UUID, dict[str, Any]] = {}
+    for row in rows:
+        found = by_hash[row.import_hash or ""]
+        category_id: uuid.UUID | None
+        if found.category_id is not None:
+            category_id, confidence = found.category_id, FILE_CONFIDENCE
+        else:
+            if row.category_id is not None and row.category_source in ISSUER_YIELDS_TO:
+                continue
+            if identify(row.raw_payee).kind in NEVER_GUESSED:
+                continue
+            category_id = resolve_category(categories, found.key) if found.key else None
+            confidence = ISSUER_CONFIDENCE
+        if category_id is None:
+            continue
+        changes[row.id] = {
+            "category_id": category_id,
+            "suggested_category_id": None,
+            "category_source": FILE_SOURCE,
+            "category_confidence": confidence,
+        }
+        _mark(summary, row.account_id, FILE_SOURCE)
+    by_id = {row.id: row for row in rows}
+    _write(db, household_id, changes, by_id)
+    if summary.changed:
+        audit(
+            db,
+            action="transaction.categorise",
+            target_type="transaction",
+            after={
+                "count": summary.changed,
+                "by_source": dict(sorted(summary.by_source.items())),
+                "suggested": 0,
+            },
+            household_id=household_id,
+            user_id=user_id,
+            request=None,
+        )
+    _announce(db, household_id, summary)
+    return summary
+
+
 def person_decided(
     db: Session,
     row: Transaction,

@@ -1618,6 +1618,22 @@ def _commit_statement(
         file_hints={created[position][0].id: key for position, key in issuer_keys.items()},
         user_id=run.user_id,
     )
+    # Rows the file carries again (exact duplicates, not written) take its
+    # category when nobody decided theirs: a file imported before its
+    # category column was read.
+    again = {
+        plan.hashes[index]: engine.FileCategory(
+            category_id=_category_id(run, rows[index].category),
+            key=institution.category_key(rows[index].category),
+        )
+        for index in plan.exact
+        if rows[index].category and not rows[index].splits
+    }
+    if again:
+        refilled = engine.fill_from_file(
+            db, run.household_id, account.id, again, user_id=run.user_id
+        )
+        run.categorised.update(refilled.by_source)
     run.rules_changed += outcome.by_source["rule"]
     run.payee_categorised += outcome.by_source["payee"]
     run.categorised.update(outcome.by_source)
