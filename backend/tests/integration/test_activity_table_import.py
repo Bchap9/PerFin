@@ -476,6 +476,10 @@ def test_unknown_actions_are_skipped_and_reported(env: Env) -> None:
         "unknown_activity": 1,
         "unknown_actions": [{"action": "mystery synthetic special", "rows": 1}],
         "parser": "brokerage_activity_table",
+        # Where the line is in the stored table, so the queue can show it.
+        "header_row": 0,
+        "unknown_rows": [1],
+        "unreadable_rows": [],
     }
     for account, mine in zip(accounts, synthetic, strict=True):
         assert account is not None
