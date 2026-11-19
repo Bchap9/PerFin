@@ -23,7 +23,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { useAccounts, accountLabel } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { PageViewer } from "../documents/PageViewer";
-import { updateInvestmentTxn } from "../investments/api";
+import { investmentKeys, listSecurities, updateInvestmentTxn, type Security } from "../investments/api";
 import { listMembers, settingsKeys } from "../settings/api";
 import { getTransaction, txKeys } from "../transactions/api";
 import {
@@ -566,8 +566,22 @@ export function ReceiptPreview({ item }: { item: ReviewItem }) {
 /** An opening position whose cost basis is unknown (``investment_opening_basis_unknown``). */
 interface OpeningPosition {
   transactionId: string;
+  securityId: string;
   quantity: string;
   tradeDate: string;
+}
+
+/** ``5966.1700000000`` -> ``5966.17``: the stored scale's padding zeros dropped. */
+export function plainUnits(quantity: string): string {
+  return quantity.includes(".") ? quantity.replace(/0+$/, "").replace(/\.$/, "") : quantity;
+}
+
+/** ``SGRX · Example Fund``, the name alone, or a fallback while securities load. */
+function securityLabel(security: Security | undefined): string {
+  if (security === undefined) {
+    return "A security";
+  }
+  return security.symbol ? `${security.symbol} · ${security.name}` : security.name;
 }
 
 export function openingPositions(item: ReviewItem): OpeningPosition[] {
@@ -587,8 +601,10 @@ export function openingPositions(item: ReviewItem): OpeningPosition[] {
     }
     const quantity = fields.get("quantity");
     const day = fields.get("trade_date");
+    const security = fields.get("security_id");
     out.push({
       transactionId: id,
+      securityId: typeof security === "string" ? security : "",
       quantity: typeof quantity === "string" ? quantity : "",
       tradeDate: typeof day === "string" ? day : "",
     });
@@ -596,7 +612,7 @@ export function openingPositions(item: ReviewItem): OpeningPosition[] {
   return out;
 }
 
-function CostBasisRow({ position }: { position: OpeningPosition }) {
+function CostBasisRow({ position, label }: { position: OpeningPosition; label: string }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [price, setPrice] = useState("");
@@ -615,9 +631,10 @@ function CostBasisRow({ position }: { position: OpeningPosition }) {
   const text = price.trim();
   const valid = text !== "" && Number.isFinite(Number(text)) && Number(text) >= 0;
   return (
-    <div className="ledger-stack" role="group" aria-label={`Opening position of ${position.quantity} units`}>
+    <div className="ledger-stack" role="group" aria-label={`Opening position of ${label}`}>
       <p>
-        {position.quantity} units held before {formatDate(position.tradeDate) ?? position.tradeDate}
+        {label}: {plainUnits(position.quantity)} units held before{" "}
+        {formatDate(position.tradeDate) ?? position.tradeDate}
       </p>
       <Field label="Cost per unit" hint="What one unit cost when it was bought.">
         <Input
@@ -653,13 +670,20 @@ function CostBasisRow({ position }: { position: OpeningPosition }) {
 /** Enter the cost basis of opening positions (``PATCH /investments/transactions/{id}``). */
 export function CostBasisTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
   const positions = openingPositions(item);
-  if (!actionable || positions.length === 0) {
+  const shown = actionable && positions.length > 0;
+  const securities = useQuery({ queryKey: investmentKeys.securities, queryFn: listSecurities, enabled: shown });
+  if (!shown) {
     return null;
   }
+  const byId = new Map((securities.data ?? []).map((security) => [security.id, security]));
   return (
     <div className="ledger-stack">
       {positions.map((position) => (
-        <CostBasisRow key={position.transactionId} position={position} />
+        <CostBasisRow
+          key={position.transactionId}
+          position={position}
+          label={securityLabel(byId.get(position.securityId))}
+        />
       ))}
       <p className="ledger-muted">Dismiss this item once every basis is entered.</p>
     </div>

@@ -858,7 +858,7 @@ describe("teach dialog", () => {
         securities: [
           {
             security_id: "s-1",
-            quantity: "12",
+            quantity: "12.5000000000",
             trade_date: "2026-03-02",
             transaction_id: "it-1",
           },
@@ -868,9 +868,13 @@ describe("teach dialog", () => {
     });
     const api = reviewApi(detail, {
       "PATCH /api/v1/investments/transactions/:id": () => json({ id: "it-1" }),
+      "GET /api/v1/securities": () =>
+        json({ items: [{ id: "s-1", symbol: "SGRX", name: "Synthetic Growth Fund" }], next_cursor: null }),
     });
     renderApp("/inbox");
     const user = userEvent.setup();
+    // The card names the security, and the quantity drops its padding zeros.
+    expect(await screen.findByText(/SGRX · Synthetic Growth Fund: 12\.5 units held before/)).toBeInTheDocument();
     const price = await screen.findByLabelText("Cost per unit");
     const save = screen.getByRole("button", { name: "Save cost basis" });
     expect(save).toBeDisabled();
