@@ -858,7 +858,7 @@ describe("teach dialog", () => {
         securities: [
           {
             security_id: "s-1",
-            quantity: "12",
+            quantity: "12.5000000000",
             trade_date: "2026-03-02",
             transaction_id: "it-1",
           },
@@ -868,9 +868,13 @@ describe("teach dialog", () => {
     });
     const api = reviewApi(detail, {
       "PATCH /api/v1/investments/transactions/:id": () => json({ id: "it-1" }),
+      "GET /api/v1/securities": () =>
+        json({ items: [{ id: "s-1", symbol: "SGRX", name: "Synthetic Growth Fund" }], next_cursor: null }),
     });
     renderApp("/inbox");
     const user = userEvent.setup();
+    // The card names the security, and the quantity drops its padding zeros.
+    expect(await screen.findByText(/SGRX · Synthetic Growth Fund: 12\.5 units held before/)).toBeInTheDocument();
     const price = await screen.findByLabelText("Cost per unit");
     const save = screen.getByRole("button", { name: "Save cost basis" });
     expect(save).toBeDisabled();
@@ -884,6 +888,53 @@ describe("teach dialog", () => {
     expect(api.callsTo("PATCH", "/api/v1/investments/transactions/:id")[0]?.path).toBe(
       "/api/v1/investments/transactions/it-1",
     );
+  });
+
+  it("shows the lines a table import skipped, as the file prints them", async () => {
+    const detail = item({
+      kind: "low_confidence_field",
+      reason: "lines_skipped",
+      payload: {
+        reason: "lines_skipped",
+        count: 2,
+        unknown_activity: 1,
+        unknown_actions: [{ action: "mystery thing", rows: 1 }],
+        header_row: 1,
+        unknown_rows: [3],
+        unreadable_rows: [4],
+      },
+      next_step: null,
+    });
+    const api = reviewApi(detail, {
+      "GET /api/v1/imports/:id/preview": () =>
+        json({
+          tables: [
+            {
+              index: 0,
+              rows: [
+                ["Run Date", "Action", "Unused", "Amount"],
+                ["03/02/2026", "YOU BOUGHT SGRX", "", "-20"],
+                ["03/03/2026", "MYSTERY THING HAPPENED", "", "-3"],
+                ["03/04/2026", "DIVIDEND RECEIVED SGRX", "", "not a number"],
+              ],
+            },
+          ],
+          statements: [],
+        }),
+    });
+    renderApp("/inbox");
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+    // A column empty in the header and in every shown line is left out.
+    expect(within(table).queryByRole("columnheader", { name: "Unused" })).not.toBeInTheDocument();
+    const lines = within(table).getAllByRole("row").slice(1);
+    expect(lines.map((line) => line.textContent)).toEqual([
+      "Unknown action03/03/2026MYSTERY THING HAPPENED-3",
+      "Could not read03/04/2026DIVIDEND RECEIVED SGRXnot a number",
+    ]);
+    const call = api.callsTo("GET", "/api/v1/imports/:id/preview")[0];
+    expect(call?.search).toContain("offset=1");
+    expect(call?.search).toContain("limit=4");
   });
 
   it("enters the balances of a statement that does not add up", async () => {

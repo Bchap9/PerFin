@@ -23,7 +23,8 @@ import { queryRoots } from "../../lib/queryKeys";
 import { useAccounts, accountLabel } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { PageViewer } from "../documents/PageViewer";
-import { updateInvestmentTxn } from "../investments/api";
+import { getPreviewRows, importKeys } from "../imports/api";
+import { investmentKeys, listSecurities, updateInvestmentTxn, type Security } from "../investments/api";
 import { listMembers, settingsKeys } from "../settings/api";
 import { getTransaction, txKeys } from "../transactions/api";
 import {
@@ -38,6 +39,7 @@ import {
   mergeFix,
   ownerResolution,
   payloadLines,
+  payloadNumber,
   payloadPositions,
   payloadString,
   payloadTransactionIds,
@@ -566,8 +568,22 @@ export function ReceiptPreview({ item }: { item: ReviewItem }) {
 /** An opening position whose cost basis is unknown (``investment_opening_basis_unknown``). */
 interface OpeningPosition {
   transactionId: string;
+  securityId: string;
   quantity: string;
   tradeDate: string;
+}
+
+/** ``5966.1700000000`` -> ``5966.17``: the stored scale's padding zeros dropped. */
+export function plainUnits(quantity: string): string {
+  return quantity.includes(".") ? quantity.replace(/0+$/, "").replace(/\.$/, "") : quantity;
+}
+
+/** ``SGRX · Example Fund``, the name alone, or a fallback while securities load. */
+function securityLabel(security: Security | undefined): string {
+  if (security === undefined) {
+    return "A security";
+  }
+  return security.symbol ? `${security.symbol} · ${security.name}` : security.name;
 }
 
 export function openingPositions(item: ReviewItem): OpeningPosition[] {
@@ -587,8 +603,10 @@ export function openingPositions(item: ReviewItem): OpeningPosition[] {
     }
     const quantity = fields.get("quantity");
     const day = fields.get("trade_date");
+    const security = fields.get("security_id");
     out.push({
       transactionId: id,
+      securityId: typeof security === "string" ? security : "",
       quantity: typeof quantity === "string" ? quantity : "",
       tradeDate: typeof day === "string" ? day : "",
     });
@@ -596,7 +614,7 @@ export function openingPositions(item: ReviewItem): OpeningPosition[] {
   return out;
 }
 
-function CostBasisRow({ position }: { position: OpeningPosition }) {
+function CostBasisRow({ position, label }: { position: OpeningPosition; label: string }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [price, setPrice] = useState("");
@@ -615,9 +633,10 @@ function CostBasisRow({ position }: { position: OpeningPosition }) {
   const text = price.trim();
   const valid = text !== "" && Number.isFinite(Number(text)) && Number(text) >= 0;
   return (
-    <div className="ledger-stack" role="group" aria-label={`Opening position of ${position.quantity} units`}>
+    <div className="ledger-stack" role="group" aria-label={`Opening position of ${label}`}>
       <p>
-        {position.quantity} units held before {formatDate(position.tradeDate) ?? position.tradeDate}
+        {label}: {plainUnits(position.quantity)} units held before{" "}
+        {formatDate(position.tradeDate) ?? position.tradeDate}
       </p>
       <Field label="Cost per unit" hint="What one unit cost when it was bought.">
         <Input
@@ -653,13 +672,20 @@ function CostBasisRow({ position }: { position: OpeningPosition }) {
 /** Enter the cost basis of opening positions (``PATCH /investments/transactions/{id}``). */
 export function CostBasisTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
   const positions = openingPositions(item);
-  if (!actionable || positions.length === 0) {
+  const shown = actionable && positions.length > 0;
+  const securities = useQuery({ queryKey: investmentKeys.securities, queryFn: listSecurities, enabled: shown });
+  if (!shown) {
     return null;
   }
+  const byId = new Map((securities.data ?? []).map((security) => [security.id, security]));
   return (
     <div className="ledger-stack">
       {positions.map((position) => (
-        <CostBasisRow key={position.transactionId} position={position} />
+        <CostBasisRow
+          key={position.transactionId}
+          position={position}
+          label={securityLabel(byId.get(position.securityId))}
+        />
       ))}
       <p className="ledger-muted">Dismiss this item once every basis is entered.</p>
     </div>
@@ -984,5 +1010,95 @@ export function HeldLines({
         </div>
       )}
     </>
+  );
+}
+
+/** A line a table import skipped: its row in the stored table and why. */
+interface SkippedLine {
+  row: number;
+  why: string;
+}
+
+/** Lines shown on a card; the rest are counted. */
+const SHOWN_LINES = 10;
+
+function rowsOf(item: ReviewItem, key: string, why: string): SkippedLine[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(key);
+  return Array.isArray(value)
+    ? value.filter((row): row is number => typeof row === "number").map((row) => ({ row, why }))
+    : [];
+}
+
+/** The skipped lines an item names (``rows`` of ``rows_skipped``; the activity reader's two lists). */
+export function skippedLines(item: ReviewItem): SkippedLine[] {
+  return [
+    ...rowsOf(item, "unknown_rows", "Unknown action"),
+    ...rowsOf(item, "unreadable_rows", "Could not read"),
+    ...rowsOf(item, "rows", "Could not read"),
+  ].sort((a, b) => a.row - b.row);
+}
+
+/**
+ * The lines a CSV or XLSX import skipped, as the file prints them, under the
+ * file's own header (``GET /imports/{id}/preview``: the stored table, not a
+ * re-read). Shown when the item says where the header is.
+ */
+export function SkippedLines({ item }: { item: ReviewItem }) {
+  const lines = skippedLines(item);
+  const header = payloadNumber(item, "header_row");
+  const documentId = item.document_id;
+  const shown = header === null ? [] : lines.filter((line) => line.row > header && line.row - header < 500);
+  const last = shown.slice(0, SHOWN_LINES).at(-1);
+  const limit = header === null || last === undefined ? 1 : last.row - header + 1;
+  const enabled = documentId !== null && header !== null && last !== undefined;
+  const query = useQuery({
+    queryKey: importKeys.rows(documentId ?? "", header ?? 0, limit),
+    queryFn: () => getPreviewRows(documentId ?? "", header ?? 0, limit),
+    enabled,
+  });
+  const rows = query.data?.tables[0]?.rows;
+  if (!enabled || rows === undefined) {
+    return null;
+  }
+  const head = rows.at(0) ?? [];
+  const body = shown.slice(0, SHOWN_LINES).flatMap((line) => {
+    const cells = rows.at(line.row - header);
+    return cells === undefined ? [] : [{ ...line, cells }];
+  });
+  const columns = head
+    .map((_, index) => index)
+    // Only columns the shown lines fill: an export's many blank columns stay out.
+    .filter((index) => body.some((line) => (line.cells.at(index) ?? "").trim() !== ""));
+  const more = lines.length - body.length;
+  return (
+    <div className="skipped-lines">
+      <p className="ledger-muted">
+        The lines PerFin skipped, as the file prints them{more > 0 ? ` (${String(more)} more not shown)` : ""}:
+      </p>
+      <div className="skipped-lines__scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Why</th>
+              {columns.map((index) => (
+                <th scope="col" key={index}>
+                  {head.at(index)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((line) => (
+              <tr key={line.row}>
+                <td>{line.why}</td>
+                {columns.map((index) => (
+                  <td key={index}>{line.cells.at(index)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

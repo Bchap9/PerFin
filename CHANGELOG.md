@@ -58,6 +58,16 @@ What remains (details in docs/ROADMAP.md):
   when nobody decided their category (no category, a suggestion, or a
   merchant-list or keyword guess). Your own choices, rules, payee defaults
   and learned categories are not changed (docs/CATEGORISATION.md).
+- The "Cost basis needed" card listed units ("5966.1700000000 units held
+  before ...") without naming the security. It now names it (symbol and
+  name) and drops the padding zeros, on cards raised before too.
+
+### Added
+
+- "Some rows were skipped" now shows the skipped lines of a CSV or XLSX file
+  as the file prints them, under its own column headers, with why each was
+  skipped (an action PerFin does not know, or a date or amount it could not
+  read): up to ten lines, the columns they fill.
 
 ## [1.0.0-rc.15] - 2026-11-18
 

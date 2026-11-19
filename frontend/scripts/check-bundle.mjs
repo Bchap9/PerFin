@@ -43,9 +43,11 @@ export const BUDGET = Object.freeze({
    * The Start baseline plus 5%, plus 512 bytes the coordinator allowed in
    * the release review: per-page document titles (WCAG 2.4.2), the Inbox's
    * words for an opening balance that was not recorded, and the ~110 bytes
-   * a CI build measures above a macOS build of the same tree.
+   * a CI build measures above a macOS build of the same tree. Another 1,024
+   * bytes the owner allowed for rc.16: the review card that shows the lines a
+   * table import skipped, as the file prints them.
    */
-  totalJs: Math.floor(BASELINE_TOTAL_JS * 1.05) + 512,
+  totalJs: Math.floor(BASELINE_TOTAL_JS * 1.05) + 1536,
   totalCss: 20_000,
   /** The Latin `woff2` files a page loads. */
   fonts: 120_000,

@@ -193,6 +193,17 @@ def test_a_crypto_deposit_row_imports_as_units_in() -> None:
     )
 
 
+def test_an_unreadable_row_is_recorded_by_its_position() -> None:
+    found = read_activity_table(
+        _with(
+            _row("DIVIDEND RECEIVED SGRX", symbol="SGRX", amount="4"),
+            _row("DIVIDEND RECEIVED SGRX", symbol="SGRX", amount="not a number"),
+        )
+    )
+    assert found is not None
+    assert (found.unknown_rows, found.unreadable_rows) == ([], [2])
+
+
 def test_signed_words_take_their_direction_from_the_row() -> None:
     assert activity_type("JOURNALED CASH", cash_sign=-1) == "withdrawal"
     assert activity_type("JOURNALED CASH", cash_sign=1) == "deposit"
@@ -245,6 +256,8 @@ def test_unknown_actions_are_listed_by_their_first_words_without_digits() -> Non
     )
     assert found is not None
     assert found.unknown_actions == {"mystery # thing": 1}
+    # Positions in the table (row 0 is the header): the queue shows the line.
+    assert (found.header.row, found.unknown_rows, found.unreadable_rows) == (0, [2], [])
     assert found.summary()["unknown_actions"] == [{"action": "mystery # thing", "rows": 1}]
 
 

@@ -375,6 +375,11 @@ class ActivityTable:
     warnings: list[str] = field(default_factory=list)
     #: The leading words of actions no phrase types (normalised, a few, for the review queue).
     unknown_actions: dict[str, int] = field(default_factory=dict)
+    #: Table row indexes of the rows counted in ``unknown_activity`` and of the
+    #: rows ``skipped`` while reading one (positions only, no cell text): the
+    #: review queue shows those lines from the stored table.
+    unknown_rows: list[int] = field(default_factory=list)
+    unreadable_rows: list[int] = field(default_factory=list)
 
     def note_unknown(self, action: str) -> None:
         # Digits (a check number, a card's last digits) are not kept.
@@ -1012,12 +1017,17 @@ def read_activity_table(
     out = ActivityTable(header=header)
     reader = _Reader(table, header, date_format, separator, guessed, out)
     groups: dict[str | None, list[_Row]] = {}
-    for row in rows:
+    for position, row in enumerate(rows, start=header.row + 1):
         if _is_note(row, header):
             out.notes += 1
             continue
+        unknown, skipped = out.unknown_activity, out.skipped
         read = reader.read(row)
         if read is None:
+            if out.unknown_activity > unknown:
+                out.unknown_rows.append(position)
+            elif out.skipped > skipped:
+                out.unreadable_rows.append(position)
             continue
         groups.setdefault(read.key, []).append(read)
     mixed = False

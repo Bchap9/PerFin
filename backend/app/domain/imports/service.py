@@ -1293,6 +1293,7 @@ def _row_problems(
                 "account_id": str(account.id),
                 "count": len(parsed.skipped_rows),
                 "rows": parsed.skipped_rows[:IDS_MAX],
+                "header_row": parsed.header_row,
             },
         )
     if parsed.balance_mismatches:
@@ -2980,6 +2981,9 @@ def _import_activity(
                     for action, rows in activity.unknown_actions.items()
                 ],
                 "skipped_rows": activity.skipped,
+                "header_row": activity.header.row,
+                "unknown_rows": activity.unknown_rows[:IDS_MAX],
+                "unreadable_rows": activity.unreadable_rows[:IDS_MAX],
             },
         )
     elif missed:
@@ -2994,6 +2998,9 @@ def _import_activity(
                     for action, rows in activity.unknown_actions.items()
                 ],
                 "parser": ACTIVITY_PARSER,
+                "header_row": activity.header.row,
+                "unknown_rows": activity.unknown_rows[:IDS_MAX],
+                "unreadable_rows": activity.unreadable_rows[:IDS_MAX],
             },
         )
     dates = activity_dates(activity.statements)

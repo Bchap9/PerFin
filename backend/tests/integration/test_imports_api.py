@@ -591,7 +591,13 @@ def test_rerun_does_not_repeat_open_review_items(
     assert items == [
         (
             ReviewKind.LOW_CONFIDENCE_FIELD,
-            {"reason": "rows_skipped", "account_id": str(account.id), "count": 1, "rows": [4]},
+            {
+                "reason": "rows_skipped",
+                "account_id": str(account.id),
+                "count": 1,
+                "rows": [4],
+                "header_row": 0,
+            },
             ReviewItemState.OPEN,
         )
     ]
