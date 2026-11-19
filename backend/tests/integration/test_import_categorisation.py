@@ -404,6 +404,77 @@ def test_an_issuers_category_words_are_read_as_a_default_category(env: Env) -> N
     assert [row.updated_at == row.created_at for row in rows.values()] == [True] * 3
 
 
+#: A card issuer's activity export, shaped like American Express's: lines
+#: before the header, an address column, a quoted multi-line details cell
+#: and the issuer's own Category column. Every value is invented.
+ISSUER_EXPORT = (
+    "Transaction Details,Synthetic Card / Mar 01 2026 to Mar 31 2026,,,,,,,,,\n"
+    "Prepared for,,,,,,,,,,\n"
+    "SYNTHETIC CARDHOLDER,,,,,,,,,,\n"
+    ",,,,,,,,,,\n"
+    "Date,Description,Amount,Extended Details,Appears On Your Statement As,"
+    "Address,City/State,Zip Code,Country,Reference,Category\n"
+    '03/03/2026,HARBOURSIDE 0042,-41.20,"0042\nHARBOURSIDE 0042\nSOMEWHERE",'
+    "HARBOURSIDE 0042,1 SYNTHETIC WAY,SOMEWHERE,00000,UNITED STATES,'0000000001',"
+    "Transportation-Fuel\n"
+    '03/05/2026,QUIET HARBOUR 17,-9.99,"QUIET HARBOUR 17",QUIET HARBOUR 17,'
+    "2 SYNTHETIC WAY,SOMEWHERE,00000,UNITED STATES,'0000000002',Other-Miscellaneous\n"
+    '03/07/2026,MOSSY KITCHEN 9,-23.10,"MOSSY KITCHEN 9",MOSSY KITCHEN 9,'
+    "3 SYNTHETIC WAY,SOMEWHERE,00000,UNITED STATES,'0000000003',Restaurant-Bar & Café\n"
+)
+
+
+def test_a_card_exports_category_column_is_read(env: Env) -> None:
+    fuel, restaurants = env.keyed("transport.fuel"), env.keyed("food.restaurants")
+    account = env.ledger.account(env.household_id, currency="USD")
+
+    _, summary = env.ingest(ISSUER_EXPORT.encode(), account, "activity.csv")
+
+    rows = env.transactions(account)
+    assert len(rows) == 3, summary
+    assert _decided(rows["HARBOURSIDE 0042"]) == (fuel.id, "file")
+    assert _decided(rows["MOSSY KITCHEN 9"]) == (restaurants.id, "file")
+    assert _decided(rows["QUIET HARBOUR 17"]) == (None, None)
+
+
+def _with_categories(entries: Sequence[tuple[int, str, str, str]], header: str) -> bytes:
+    lines = [f"Date,Description,Amount,{header}"]
+    lines += [f"2026-03-{day:02d},{payee},{amount},{word}" for day, amount, payee, word in entries]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_a_file_read_again_fills_in_the_rows_nobody_decided(env: Env) -> None:
+    fuel, restaurants = env.keyed("transport.fuel"), env.keyed("food.restaurants")
+    cinema = env.keyed("leisure.cinema")
+    own = env.ledger.category(env.household_id, name="Road trips")
+    account = env.ledger.account(env.household_id, currency="USD")
+    entries = [
+        (3, "-41.20", "HARBOURSIDE 0042", "Transportation-Fuel"),
+        (7, "-23.10", "MOSSY KITCHEN 9", "Restaurant-Bar & Café"),
+        (9, "-12.00", "HARBOURSIDE 0077", "Transportation-Fuel"),
+        (11, "-17.25", "LAMPLIGHT CINEMA", "Restaurant-Restaurant"),
+    ]
+    # Read first without its categories (a column the reader did not know).
+    env.ingest(_with_categories(entries, "Notes"), account, "first.csv")
+    first = env.transactions(account)
+    assert _decided(first["HARBOURSIDE 0042"]) == (None, None)
+    env.choose(first["HARBOURSIDE 0077"], own)
+
+    _, summary = env.ingest(_with_categories(entries, "Category"), account, "again.csv")
+
+    rows = env.transactions(account)
+    assert (summary["imported"], summary["duplicates"]) == (0, 4)
+    assert _decided(rows["HARBOURSIDE 0042"]) == (fuel.id, "file")
+    assert rows["HARBOURSIDE 0042"].category_confidence == Decimal("0.85")
+    assert _decided(rows["MOSSY KITCHEN 9"]) == (restaurants.id, "file")
+    # A person's choice and the dictionary's fact stay.
+    assert _decided(rows["HARBOURSIDE 0077"]) == (own.id, "person")
+    assert _decided(rows["LAMPLIGHT CINEMA"]) == (cinema.id, "dictionary")
+    assert summary["categorised"] == {"file": 2}
+    # Only the row the person changed moved; the fill is no edit.
+    assert [row.updated_at == row.created_at for row in rows.values()] == [True, True, False, True]
+
+
 def test_a_row_takes_its_payees_default_before_the_dictionary_answers(env: Env) -> None:
     env.keyed("food.groceries")
     weekly = env.ledger.category(env.household_id, name="Weekly shop")

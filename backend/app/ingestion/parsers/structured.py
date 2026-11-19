@@ -760,6 +760,32 @@ def _continuation(row: Sequence[str], spec: MappingSpec) -> str | None:
     return None
 
 
+#: Header names (as :func:`_header_cell` gives them) of a column holding each
+#: row's category: the file's own (a budgeting export) or the card issuer's
+#: (``Restaurant-Bar & Café``), read by the importer.
+CATEGORY_HEADERS: Final = frozenset(
+    {"category", "kategorie", "catégorie", "categorie", "categoría", "categoria"}
+)
+
+
+def category_column(header: Sequence[str] | None, spec: MappingSpec) -> int | None:
+    """The column named a category in ``header`` that ``spec`` maps to nothing but the memo.
+
+    Mappings carry no category column of their own: the column is found by
+    its header when the file is read, so a mapping saved before categories
+    were read (one that took the column as the memo) reads them too.
+    """
+    if header is None:
+        return None
+    taken = {
+        column for role, column in spec.columns().items() if column is not None and role != "memo"
+    }
+    for column, name in enumerate(header):
+        if name in CATEGORY_HEADERS and column not in taken:
+            return column
+    return None
+
+
 def _header_names(row: Sequence[str]) -> list[str]:
     """A row's cells as header names, trailing blanks dropped (a repeated header)."""
     names = [_header_cell(cell) for cell in row]
@@ -834,6 +860,7 @@ def _read_rows(
         if spec.has_header and spec.skip_rows < len(table.rows)
         else None
     )
+    categories = category_column(header, spec)
     balances: list[tuple[int, date, Decimal, Decimal | None]] = []
     #: The opening balance row's own date, when it reads.
     opened: date | None = None
@@ -887,6 +914,7 @@ def _read_rows(
                 raw_payee=_text(row, spec.payee_column),
                 memo=_text(row, spec.memo_column),
                 currency=currency if isinstance(currency, str) else None,
+                category=_text(row, categories),
                 row=index,
             )
         )

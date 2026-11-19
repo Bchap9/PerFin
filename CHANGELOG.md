@@ -46,7 +46,18 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A CSV or XLSX file's Category column was never read: the reader took it
+  as a memo column, so the card-issuer categories of 1.0.0-rc.14 and rc.15
+  reached only QIF files and an American Express XLSX still came in
+  uncategorised. The column is now found by its header when the file is
+  read, also under a column mapping saved before (one that took it as the
+  memo).
+- Uploading such a file again now fills in the rows it brought in before
+  when nobody decided their category (no category, a suggestion, or a
+  merchant-list or keyword guess). Your own choices, rules, payee defaults
+  and learned categories are not changed (docs/CATEGORISATION.md).
 
 ## [1.0.0-rc.15] - 2026-11-18
 

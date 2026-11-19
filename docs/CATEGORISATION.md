@@ -35,7 +35,7 @@ For each transaction, the first of these that has an answer wins:
 | # | Who or what decided | Shown as | How sure |
 | --- | --- | --- | --- |
 | 1 | You: you picked a category, cleared it, accepted a suggestion or split the transaction | "You chose this" | certain |
-| 2 | The file: a category column in a CSV, a category in a QIF file | "From the file" | 0.95 |
+| 2 | The file: a category column in a CSV or XLSX file (found by its header, `Category`), a category in a QIF file, when it names one of your categories | "From the file" | 0.95 |
 | 3 | One of your rules, in the order of the rules list | "Rule: *name*" | certain |
 | 4 | The default category of the transaction's payee | "Payee default" | 0.95 |
 | 5 | What PerFin learned from your corrections for this merchant | "Learned from you" | 0.80, 0.90 or 0.95 after one, two, or three and more decisions, times the share of your decisions that agree |
@@ -51,6 +51,12 @@ says nothing about what was bought (`Other-Miscellaneous`, `Business
 Services-Other Services`) is not read. A file category that does name one of
 your categories exactly is still row 2. The word list is
 `backend/app/domain/categorisation/institution.py`.
+
+A file read again (the same export uploaded once more) gives its category
+to the rows it already brought in when nobody decided theirs: rows with no
+category, a suggestion, or a merchant-list or keyword guess (an issuer's
+word does not replace a merchant-list category). Your own choices, rules,
+payee defaults and what was learned are never changed.
 
 Categories a transaction had before PerFin recorded this (before
 1.0.0-rc.10) are counted as "From before this version". They are treated
