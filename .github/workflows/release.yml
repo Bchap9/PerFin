@@ -264,7 +264,7 @@ jobs:
           persist-credentials: false
       # The same pinned Go as ci.yml, so the chart tools are built exactly as
       # in the CI run that tested them (not with the runner image's Go).
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.24"
           cache: false
